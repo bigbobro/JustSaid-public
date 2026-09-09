@@ -1,0 +1,54 @@
+name: Public policy (Linux)
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-policy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Export policy and static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check shell syntax
+        shell: bash
+        run: bash -n Scripts/export-public-repo.sh
+
+      - name: Check Python syntax
+        run: python3 -m py_compile Scripts/verify-public-tree.py
+
+      - name: Run scanner discriminative fixtures
+        run: python3 Scripts/verify-public-tree.py --self-test
+
+      - name: Export and scan a disposable candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/justsaid-public-candidate"
+          bash Scripts/export-public-repo.sh --dry-run --require-clean "$candidate"
+
+      - name: Parse exported public package manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/justsaid-public-candidate"
+          if command -v swift >/dev/null 2>&1; then
+            swift package --package-path "$candidate" dump-package >/dev/null
+          else
+            echo "Swift is not installed on this Linux image; manifest parsing skipped."
+          fi

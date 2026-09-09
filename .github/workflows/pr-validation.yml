@@ -1,0 +1,133 @@
+name: PR hygiene (Linux)
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-hygiene-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    name: Whitespace, manifest and script checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check patch whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_ref="${GITHUB_BASE_REF:-main}"
+          git diff --check "origin/${base_ref}...HEAD"
+
+      - name: Reject unresolved merge markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -n -E '^(<<<<<<<|>>>>>>>)' -- .; then
+            echo "Unresolved merge markers found." >&2
+            exit 1
+          fi
+
+      - name: Enforce synthetic fixture policy
+        shell: bash
+        env:
+          JUSTSAID_REPOSITORY_ID: ${{ github.repository_id }}
+          JUSTSAID_EVENT_NAME: ${{ github.event_name }}
+          JUSTSAID_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          JUSTSAID_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${JUSTSAID_REPOSITORY_ID:-}" ]]; then
+            echo "SYNTHETIC_FIXTURE_GATE_ERROR: github.repository_id is empty" >&2
+            exit 1
+          fi
+
+          if [[ "$JUSTSAID_REPOSITORY_ID" != "1347255780" ]]; then
+            echo "SYNTHETIC_FIXTURE_GATE_SKIP: non-canonical repository id=$JUSTSAID_REPOSITORY_ID"
+            exit 0
+          fi
+
+          script="Scripts/verify-synthetic-fixtures.py"
+          registry="Verification/SyntheticFixtureRegistry.json"
+          [[ -f "$script" ]] || {
+            echo "SYNTHETIC_FIXTURE_GATE_ERROR: required script is missing: $script" >&2
+            exit 1
+          }
+          [[ -f "$registry" ]] || {
+            echo "SYNTHETIC_FIXTURE_GATE_ERROR: required registry is missing: $registry" >&2
+            exit 1
+          }
+
+          python3 "$script" --self-test
+
+          case "$JUSTSAID_EVENT_NAME" in
+            pull_request)
+              [[ "${JUSTSAID_PR_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "SYNTHETIC_FIXTURE_GATE_ERROR: pull_request base.sha is missing or invalid" >&2
+                exit 1
+              }
+              [[ "${JUSTSAID_PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "SYNTHETIC_FIXTURE_GATE_ERROR: pull_request head.sha is missing or invalid" >&2
+                exit 1
+              }
+              python3 "$script" \
+                --base "$JUSTSAID_PR_BASE_SHA" \
+                --head "$JUSTSAID_PR_HEAD_SHA"
+              ;;
+            workflow_dispatch)
+              [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "SYNTHETIC_FIXTURE_GATE_ERROR: selected ref SHA is missing or invalid" >&2
+                exit 1
+              }
+              python3 "$script" --current-tree "$GITHUB_SHA"
+              ;;
+            *)
+              echo "SYNTHETIC_FIXTURE_GATE_ERROR: unsupported event: $JUSTSAID_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Parse Swift package manifest when Swift is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v swift >/dev/null 2>&1; then
+            swift package dump-package >/dev/null
+          else
+            echo "Swift is not installed on this Linux image; manifest parsing skipped."
+          fi
+
+      - name: Check shell script syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            echo "checking $script"
+            bash -n "$script"
+          done < <(find Scripts -type f -name '*.sh' -print0)
+
+      - name: Enforce concurrency escape-hatch policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Scripts/verify-concurrency-policy.py
+
+      - name: Enforce CI cost policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Scripts/verify-ci-cost-policy.py

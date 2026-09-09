@@ -1,0 +1,50 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+__pycache__/
+*.py[cod]
+
+# Local credentials and signing material.  Keep the example configuration
+# reviewable while every real environment file remains local-only.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.cer
+*.crt
+
+# Xcode state and generated diagnostics/build products.
+xcuserdata/
+*.xcuserstate
+*.diag
+*.log
+*.xcresult
+*.trace
+*.sqlite
+*.sqlite3
+*.db
+*.app/
+*.dmg
+*.xcarchive/
+*.zip
+*.tar
+*.tar.gz
+build/
+coverage/
+
+# Explicitly private local material; the exporter never uses ignore rules as
+# its security boundary, but these defaults reduce accidental future commits.
+.local/
+.local-data/
+private-data/
+private-evaluation/
+
+# 运行期锁文件(调度器生成,不入库)
+.claude/scheduled_tasks.lock
+
+# 调研截图集(体积大,本地留档不入库)
+.trellis/tasks/**/research/screenshots/

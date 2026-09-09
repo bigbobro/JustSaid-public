@@ -1,0 +1,24 @@
+name: Public macOS runner smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-runner-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Verify hosted macOS runner
+    runs-on: macos-26
+    timeout-minutes: 5
+
+    steps:
+      - name: Report macOS version
+        run: sw_vers
+
+      - name: Report Swift toolchain
+        run: swift --version
