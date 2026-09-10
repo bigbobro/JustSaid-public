@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import os
 
@@ -81,7 +82,8 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
     parseShape: String? = nil,
     droppedCount: Int? = nil,
     charged: String? = nil,
-    errorSummary: String? = nil
+    errorSummary: String? = nil,
+    safeErrorSummary: SafeErrorSummary? = nil
   ) {
     self.family = family
     self.operation = operation
@@ -115,7 +117,9 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
     self.parseShape = parseShape
     self.droppedCount = droppedCount
     self.charged = charged
-    self.errorSummary = errorSummary.map(DiagnosticSanitizer.summary)
+    // 出处靠类型，不靠文本形状：SafeErrorSummary 只能由本文件的 sanitizer 构造，因此按原样落库；
+    // 任意 String 入口一律再脱敏一次（对所有其他调用方保持纵深防御）。
+    self.errorSummary = safeErrorSummary?.value ?? errorSummary.map(DiagnosticSanitizer.summary)
   }
 }
 
@@ -534,6 +538,16 @@ public struct DiagnosticEventLedger: @unchecked Sendable {
   }
 }
 
+/// 已由 `DiagnosticSanitizer` 生成的错误摘要。初始化器是 fileprivate，本文件之外拿不到构造入口，
+/// 所以账本收到它就等于收到「这串文本是本进程按固定规则生成的」这一编译期事实，无需再解析文本。
+public struct SafeErrorSummary: Sendable {
+  public let value: String
+
+  fileprivate init(_ value: String) {
+    self.value = value
+  }
+}
+
 public enum DiagnosticSanitizer {
   public static func token(_ value: String, fallback: String) -> String {
     let result =
@@ -552,6 +566,9 @@ public enum DiagnosticSanitizer {
   /// 错误摘要只允许固定事实；HTTP body、URL、密钥和正文均丢弃。
   public static func summary(_ value: String) -> String {
     var text = value.components(separatedBy: .newlines).joined(separator: " ")
+    // 账本写入时会再脱敏一次（DiagnosticEventFields.init），固定文案按闭集合全等放行以免被重新收成
+    // 常量；除此之外这里对任意文本一律 fail closed，不认任何可伪造的文本标记。
+    if fixedSummaries.contains(text) { return text }
     if let range = text.range(of: "服务请求失败（HTTP ") {
       let suffix = text[range.upperBound...]
       if let end = suffix.firstIndex(of: "）") {
@@ -570,7 +587,84 @@ public enum DiagnosticSanitizer {
     if text.contains("无法组成 chat/completions") { return "模型地址格式无效" }
     if lowered.contains("cancel") || text.contains("取消") { return "操作已取消" }
     // 未识别的自由文本可能来自 provider body、会议正文或本地路径；不外发。
-    return "错误详情已脱敏"
+    return redactedSummary
+  }
+
+  /// 文案规则不命中时保留错误的固定身份：Swift 类型名 + `NSError` domain:code（可带 HTTP 状态）。
+  /// 身份只由类型系统与受审批的域名组成，`localizedDescription` 原文、HTTP body、URL、本机路径
+  /// 与密钥都进不来。返回类型化值，账本据此判断出处，不需要在文本里放任何可伪造的标记。
+  public static func summary(for error: Error) -> SafeErrorSummary {
+    let text = summary(error.localizedDescription)
+    guard text == redactedSummary else { return SafeErrorSummary(text) }
+    let nsError = error as NSError
+    var tail = ":\(nsError.code)"
+    if let status = (error as? HTTPTransportError)?.statusCode { tail += "#http\(status)" }
+    // 80 字符按固定优先级分配，四段必须齐全：tail 与分隔符先占位；domain 令牌只能整块保留，放不下
+    // 就整块换成定长哈希令牌（截半的 domain 既读不出来，又会让不同 domain 的失败错误地并进一组）；
+    // 剩下的额度才给类型名，且至少留 minimumTypeBudget 位。tail 最长是两个十进制 Int（≤42 字符），
+    // 加分隔符与定长令牌也远小于 80，所以额度不会算成负数。
+    let domainBudget = identityLimit - tail.count - 1 - minimumTypeBudget
+    var domain = domainToken(for: error)
+    if domain.count > domainBudget { domain = hashedDomainToken(nsError.domain) }
+    let typeName = identityComponent(String(describing: Swift.type(of: error)))
+    let typeBudget = max(1, identityLimit - tail.count - 1 - domain.count)
+    // 分隔符用 `|` 而不是 `@`：`类型@模块.类型` 整串是邮箱形状，会让仓库与导出物的隐私扫描器误报。
+    return SafeErrorSummary(
+      String((typeName.isEmpty ? "Error" : typeName).prefix(typeBudget)) + "|" + domain + tail)
+  }
+
+  /// domain 按出处判断，不按字符形状：只有系统域，或错误类型自身的 Swift 默认桥接域
+  /// （`_domain` 缺省实现即 `String(reflecting:)` 出来的全限定类型名）才原样保留。其余 domain 是
+  /// 调用方可以塞任意文本的字段（key / host / 路径），换成不含原文的分组令牌。
+  private static func domainToken(for error: Error) -> String {
+    let domain = (error as NSError).domain
+    if approvedErrorDomains.contains(domain) || domain == String(reflecting: Swift.type(of: error)) {
+      let readable = identityComponent(domain)
+      if !readable.isEmpty { return readable }
+    }
+    return hashedDomainToken(domain)
+  }
+
+  /// 定长 opaque 分组令牌。承诺的是「不存 domain 原文」，不是不可逆：同一 domain 稳定映射到同一
+  /// 令牌，所以可以用来分组，也因此对低熵 domain 可被字典枚举。
+  private static func hashedDomainToken(_ domain: String) -> String {
+    let digest = SHA256.hash(data: Data(domain.utf8))
+    return "hashed-" + String(digest.map { String(format: "%02x", $0) }.joined().prefix(8))
+  }
+
+  static let redactedSummary = "错误详情已脱敏"
+
+  /// 身份摘要的字符上限，以及类型名最少保留的位数：domain 令牌要给类型名留够这么多位才算放得下。
+  private static let identityLimit = 80
+  private static let minimumTypeBudget = 8
+
+  private static let approvedErrorDomains: Set<String> = [
+    NSURLErrorDomain,
+    NSCocoaErrorDomain,
+    NSPOSIXErrorDomain,
+    NSOSStatusErrorDomain,
+    NSMachErrorDomain,
+  ]
+
+  /// summary 自身可能返回的全部固定文案；重复脱敏时按常量全等放行，不做任何文本解析。
+  private static let fixedSummaries: Set<String> = [
+    redactedSummary,
+    "网络请求超时",
+    "模型流式响应被截断",
+    "模型返回格式无法解析",
+    "模型没有返回可用文本",
+    "模型只返回推理内容，未返回最终正文",
+    "模型地址不是 HTTPS",
+    "模型地址格式无效",
+    "操作已取消",
+  ]
+
+  /// 身份分量（类型名 / 已审批的 domain）只留字母数字与 `._-`；`|:#` 是格式分隔符，不来自输入。
+  private static let identityComponentCharacters = Set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+  private static func identityComponent<S: StringProtocol>(_ value: S) -> String {
+    String(value.filter { identityComponentCharacters.contains($0) })
   }
 
   public static func category(for error: Error) -> String {

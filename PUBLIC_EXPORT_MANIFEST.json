@@ -22,7 +22,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "bcd3ba06715c1079be3da7a4d0b5619be75a728649494ec8e28613b4b4cc0b9d"
+      "sha256": "3488bc2d7a323329f523e4a7b27b8aee6493d5607239e692bf7d2a9034a20b6a"
     },
     {
       "path": "LICENSE",
@@ -94,7 +94,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Diagnostics/DiagnosticEventLedger.swift",
-      "sha256": "5d119d2eadd3f3562f0b036bccf9c050d77df8a1de83c98385e14c6c371a4a6c"
+      "sha256": "683c068ebca5cf9f5a8d6a2bb2912c41e8ef50e021b58b0d5e93a6ed7445be4b"
     },
     {
       "path": "Sources/JustSaidCore/Diagnostics/DiagnosticsPackageBuilder.swift",
@@ -290,7 +290,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Providers/OpenAICompatibleLLMClient.swift",
-      "sha256": "7d5f1ad1a3998e6bfdb49cb07070a49e2a5db5269a26cdb761bbd02ac2a3e887"
+      "sha256": "b945468eceb7e0894f1cccca5f42fc3e26596e0424f1ee8002b69d8f18d115eb"
     },
     {
       "path": "Sources/JustSaidCore/Providers/ProviderContracts.swift",
@@ -702,7 +702,7 @@
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "bcd3ba06715c1079be3da7a4d0b5619be75a728649494ec8e28613b4b4cc0b9d"
+      "sha256": "3488bc2d7a323329f523e4a7b27b8aee6493d5607239e692bf7d2a9034a20b6a"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -780,6 +780,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "5cf53a17683b914d3ee82e25760d948bfff8600d",
+  "source_sha": "3f7ec4e0cf1ade8faa3c8d2a36fff8dc526373cf",
   "source_status": "clean"
 }

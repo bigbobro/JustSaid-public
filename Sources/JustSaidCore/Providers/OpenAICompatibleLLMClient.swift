@@ -322,7 +322,7 @@ public struct OpenAICompatibleLLMClient: LLMClient {
           latencyMs: Int(Date().timeIntervalSince(startedAt) * 1_000),
           parseShape: Self.diagnosticParseShape(for: error),
           charged: error is CancellationError ? "unknown" : "possiblySent",
-          errorSummary: DiagnosticSanitizer.summary(error.localizedDescription)
+          safeErrorSummary: DiagnosticSanitizer.summary(for: error)
         )
       )
       throw error
@@ -910,7 +910,7 @@ public struct OpenAICompatibleLLMClient: LLMClient {
         providerErrorCode: (error as? HTTPTransportError)?.providerErrorCode,
         latencyMs: Int(Date().timeIntervalSince(startedAt) * 1_000),
         parseShape: Self.diagnosticParseShape(for: error),
-        errorSummary: DiagnosticSanitizer.summary(error.localizedDescription)
+        safeErrorSummary: DiagnosticSanitizer.summary(for: error)
       )
     )
   }
