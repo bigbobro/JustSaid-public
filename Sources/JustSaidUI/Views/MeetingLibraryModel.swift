@@ -426,6 +426,18 @@ public enum MeetingTagKind: Sendable {
   case project
 }
 
+/// 核对工作台入口开关(#94,2026-09-11 owner 拍板「藏」)。默认关:纪要页工具行
+/// 不出现「核对」Toggle。代码、`check.json` 读写与既有判定全部保留,内部验收把这个
+/// 键置 true 即恢复改前行为。没有 UI、不写用户文档——它只服务打磨期验收。
+/// public:UIHierarchy 探针要按键名预置内部开关渲染整页会议库。
+public enum VerifyWorkbenchEntrySwitch {
+  public static let defaultsKey = "justsaid.verifyWorkbenchEnabled"
+
+  public static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
+    defaults.bool(forKey: defaultsKey)
+  }
+}
+
 /// public:UIHierarchy 探针要直接驱动它断言高亮/只看互斥与改名跟随
 /// (整页 probe 预置不了 `@StateObject` 的内部状态)。
 @MainActor
@@ -488,7 +500,20 @@ public final class MeetingLibraryModel: ObservableObject {
   @Published var showsRawLiveMinutes = false
   /// R-a 核对工作台(08-17):开启后纪要正文区切换为核对队列。纯呈现态,不落盘,
   /// 换场复位——重开默认关(design 拍板)。public:探针断言换场复位。
-  @Published public var showsCheckWorkbench = false
+  ///
+  /// #94(2026-09-11「藏」):内部开关关闭时这个标志钉死为 false——工具行的 Toggle
+  /// 是它在产品里唯一的写入方,藏掉入口就已经够了;这里再守一道,是让「开关不开就
+  /// 不可能呈现工作台」这条不变量留在 model 内部,不必读 DetailPane 的接线才能确认。
+  @Published public var showsCheckWorkbench = false {
+    didSet {
+      if showsCheckWorkbench, !verifyWorkbenchEnabled {
+        showsCheckWorkbench = false
+      }
+    }
+  }
+  /// 本窗口这一轮的核对入口开关快照(进程启动后不再变)。public:探针直接置真,
+  /// 免得为 model 级断言去写全局 `UserDefaults`。
+  public var verifyWorkbenchEnabled = VerifyWorkbenchEntrySwitch.isEnabled()
   @Published private(set) var deletionError: String?
   @Published var titleError: String?
   /// 标签写盘失败的原因,挂在详情头标签行旁——静默失败等于骗用户标签存上了

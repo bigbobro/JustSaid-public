@@ -22,7 +22,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "3488bc2d7a323329f523e4a7b27b8aee6493d5607239e692bf7d2a9034a20b6a"
+      "sha256": "df27586c0774868c5b2ee4bc3559cc1b0f7bd057d8add4fb490cd9ac47bab39c"
     },
     {
       "path": "LICENSE",
@@ -62,7 +62,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Audio/AggregateInputStreamLayout.swift",
-      "sha256": "769aef3304c32b0ff60188d36b1d3c67d0c8255e66c5ac390b2b8033995e8d7f"
+      "sha256": "deb80ad6d979be4b9f8bb8ac7a51f1cef2f5ee383d981060a56ff44d02e2a7ea"
     },
     {
       "path": "Sources/JustSaidCore/Audio/AudioCaptureContracts.swift",
@@ -90,7 +90,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Audio/SystemAudioCapture.swift",
-      "sha256": "75d500f18e58d60878ab5d6911af44b563694c4273281eec8b97ab528b62bc66"
+      "sha256": "cfa17889048dbbb65e56a19b4fbd8a7c6efa1bd511e1fff879d36840e9dab982"
     },
     {
       "path": "Sources/JustSaidCore/Diagnostics/DiagnosticEventLedger.swift",
@@ -526,7 +526,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel.swift",
-      "sha256": "5faaeb64e1d865441ffa4fe47a96b54d982aa3d7a974e72acba7d20d97ca33b1"
+      "sha256": "f57b56136bad0990d163c0eafe1f8dd23021c15545be6ddfd0f29859a79e482e"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailHeader.swift",
@@ -538,7 +538,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailTools.swift",
-      "sha256": "3b5f841272400f2c82a838bac9effe756399a4c4cd5e63c5bab8f1a44cefbebb"
+      "sha256": "436b6548f6b3f4ae9d92232368d72cc92c012169530d7c679d693f3e0beb2ec9"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+InMeetingTab.swift",
@@ -546,7 +546,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+ListPane.swift",
-      "sha256": "613685ae68786948756fa2f252b9ba09b575bb06b1612b72f26410fb26231661"
+      "sha256": "9ecae5699993da47b3a4d59d063b07be698b0deabb8c700f54b9f40d3da699e1"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+SearchPane.swift",
@@ -558,7 +558,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView.swift",
-      "sha256": "4738f8250d6bd9ccc25b68de78db725460e99d4481dfdcd70dbf975f464e8b10"
+      "sha256": "163ec4b8de04210460550d60a8a1238fb4c91f29cb52bf77c0b5f8e7703f0e3a"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingNotesDocumentView.swift",
@@ -602,7 +602,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/RememberedScrollView.swift",
-      "sha256": "d4ce453f0ef8e2f0b4b944721a76d9b54b853f61dd1f9ed0e7af08c294d916e7"
+      "sha256": "fe106d9a6936ee7f957da03f339c78a5e406317b914842cb8d61d7522a7bf174"
     },
     {
       "path": "Sources/JustSaidUI/Views/SettingsChannelManagement.swift",
@@ -702,7 +702,7 @@
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "3488bc2d7a323329f523e4a7b27b8aee6493d5607239e692bf7d2a9034a20b6a"
+      "sha256": "df27586c0774868c5b2ee4bc3559cc1b0f7bd057d8add4fb490cd9ac47bab39c"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -721,7 +721,7 @@
   "manifest_path_excluded_from_file_hashes": "PUBLIC_EXPORT_MANIFEST.json",
   "package_manifest": {
     "canonical_signature": {
-      "canonical_target_count": 26,
+      "canonical_target_count": 27,
       "dependencies": [
         [
           "https://github.com/k2-fsa/sherpa-onnx",
@@ -780,6 +780,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "3f7ec4e0cf1ade8faa3c8d2a36fff8dc526373cf",
+  "source_sha": "4ae91da2ca3c6165ede2c683566778c979254427",
   "source_status": "clean"
 }

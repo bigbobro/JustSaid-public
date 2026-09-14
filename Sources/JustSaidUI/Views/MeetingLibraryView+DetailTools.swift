@@ -26,7 +26,10 @@ extension MeetingLibraryView {
     if model.minutesVariant == .chinese, model.minutesRevisions.count > 1 {
       return true
     }
-    return model.activeLiveMinutesDraft(for: item) == nil
+    // #94:入口藏起后「核对」不再给工具行贡献内容——漏掉这一半,工具行会剩一条
+    // 空的 pane 色带,比拿掉入口更显眼。
+    return model.verifyWorkbenchEnabled
+      && model.activeLiveMinutesDraft(for: item) == nil
       && model.canOpenCheckWorkbench(for: item)
   }
 
@@ -57,7 +60,10 @@ extension MeetingLibraryView {
         .runtimeAccessibilityIdentifier("library.minutes-revision-picker")
       }
       Spacer(minLength: 0)
-      if model.activeLiveMinutesDraft(for: item) == nil,
+      // #94(2026-09-11 owner 拍板「藏」):默认不渲染核对入口,代码与 check.json
+      // 读写原样保留;内部开关 `justsaid.verifyWorkbenchEnabled` 置真即恢复改前行为。
+      if model.verifyWorkbenchEnabled,
+        model.activeLiveMinutesDraft(for: item) == nil,
         model.canOpenCheckWorkbench(for: item)
       {
         Toggle("核对", isOn: $model.showsCheckWorkbench)

@@ -200,7 +200,7 @@ extension MeetingLibraryView {
           }
           .scrollTargetLayout()
         }
-        .scrollPosition(id: $retainedListScrollPosition, anchor: .top)
+        .modifier(RememberedListScrollPositionModifier($retainedListScrollPosition))
         .focusable(true)
         .focused($focusedPane, equals: .list)
         .focusEffectDisabled()
@@ -246,43 +246,52 @@ extension MeetingLibraryView {
     }
   }
 
-  /// 一行会议:满库列表与分组态共用同一构造——分组只是插节头,不换行本体。
-  private func meetingRow(_ item: MeetingLibraryItem) -> some View {
-    Button {
-      focusedMeetingTitleID = nil
+  /// 点行之后 `↑`/`↓` 不生效、要先按 Tab(#84):上面那句 `focusedPane = .list` 写在按钮
+  /// 动作里,新启动后的第一次点击会被静默丢弃,所以这里隔一个 runloop 轮次再请求一次。
+  ///
+  /// 定位这条 bug 时加过一轮临时诊断日志,真机上钉死三件事(诊断已随本单移除):
+  /// 1. 动作里写完当场回读 `focusedPane` 仍是 nil,`onChange` 一次都没触发——写入没落地,
+  ///    而且失败是静默的,不回读根本看不出来;
+  /// 2. 同一刻 AppKit 的 first responder,与「方向键能用」的那次完全相同(都是列表面板的
+  ///    `NSHostingView`)。所以不是响应链缺位——窗口根是 `AppKitWindowHostingView`,
+  ///    对它 `makeFirstResponder` 是修错了地方;方向键也不需要 `KeyViewProxy` 在场,
+  ///    first responder 停在面板宿主视图时照样走 `onMoveCommand`;
+  /// 3. 同一次点击的 +200ms 采样上,first responder 已经被收回窗口根宿主视图——点击这一轮
+  ///    事务里 SwiftUI 自己也在动焦点,动作里的焦点请求跟这次收尾撞在一起,无处落地。
+  ///
+  /// 隔一轮之后再请求就被接住:验收日志里这一句写完时回读仍是 nil(焦点是异步结算的),
+  /// 26ms 后 `focus-change` 报 `from=nil` 到 `.list`,方向键随即可用。判据是 `focus-change`
+  /// 有没有来,不是回读当场的值。
+  ///
+  /// 已经是 `.list` 时重复赋同一个值对 SwiftUI 是空操作,不会打断进行中的键盘导航;
+  /// 这条只碰焦点,不碰选中与滚动,#82 的邻近选中与滚动抑制不受影响。
+  ///
+  /// 覆盖面止于行点击这条路:右键→删除→确认/取消 不经过这里,它们靠点击已经建立的焦点。
+  private func reassertListKeyboardFocus() {
+    DispatchQueue.main.async {
       focusedPane = .list
-      // 点已选中行不会触发 onChange,置 false 防旗标滞留下一次程序性选中。
-      suppressNextSelectionScroll = model.selectedID != item.id
-      model.select(item.id)
-    } label: {
-      MeetingRowView(
-        item: item,
-        isSelected: model.selectedID == item.id,
-        transcriptionProgress: model.transcriptionProgress(for: item),
-        minutesProgress: model.minutesProgress(for: item),
-        effectiveStatus: model.effectiveStatus(for: item)
-      )
     }
-    .buttonStyle(.plain)
-    .id(item.id)
-    .focusable(false)
-    .accessibilityElement(children: .combine)
-    .accessibilityAddTraits(item.id == model.selectedID ? [.isButton, .isSelected] : .isButton)
-    .runtimeAccessibilityIdentifier("library.row")
-    .contextMenu {
-      Button {
+  }
+
+  /// 一行会议:满库列表与分组态共用同一构造——分组只是插节头,不换行本体。
+  /// 焦点/滚动抑制留在这里;选中绘制与 AX 由 `LibraryMeetingRowButton` 直接观察 model。
+  private func meetingRow(_ item: MeetingLibraryItem) -> some View {
+    LibraryMeetingRowButton(
+      model: model,
+      item: item,
+      onSelect: {
+        focusedMeetingTitleID = nil
+        focusedPane = .list
+        // 点已选中行不会触发 onChange,置 false 防旗标滞留下一次程序性选中。
+        suppressNextSelectionScroll = model.selectedID != item.id
+        model.select(item.id)
+        reassertListKeyboardFocus()
+      },
+      onRename: {
         model.select(item.id)
         focusedMeetingTitleID = item.id
-      } label: {
-        Label("重命名", systemImage: "pencil")
       }
-      Button(role: .destructive) {
-        model.pendingDeletion = item
-      } label: {
-        Label("删除这场会议…", systemImage: "trash")
-      }
-      .disabled(!model.isDeletable(item))
-    }
+    )
   }
 
   /// 分组节头(08-17 R-b):客户名 + 场数;「未标注」段与有名段同一构造。
@@ -306,6 +315,45 @@ extension MeetingLibraryView {
     .accessibilityElement(children: .combine)
     .accessibilityLabel("客户「\(section.title)」\(section.items.count) 场会议")
     .runtimeAccessibilityIdentifier("library.group.header")
+  }
+}
+
+/// 分组嵌套 ForEach 可能复用旧行;行自身观察 model,让高亮与选中 AX 一起更新。
+private struct LibraryMeetingRowButton: View {
+  @ObservedObject var model: MeetingLibraryModel
+  let item: MeetingLibraryItem
+  let onSelect: () -> Void
+  let onRename: () -> Void
+
+  private var isSelected: Bool { model.selectedID == item.id }
+
+  var body: some View {
+    Button(action: onSelect) {
+      MeetingRowView(
+        item: item,
+        isSelected: isSelected,
+        transcriptionProgress: model.transcriptionProgress(for: item),
+        minutesProgress: model.minutesProgress(for: item),
+        effectiveStatus: model.effectiveStatus(for: item)
+      )
+    }
+    .buttonStyle(.plain)
+    .id(item.id)
+    .focusable(false)
+    .accessibilityElement(children: .combine)
+    .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    .runtimeAccessibilityIdentifier("library.row")
+    .contextMenu {
+      Button(action: onRename) {
+        Label("重命名", systemImage: "pencil")
+      }
+      Button(role: .destructive) {
+        model.pendingDeletion = item
+      } label: {
+        Label("删除这场会议…", systemImage: "trash")
+      }
+      .disabled(!model.isDeletable(item))
+    }
   }
 }
 

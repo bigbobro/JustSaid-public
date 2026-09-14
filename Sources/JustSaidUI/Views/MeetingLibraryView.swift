@@ -92,15 +92,21 @@ public struct MeetingLibraryView: View {
   }
 
   public var body: some View {
-    HSplitView {
-      meetingList
-        .frame(
-          minWidth: Tokens.Layout.libraryListMinWidth,
-          idealWidth: Tokens.Layout.libraryListIdealWidth,
-          maxWidth: Tokens.Layout.libraryListMaxWidth
-        )
-      detail
-        .frame(minWidth: Tokens.Layout.libraryDetailMinWidth)
+    // 两栏以工作区视口为高度边界。避免 HSplitView 的宿主在 lazy 内容变化时
+    // 反复按内容估算纵向尺寸，带动整窗布局；分隔条仍只调整原有列宽。
+    GeometryReader { geometry in
+      HSplitView {
+        meetingList
+          .frame(
+            minWidth: Tokens.Layout.libraryListMinWidth,
+            idealWidth: Tokens.Layout.libraryListIdealWidth,
+            maxWidth: Tokens.Layout.libraryListMaxWidth
+          )
+          .frame(height: geometry.size.height)
+        detail
+          .frame(minWidth: Tokens.Layout.libraryDetailMinWidth)
+          .frame(height: geometry.size.height)
+      }
     }
     .background(Tokens.Color.bg)
     .onAppear { model.reload() }

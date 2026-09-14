@@ -72,3 +72,46 @@ extension View {
     }
   }
 }
+
+/// 列表的滚动行锚点只在手势（含惯性）结束后回写应用状态。
+/// 本地位置仍即时更新;外部的键盘导航和锚点修正仍可立即驱动滚动。
+struct RememberedListScrollPositionModifier: ViewModifier {
+  @Binding private var retainedID: String?
+  @State private var position: String?
+
+  init(_ retainedID: Binding<String?>) {
+    _retainedID = retainedID
+  }
+
+  func body(content: Content) -> some View {
+    content
+      .scrollPosition(id: $position, anchor: .top)
+      .task {
+        // 等行目标挂载后再发送恢复请求,避免初始布局吞掉锚点。
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+        position = retainedID
+      }
+      .onChange(of: retainedID) { _, id in
+        if position != id {
+          position = id
+        }
+      }
+      .onScrollPhaseChange { _, phase in
+        if phase == .idle {
+          commitPosition()
+        }
+      }
+      .onDisappear {
+        commitPosition()
+      }
+  }
+
+  private func commitPosition() {
+    // 拆卸滚动容器会清空 binding,这个 nil 不是用户滚到了新位置。
+    guard let position else { return }
+    if retainedID != position {
+      retainedID = position
+    }
+  }
+}

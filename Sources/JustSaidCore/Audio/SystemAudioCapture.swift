@@ -12,20 +12,23 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
     label: "com.justsaid.system-audio-capture",
     qos: .userInitiated
   )
+  private let callbackQueueKey = DispatchSpecificKey<Void>()
   private let logger = Logger(
     subsystem: "com.justsaid.app",
     category: "SystemAudioCapture"
   )
   private let failureBox = CaptureFailureBox()
   private let lossStatsBox = CaptureLossStatsBox()
-  /// IO 与布局监听同跑在 `callbackQueue`，无需加锁。
-  private let tapLayoutBox = TapStreamLayoutBox()
+  /// Activation ownership and all listener/cache mutation stay on callbackQueue.
+  private var inputState: SystemAudioCaptureInputState?
 
   private var processTapID = AudioObjectID(kAudioObjectUnknown)
   private var aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
   private var deviceIOProcID: AudioDeviceIOProcID?
-  private var streamConfigListenerBlock: AudioObjectPropertyListenerBlock?
-  private var isStreamConfigListening = false
+  private var streamConfigListenerBlocks:
+    [(selector: AudioObjectPropertySelector, block: AudioObjectPropertyListenerBlock)] = []
+  private var streamFormatListenerBlocks:
+    [(streamID: AudioStreamID, block: AudioObjectPropertyListenerBlock)] = []
   private var writer: IncrementalM4AWriter?
   private var processingQueue: BoundedCaptureProcessingQueue?
   private var statsTimer: DispatchSourceTimer?
@@ -40,7 +43,22 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
   /// 既有 writer 钉住的输入格式;rebuild 后新格式与它不一致按格式漂移失败封闭。
   private var writerInputFormat: AVAudioFormat?
 
-  public init() {}
+  public init() {
+    callbackQueue.setSpecific(key: callbackQueueKey, value: ())
+  }
+
+  /// Hardware-free verification activation. The supplied writer and input
+  /// state are the same production objects used by the runtime path; no tap,
+  /// aggregate device, IO proc, or listener is created by this initializer.
+  @_spi(Verification) public convenience init(
+    verificationWriter: IncrementalM4AWriter,
+    verificationInputState: SystemAudioCaptureInputState
+  ) {
+    self.init()
+    writer = verificationWriter
+    inputState = verificationInputState
+    isRunning = true
+  }
 
   public var captureLossStats: CaptureLossStats {
     lossStatsBox.snapshot()
@@ -61,7 +79,6 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
     }
     failureBox.reset()
     lossStatsBox.reset()
-    tapLayoutBox.layout = nil
 
     do {
       let plan = try createTapAndAggregateDevice(processIDs: processIDs)
@@ -130,7 +147,12 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       let plan = try createTapAndAggregateDevice(
         processIDs: configuration.processIDs
       )
-      guard plan.writeFormat == writerInputFormat else {
+      guard
+        SystemAudioCaptureFormatPlanFactory.writerFormatMatches(
+          candidate: plan.writeFormat,
+          existing: writerInputFormat
+        )
+      else {
         throw IncrementalM4AWriterError.inputFormatMismatch
       }
       try activateCoreAudioPipeline(
@@ -147,8 +169,9 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
     logger.notice("系统音频采集管线已重建（tap/聚合设备/IO 回调）")
   }
 
-  /// tap + 聚合设备 + 降混计划(start 与 rebuild 共用)。每次都重读 tapFormat 与
-  /// 设备偏好声道——rebuild 时环境可能已变,不得沿用旧形态。
+  /// tap + 聚合设备 + 降混计划(start 与 rebuild 共用)。tap format 只作为
+  /// 选择提示；聚合设备建立后立即读取实际 selected stream 的完整 VirtualFormat，
+  /// 并让该格式贯穿 plan、PCM 包装、降混与初始 writer。
   private func createTapAndAggregateDevice(
     processIDs: [pid_t]?
   ) throws -> CoreAudioPipelinePlan {
@@ -166,13 +189,31 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
     tapDescription.muteBehavior = .unmuted
 
     try createTap(using: tapDescription)
-    let format = try tapFormat()
+    let tapFormat = try tapFormat()
     let outputDeviceID = try Self.defaultSystemOutputDevice()
     let outputDeviceUID = try Self.deviceUID(for: outputDeviceID)
     try createAggregateDevice(
       tapDescription: tapDescription,
       outputDeviceUID: outputDeviceUID
     )
+
+    // The tap is queried before aggregate creation for a channel-count hint only.
+    // The aggregate's selected stream is the authoritative format provenance.
+    let capturePlan = try AggregateInputStreamQuery.capturePlan(
+      deviceID: aggregateDeviceID,
+      tapFormat: AggregateInputStreamFormat(
+        tapFormat.streamDescription.pointee
+      )
+    )
+    guard
+      let selectedStream = capturePlan.streamLayout.selectedStream,
+      let format = capturePlan.inputFormat.makeAVAudioFormat()
+    else {
+      throw AudioCaptureError.systemAudioTapFailed(
+        operation: "创建实际系统音频输入格式",
+        status: kAudioHardwareUnsupportedOperationError
+      )
+    }
 
     // 通话场景下 tap/聚合设备可能呈 >2 声道。先问 Core Audio 设备该用哪两个
     // 立体声声道;聚合设备未提供时再问它的主输出设备,最终才由降混器平均兜底。
@@ -202,6 +243,8 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
     }
     return CoreAudioPipelinePlan(
       format: format,
+      tapFormatSnapshot: capturePlan.tapFormat,
+      selectedStreamID: selectedStream.streamID,
       downmixer: downmixer,
       writeFormat: downmixer?.outputFormat ?? format
     )
@@ -218,22 +261,25 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
   ) throws {
     let format = plan.format
     let handoff = TapBufferHandoffBox(downmixer: plan.downmixer)
-    let tapChannelCount = format.channelCount
-    let initialLayout = try AggregateInputStreamQuery.layout(
-      deviceID: aggregateDeviceID,
-      tapChannelCount: tapChannelCount
+    let inputState = try installStreamConfigurationListener(
+      tapFormat: plan.tapFormatSnapshot,
+      expectedVirtualFormat: AggregateInputStreamFormat(format.streamDescription.pointee),
+      selectedStreamID: plan.selectedStreamID
     )
-    tapLayoutBox.layout = initialLayout
-    logger.info(
-      "系统音频输入流布局：streams=\(initialLayout.streamChannelCounts, privacy: .public) tapBuffer=\(initialLayout.tapBufferRange.description, privacy: .public)"
-    )
-    try installStreamConfigurationListener(tapChannelCount: tapChannelCount)
-
-    let layoutBox = tapLayoutBox
+    performOnCallbackQueue {
+      let layout = inputState.layout
+      let writerFormat = AggregateInputStreamFormat(plan.writeFormat.streamDescription.pointee)
+      logger.notice(
+        "系统音频格式计划已确认：tap=\(Self.formatLogDescription(plan.tapFormatSnapshot), privacy: .public) selectedStream=\(layout?.selectedStream?.streamID ?? 0, privacy: .public) range=\(layout?.tapBufferRange.description ?? "invalid", privacy: .public) input=\(Self.formatLogDescription(layout?.selectedStream?.virtualFormat), privacy: .public) writer=\(Self.formatLogDescription(writerFormat), privacy: .public)"
+      )
+    }
     let layoutMismatchLog = OnceFlag()
     let callback: AudioDeviceIOBlock = {
-      [failureBox, logger, lossStatsBox, layoutBox, layoutMismatchLog, handoff]
+      [
+        failureBox, logger, lossStatsBox, inputState, layoutMismatchLog, handoff
+      ]
       _, inputData, inputTime, _, _ in
+      guard !inputState.isRetired else { return }
       guard inputTime.pointee.mFlags.contains(.hostTimeValid) else {
         if failureBox.record(
           IncrementalM4AWriterError.invalidState("系统音频样本缺少 hostTime")
@@ -246,66 +292,16 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       let source = UnsafeMutableAudioBufferListPointer(
         UnsafeMutablePointer(mutating: inputData)
       )
-      let bufferCount = source.count
-      // 热路径：缓存 buffer 数匹配时零分配直接用区间；失配才扫 ABL 声道形态。
-      let range: Range<Int>?
-      if let cached = layoutBox.layout, cached.matchesBufferCount(bufferCount) {
-        range = cached.tapBufferRange
-      } else {
-        var bufferChannelCounts: [UInt32] = []
-        bufferChannelCounts.reserveCapacity(bufferCount)
-        for index in 0..<bufferCount {
-          bufferChannelCounts.append(source[index].mNumberChannels)
-        }
-        if let resolved = AggregateInputStreamMapper.resolveBufferRange(
-          bufferChannelCounts: bufferChannelCounts,
-          tapChannelCount: tapChannelCount,
-          cached: nil
-        ) {
-          layoutBox.layout = AggregateInputStreamLayout(
-            streamChannelCounts: bufferChannelCounts,
-            tapStreamIndex: resolved.lowerBound,
-            tapBufferRange: resolved,
-            expectedBufferCount: bufferCount
-          )
-          layoutMismatchLog.reset()
-          logger.info(
-            "系统音频缓冲布局已按 ABL 重选：ch=\(bufferChannelCounts, privacy: .public) tapBuffer=\(resolved.description, privacy: .public)"
-          )
-          range = resolved
-        } else {
-          range = nil
-          Self.recordDroppedInputFrames(
-            source: source,
-            format: format,
-            lossStatsBox: lossStatsBox
-          )
-          if layoutMismatchLog.mark() {
-            logger.error(
-              "系统音频缓冲无法匹配 tap 流（nBuf=\(bufferCount, privacy: .public) ch=\(bufferChannelCounts, privacy: .public)），已计入 gap"
-            )
-          }
-        }
-      }
-
-      guard let range else {
-        return
-      }
-
-      guard
-        let rawBuffer = Self.makeOwnedPCMBuffer(
-          from: inputData,
-          format: format,
-          sourceBufferRange: range
-        )
-      else {
+      // No Core Audio property query or channel-only fallback in the callback.
+      // Admission and PCM copying consume this activation's monitored layout.
+      guard let rawBuffer = inputState.makeOwned(from: inputData) else {
         Self.recordDroppedInputFrames(
           source: source,
           format: format,
           lossStatsBox: lossStatsBox
         )
         if layoutMismatchLog.mark() {
-          logger.error("复制系统音频缓冲失败（tap 区间 \(range.description, privacy: .public)），已计入 gap")
+          logger.error("系统音频输入格式/布局未确认或缓冲复制失败，已计入 gap")
         }
         return
       }
@@ -369,6 +365,22 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
 
     status = AudioDeviceStart(aggregateDeviceID, deviceIOProcID)
     try Self.requireNoError(status, operation: "启动系统音频设备")
+    do {
+      try performOnCallbackQueue {
+        // A format notification may have retired admission during IO setup.
+        // Do not report a known-invalid activation as successfully started.
+        guard !inputState.isRetired else {
+          throw failureBox.firstFailure?.error ?? IncrementalM4AWriterError.inputFormatMismatch
+        }
+      }
+    } catch {
+      let stopStatus = AudioDeviceStop(aggregateDeviceID, deviceIOProcID)
+      if stopStatus != noErr {
+        logger.warning("失效系统音频启动后停止设备失败：\(stopStatus, privacy: .public)")
+      }
+      // start/rebuild's existing catch unregisters listeners and destroys IO.
+      throw error
+    }
   }
 
   public func stop() async throws {
@@ -506,74 +518,226 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
     try Self.requireNoError(status, operation: "创建系统音频聚合设备")
   }
 
-  private func installStreamConfigurationListener(tapChannelCount: UInt32) throws {
-    removeStreamConfigurationListener()
-    guard aggregateDeviceID != kAudioObjectUnknown else {
-      return
-    }
-
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioDevicePropertyStreamConfiguration,
-      mScope: kAudioDevicePropertyScopeInput,
-      mElement: kAudioObjectPropertyElementMain
-    )
-    let deviceID = aggregateDeviceID
-    let layoutBox = tapLayoutBox
-    let logger = self.logger
-    let block: AudioObjectPropertyListenerBlock = { _, _ in
-      do {
-        let layout = try AggregateInputStreamQuery.layout(
-          deviceID: deviceID,
-          tapChannelCount: tapChannelCount
-        )
-        layoutBox.layout = layout
-        logger.info(
-          "系统音频输入流布局（监听）：streams=\(layout.streamChannelCounts, privacy: .public) tapBuffer=\(layout.tapBufferRange.description, privacy: .public)"
-        )
-      } catch {
-        logger.warning(
-          "系统音频输入流布局重算失败：\(error.localizedDescription, privacy: .public)"
+  private func installStreamConfigurationListener(
+    tapFormat: AggregateInputStreamFormat,
+    expectedVirtualFormat: AggregateInputStreamFormat,
+    selectedStreamID: AudioStreamID
+  ) throws -> SystemAudioCaptureInputState {
+    try performOnCallbackQueue {
+      removeStreamConfigurationListenerOnCallbackQueue()
+      guard aggregateDeviceID != kAudioObjectUnknown else {
+        throw AudioCaptureError.systemAudioTapFailed(
+          operation: "注册系统音频监听时聚合设备无效", status: kAudioHardwareBadObjectError
         )
       }
+      let deviceID = aggregateDeviceID
+      let state = SystemAudioCaptureInputState(
+        expectedFormat: expectedVirtualFormat,
+        selectedStreamID: selectedStreamID
+      )
+      inputState = state
+      let refresh: @Sendable () -> Void = { [weak self, state] in
+        self?.refreshStreamLayout(deviceID: deviceID, tapFormat: tapFormat, state: state)
+      }
+      // Stream IDs can change without any channel-shape change. Both topology
+      // properties must be observed before reading/registering a selected stream.
+      do {
+        for selector in [
+          kAudioDevicePropertyStreamConfiguration, kAudioDevicePropertyStreams,
+        ] {
+          var address = AudioObjectPropertyAddress(
+            mSelector: selector, mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+          )
+          let block: AudioObjectPropertyListenerBlock = { _, _ in refresh() }
+          let status = AudioObjectAddPropertyListenerBlock(
+            deviceID, &address, callbackQueue, block
+          )
+          try Self.requireNoError(status, operation: "注册系统音频输入流监听")
+          streamConfigListenerBlocks.append((selector, block))
+        }
+        try updateStreamLayout(deviceID: deviceID, tapFormat: tapFormat, state: state)
+      } catch {
+        removeStreamConfigurationListenerOnCallbackQueue()
+        throw error
+      }
+      return state
     }
+  }
 
-    let status = AudioObjectAddPropertyListenerBlock(
-      deviceID,
-      &address,
-      callbackQueue,
-      block
+  /// Initial installation and notifications share the production read/register/
+  /// reread transaction. Registration collections and publication are serialized
+  /// with IO by callbackQueue; a retired notification cannot rearm its cache.
+  private func updateStreamLayout(
+    deviceID: AudioDeviceID,
+    tapFormat: AggregateInputStreamFormat,
+    state: SystemAudioCaptureInputState
+  ) throws {
+    try refreshInputState(
+      state: state,
+      queryWithExpectedSelection: { expectedStreamID, expectedVirtualFormat in
+        try AggregateInputStreamQuery.capturePlan(
+          deviceID: deviceID,
+          tapFormat: tapFormat,
+          expectedStreamID: expectedStreamID,
+          expectedVirtualFormat: expectedVirtualFormat
+        )
+      },
+      monitor: { streamID in
+        try addStreamFormatListener(
+          for: streamID,
+          refresh: { [weak self, state] in
+            self?.refreshStreamLayout(deviceID: deviceID, tapFormat: tapFormat, state: state)
+          }
+        )
+      }
     )
-    try Self.requireNoError(status, operation: "注册系统音频流布局监听")
-    streamConfigListenerBlock = block
-    isStreamConfigListening = true
+  }
+
+  /// Shared error-recording boundary for initial installation, runtime
+  /// notifications, and the hardware-free SPI verification path. A retired
+  /// state keeps its first typed format failure for `stop()` to consume;
+  /// recoverable query/topology errors are deliberately not recorded.
+  private func refreshInputState(
+    state: SystemAudioCaptureInputState,
+    queryWithExpectedSelection:
+      (_ expectedStreamID: AudioStreamID?, _ expectedVirtualFormat: AggregateInputStreamFormat)
+      throws -> SystemAudioCaptureFormatPlan,
+    monitor: (AudioStreamID) throws -> Void
+  ) throws {
+    do {
+      try state.refresh(
+        queryWithExpectedSelection: queryWithExpectedSelection,
+        monitor: monitor
+      )
+    } catch {
+      recordRetiredInputFailure(error, state: state)
+      throw error
+    }
+  }
+
+  /// Runs the same state refresh and retired-error recording on the serial
+  /// callback queue without touching hardware. Verification uses this to feed
+  /// a raw-descriptor mutation through the real production admission path, then
+  /// calls `stop()` so the normal writer/failureBox handoff remains exercised.
+  @_spi(Verification) public func refreshVerificationInputFormat(
+    queryWithExpectedSelection:
+      (_ expectedStreamID: AudioStreamID?, _ expectedVirtualFormat: AggregateInputStreamFormat)
+      throws -> SystemAudioCaptureFormatPlan,
+    monitor: (AudioStreamID) throws -> Void
+  ) throws {
+    try performOnCallbackQueue {
+      guard let state = inputState else {
+        throw AudioCaptureError.systemAudioTapFailed(
+          operation: "合成系统音频输入状态不存在",
+          status: kAudioHardwareBadObjectError
+        )
+      }
+      try refreshInputState(
+        state: state,
+        queryWithExpectedSelection: queryWithExpectedSelection,
+        monitor: monitor
+      )
+    }
+  }
+
+  private func refreshStreamLayout(
+    deviceID: AudioDeviceID,
+    tapFormat: AggregateInputStreamFormat,
+    state: SystemAudioCaptureInputState
+  ) {
+    guard !state.isRetired else { return }
+    do {
+      try updateStreamLayout(deviceID: deviceID, tapFormat: tapFormat, state: state)
+      let layout = state.layout
+      logger.info(
+        "系统音频输入流布局（监听）：selectedStream=\(layout?.selectedStream?.streamID ?? 0, privacy: .public) tapBuffer=\(layout?.tapBufferRange.description ?? "invalid", privacy: .public) rate=\(layout?.selectedStream?.virtualFormat.sampleRate ?? 0, privacy: .public)"
+      )
+    } catch {
+      // refreshInputState() already logs the first retired error.
+      if !state.isRetired {
+        logger.warning("系统音频输入布局暂不可用：\(error.localizedDescription, privacy: .public)")
+      }
+    }
+  }
+
+  private func recordRetiredInputFailure(
+    _ error: Error,
+    state: SystemAudioCaptureInputState
+  ) {
+    guard state.isRetired else { return }
+    if failureBox.record(error) {
+      logger.error("系统音频格式或监听失效，旧计划已停用：\(error.localizedDescription, privacy: .public)")
+    }
+  }
+
+  private func addStreamFormatListener(
+    for streamID: AudioStreamID,
+    refresh: @escaping @Sendable () -> Void
+  ) throws {
+    guard !streamFormatListenerBlocks.contains(where: { $0.streamID == streamID }) else {
+      return
+    }
+    var formatAddress = AudioObjectPropertyAddress(
+      mSelector: kAudioStreamPropertyVirtualFormat,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    let formatBlock: AudioObjectPropertyListenerBlock = { _, _ in
+      refresh()
+    }
+    let formatStatus = AudioObjectAddPropertyListenerBlock(
+      streamID,
+      &formatAddress,
+      callbackQueue,
+      formatBlock
+    )
+    try Self.requireNoError(formatStatus, operation: "注册系统音频 VirtualFormat 监听")
+    streamFormatListenerBlocks.append((streamID, formatBlock))
   }
 
   private func removeStreamConfigurationListener() {
-    guard
-      isStreamConfigListening,
-      aggregateDeviceID != kAudioObjectUnknown,
-      let block = streamConfigListenerBlock
-    else {
-      streamConfigListenerBlock = nil
-      isStreamConfigListening = false
-      return
+    performOnCallbackQueue {
+      removeStreamConfigurationListenerOnCallbackQueue()
     }
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioDevicePropertyStreamConfiguration,
-      mScope: kAudioDevicePropertyScopeInput,
-      mElement: kAudioObjectPropertyElementMain
-    )
-    let status = AudioObjectRemovePropertyListenerBlock(
-      aggregateDeviceID,
-      &address,
-      callbackQueue,
-      block
-    )
-    if status != noErr {
-      logger.warning("注销系统音频流布局监听失败：\(status, privacy: .public)")
+  }
+
+  private func removeStreamConfigurationListenerOnCallbackQueue() {
+    // Invalidate before unregistering or destroying IO. Already queued old IO
+    // and listener closures retain a permanently retired activation.
+    inputState?.retire()
+    inputState = nil
+    for entry in streamConfigListenerBlocks {
+      var address = AudioObjectPropertyAddress(
+        mSelector: entry.selector,
+        mScope: kAudioDevicePropertyScopeInput,
+        mElement: kAudioObjectPropertyElementMain
+      )
+      let status = AudioObjectRemovePropertyListenerBlock(
+        aggregateDeviceID, &address, callbackQueue, entry.block
+      )
+      if status != noErr {
+        logger.warning("注销系统音频输入流监听失败：\(status, privacy: .public)")
+      }
     }
-    streamConfigListenerBlock = nil
-    isStreamConfigListening = false
+    for entry in streamFormatListenerBlocks {
+      var address = AudioObjectPropertyAddress(
+        mSelector: kAudioStreamPropertyVirtualFormat,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+      )
+      let status = AudioObjectRemovePropertyListenerBlock(
+        entry.streamID,
+        &address,
+        callbackQueue,
+        entry.block
+      )
+      if status != noErr {
+        logger.warning("注销系统音频 VirtualFormat 监听失败：\(status, privacy: .public)")
+      }
+    }
+    streamConfigListenerBlocks.removeAll()
+    streamFormatListenerBlocks.removeAll()
   }
 
   private func cleanUpCoreAudio() {
@@ -603,8 +767,15 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       }
       processTapID = AudioObjectID(kAudioObjectUnknown)
     }
+  }
 
-    tapLayoutBox.layout = nil
+  private func performOnCallbackQueue<T>(_ body: () throws -> T) rethrows -> T {
+    if DispatchQueue.getSpecific(key: callbackQueueKey) != nil {
+      return try body()
+    }
+    return try callbackQueue.sync {
+      try body()
+    }
   }
 
   private func tearDownWriter(finishing: Bool) async throws {
@@ -622,62 +793,6 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       processingQueue?.cancel()
       writer.cancel()
     }
-  }
-
-  /// 按流身份区间从 ABL 拷贝 tap PCM；不再要求 destination.count == 全量 source.count。
-  private static func makeOwnedPCMBuffer(
-    from audioBufferList: UnsafePointer<AudioBufferList>,
-    format: AVAudioFormat,
-    sourceBufferRange: Range<Int>
-  ) -> AVAudioPCMBuffer? {
-    guard
-      format.streamDescription.pointee.mBytesPerFrame > 0,
-      !sourceBufferRange.isEmpty
-    else {
-      return nil
-    }
-    let source = UnsafeMutableAudioBufferListPointer(
-      UnsafeMutablePointer(mutating: audioBufferList)
-    )
-    guard
-      sourceBufferRange.lowerBound >= 0,
-      sourceBufferRange.upperBound <= source.count
-    else {
-      return nil
-    }
-
-    let first = source[sourceBufferRange.lowerBound]
-    let frameLength =
-      first.mDataByteSize
-      / format.streamDescription.pointee.mBytesPerFrame
-    guard
-      frameLength > 0,
-      let copy = AVAudioPCMBuffer(
-        pcmFormat: format,
-        frameCapacity: AVAudioFrameCount(frameLength)
-      )
-    else {
-      return nil
-    }
-    copy.frameLength = AVAudioFrameCount(frameLength)
-    let destination = UnsafeMutableAudioBufferListPointer(
-      copy.mutableAudioBufferList
-    )
-    guard destination.count == sourceBufferRange.count else {
-      return nil
-    }
-    for (offset, sourceIndex) in sourceBufferRange.enumerated() {
-      let byteCount = Int(source[sourceIndex].mDataByteSize)
-      guard
-        byteCount <= Int(destination[offset].mDataByteSize),
-        let sourceData = source[sourceIndex].mData,
-        let destinationData = destination[offset].mData
-      else {
-        return nil
-      }
-      memcpy(destinationData, sourceData, byteCount)
-    }
-    return copy
   }
 
   private static func recordDroppedInputFrames(
@@ -779,11 +894,23 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       )
     }
   }
+
+  private static func formatLogDescription(
+    _ format: AggregateInputStreamFormat?
+  ) -> String {
+    guard let format else {
+      return "invalid"
+    }
+    return
+      "rate=\(format.sampleRate) id=\(format.formatID) flags=\(format.formatFlags) bytesPerPacket=\(format.bytesPerPacket) framesPerPacket=\(format.framesPerPacket) bytesPerFrame=\(format.bytesPerFrame) channels=\(format.channelsPerFrame) bits=\(format.bitsPerChannel)"
+  }
 }
 
 /// start/rebuild 共用的管线材料:tap 格式、降混器与最终写入格式。
 private struct CoreAudioPipelinePlan {
   let format: AVAudioFormat
+  let tapFormatSnapshot: AggregateInputStreamFormat
+  let selectedStreamID: AudioStreamID
   let downmixer: PCMStereoDownmixer?
   let writeFormat: AVAudioFormat
 }
@@ -818,11 +945,6 @@ private final class TapBufferHandoffBox: @unchecked Sendable {
     defer { lock.unlock() }
     return pending.removeValue(forKey: ticket)
   }
-}
-
-/// 仅由 `callbackQueue` 读写的布局缓存（IO 回调与 StreamConfiguration 监听共享）。
-private final class TapStreamLayoutBox: @unchecked Sendable {
-  var layout: AggregateInputStreamLayout?
 }
 
 /// 一次性日志开关，失配恢复后可 reset。
