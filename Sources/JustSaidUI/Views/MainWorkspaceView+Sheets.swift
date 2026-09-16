@@ -11,7 +11,9 @@ extension MainWorkspaceView {
         ProviderSettingsView(
           registry: registry,
           settingsStore: providerSettings,
-          modelAssetManager: modelAssetManager
+          modelAssetManager: modelAssetManager,
+          nameAlertPreferences: appCoordinator.nameAlertPreferences,
+          appUpdates: appCoordinator.appUpdates
         )
         // 词典页会随词表变长，写死高度就意味着长词表被裁掉；
         // 给下限与理想值、放开上限，让内容说了算。

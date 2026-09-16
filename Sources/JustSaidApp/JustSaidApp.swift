@@ -32,6 +32,8 @@ struct JustSaidApp: App {
   @StateObject private var modelAssetManager: LocalModelAssetManager
   @State private var startupStorageFailure: String?
   @StateObject private var appCoordinator: AppCoordinator
+  /// 应用更新器(进程内唯一,与主窗无关);开发构建与未盖章的包为 nil。
+  private let appUpdater: AppUpdater?
   @AppStorage(AppAppearance.defaultsKey) private var appearanceRawValue =
     AppAppearance.system.rawValue
   // 关主窗不退出(T11)必须经由 SwiftUI 的 delegate 适配器安装,不能直接赋值 NSApp.delegate。
@@ -69,8 +71,10 @@ struct JustSaidApp: App {
     _providerSettings = StateObject(
       wrappedValue: providerSettings
     )
+    // 录制会话、协调者(含会后任务)与模型管理器同时交给更新器的最终退出守卫,必须是界面用的同一实例。
+    let recordingSession = RecordingSession(store: meetingStore)
     _recordingSession = StateObject(
-      wrappedValue: RecordingSession(store: meetingStore)
+      wrappedValue: recordingSession
     )
     _summaryFeed = StateObject(
       wrappedValue: LiveSummaryFeed(
@@ -85,20 +89,28 @@ struct JustSaidApp: App {
         postMeetingTasks: postMeetingTasks
       )
     )
+    let appCoordinator = AppCoordinator(
+      meetingStore: meetingStore,
+      postMeetingPipelineResolver: postMeetingPipelineResolver,
+      postMeetingTasks: postMeetingTasks
+    )
     _appCoordinator = StateObject(
-      wrappedValue: AppCoordinator(
-        meetingStore: meetingStore,
-        postMeetingPipelineResolver: postMeetingPipelineResolver,
-        postMeetingTasks: postMeetingTasks
-      )
+      wrappedValue: appCoordinator
+    )
+    let modelAssetManager = LocalModelAssetManager(
+      catalogResult: LocalModelAssetCatalogLoader.loadFromBundle(.main),
+      modelsRoot: LocalModelAssetManager.defaultModelsRoot(),
+      transport: URLSessionModelAssetDownloadTransport()
     )
     _modelAssetManager = StateObject(
-      wrappedValue: LocalModelAssetManager(
-        catalogResult: LocalModelAssetCatalogLoader.loadFromBundle(.main),
-        modelsRoot: LocalModelAssetManager.defaultModelsRoot(),
-        transport: URLSessionModelAssetDownloadTransport()
-      )
+      wrappedValue: modelAssetManager
     )
+    appUpdater = AppUpdater.installIfEnabled(
+      appCoordinator: appCoordinator,
+      recordingSession: recordingSession,
+      modelAssets: modelAssetManager
+    )
+    appCoordinator.appUpdates = appUpdater?.model
   }
 
   var body: some Scene {
@@ -114,6 +126,7 @@ struct JustSaidApp: App {
       .preferredColorScheme(
         AppAppearance.persisted(appearanceRawValue).preferredColorScheme
       )
+      .background(MainWindowOpenerRegistrar(appCoordinator: appCoordinator))
       .task {
         // 菜单栏常驻入口(T11):关主窗不退出、录音继续,菜单栏是唯一入口。
         appCoordinator.installMenuBarIfNeeded(
@@ -153,6 +166,9 @@ struct JustSaidApp: App {
     // replacing 会把菜单项连同 ⌘, 一起吞成死键——改挂在「关于」之后,不依赖占位。
     .commands {
       CommandGroup(after: .appInfo) {
+        if let appUpdater {
+          Button("检查更新…") { appUpdater.checkForUpdates() }
+        }
         Divider()
         OpenSettingsCommand(appCoordinator: appCoordinator)
       }
@@ -167,6 +183,23 @@ struct JustSaidApp: App {
 extension JustSaidApp {
   /// 主窗 Scene id:openWindow(id:) 重开已关闭的主窗用(批4-E 真机修正)。
   static let mainSceneID = "JustSaid.MainScene"
+}
+
+/// 把 SwiftUI 的 `openWindow(id:)` 登记给 AppCoordinator:悬浮内容「回主窗」在主窗
+/// 已关闭时走这条与菜单命令相同的重开路由(`newWindowForTab` 对本 App 空转)。
+private struct MainWindowOpenerRegistrar: View {
+  @Environment(\.openWindow) private var openWindow
+  let appCoordinator: AppCoordinator
+
+  var body: some View {
+    Color.clear
+      .onAppear {
+        let openWindow = openWindow
+        appCoordinator.registerMainWindowOpener {
+          openWindow(id: JustSaidApp.mainSceneID)
+        }
+      }
+  }
 }
 
 /// 「设置…」菜单命令(⌘, 唯一 owner)。有可见主窗走前置+挂起请求;

@@ -13,7 +13,6 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   @ObservedObject var appCoordinator: AppCoordinator
   @ObservedObject var modelAssetManager: LocalModelAssetManager
 
-  @StateObject private var compactPanel = CompactPanelController()
   @StateObject private var notesController = NotesController()
 
   /// 保留既有 Bool 兼容字段；App 冷启动仍复位为 false，固定模式只存在本窗口实例。
@@ -220,7 +219,7 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     .environment(\.textScale, textScale)
     .background(
       WindowAccessor { window in
-        compactPanel.observe(mainWindow: window)
+        // 会中呈现宿主在 AppCoordinator 上,登记窗口时一并更新前后台观察。
         appCoordinator.registerMainWindow(window)
         // 单一最小宽(2026-08-19 契约):转写抽屉走 overlay 不参与 flex,
         // 展开不再抬最小宽——旧的 920/1220 两档跳变随左栏转写一起撤销。
@@ -246,8 +245,6 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
           from: recordingSession.liveSegments
         ).segments
       notesController.attachWriter(directory: directory)
-      summaryFeed.attach(meetingDirectory: directory)
-      compactPanel.updateCurrentMeeting(directory: directory)
       reloadExclusionState()
     }
     // 录音起点由 Core 发布，界面只跟随：这样无论从主窗还是菜单栏开录，
@@ -262,8 +259,8 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       }
     }
     .onChange(of: recordingSession.liveSegments) { _, segments in
+      // 总结 ingest 由应用级呈现宿主持有(主窗关闭时也不断),这里只做显示过滤与提示。
       displaySegments = displayEchoFilter.removeEcho(from: segments).segments
-      summaryFeed.ingest(segments)
       if recordingSession.phase == .recording,
         !isLanguageMismatchDismissed,
         languageMismatch == nil,
@@ -287,7 +284,6 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       }
     }
     .onChange(of: recordingSession.phase) { _, phase in
-      compactPanel.updateRecordingActive(phase == .recording)
       if phase == .recording {
         appCoordinator.showCockpit()
         displayEchoFilter.reset()
@@ -295,15 +291,12 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
           displayEchoFilter.removeEcho(
             from: recordingSession.liveSegments
           ).segments
-        summaryFeed.start()
-        summaryFeed.ingest(recordingSession.liveSegments)
       }
     }
     .onChange(of: recordingSession.isMicrophonePaused) { _, paused in
       // 呈现层记账:上升沿记暂停起点、恢复清零;权威区间在 meeting.json,
-      // 这里不读不写。同步给缩略置顶窗(它与主窗共用同一份暂停态)。
+      // 这里不读不写。悬浮内容的暂停态由应用级呈现宿主同步。
       microphonePausedAt = paused ? Date() : nil
-      compactPanel.overlayModel.isMicrophonePaused = paused
     }
     .onReceive(
       NotificationCenter.default.publisher(for: .justSaidPostMeetingRecovered)
@@ -315,11 +308,13 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       else { return }
       feed.reconcilePostMeetingRecovery(directory: directory, notice: notice)
     }
-    .onChange(of: summaryFeed.now) { _, newState in
-      compactPanel.overlayModel.update(from: newState)
-    }
     .onAppear {
       appCoordinator.registerRecordingSession(recordingSession)
+      // 会中呈现(点名检测、摘要桥接、悬浮载体)只安装一次,主窗重建时是空操作。
+      appCoordinator.installMeetingPresence(
+        recordingSession: recordingSession,
+        summaryFeed: summaryFeed
+      )
       // 菜单栏「结束会议」与主窗按钮走同一确认流(08-14 捎带):
       // 主窗在,就把自己的 requestEndMeeting(含闲聊未封口兜底)注册给菜单栏路径。
       appCoordinator.registerRequestStartMeetingHandler { startMeeting() }
@@ -329,16 +324,9 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       // 此处注册后异步补发(补发在 onAppear 整段跑完之后,状态已装载)。
       appCoordinator.registerRequestMarkHandler { notesController.beginMark() }
       appCoordinator.registerRequestToggleChatHandler { toggleChatExclusion() }
-      let overlayPanel = compactPanel
-      appCoordinator.registerMarkFeedback(
-        overlayVisible: { [weak overlayPanel] in overlayPanel?.isPanelVisible ?? false },
-        flashOverlay: { [weak overlayPanel] in overlayPanel?.flashMarkConfirmation() },
-        flashOverlayMessage: { [weak overlayPanel] text in
-          overlayPanel?.flashActionConfirmation(text)
-        }
-      )
       if recordingSession.phase == .recording || recordingSession.phase == .stopping {
-        appCoordinator.showCockpit()
+        // 只选驾驶舱内容;窗口唤起属于外部入口,挂载时唤起会把关闭后仍被持有的旧主窗前置。
+        appCoordinator.selectCockpit()
       }
       // 默认语言跟上一场走(2026-07-30):用户连开两场英文会都停在中文没发现。
       // 只在空闲态、且本会话未手动改过时预填;手选永远优先。
@@ -360,17 +348,9 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       }
       if let directory = recordingSession.currentMeetingDirectory {
         notesController.attachWriter(directory: directory)
-        summaryFeed.attach(meetingDirectory: directory)
-        compactPanel.updateCurrentMeeting(directory: directory)
         reloadExclusionState()
       }
-      compactPanel.overlayModel.onMark = { notesController.beginMark() }
-      // 悬浮窗的一键恢复直调 Core;暂停态可能由快捷键路径错过 onChange,
-      // 出现时补一次同步(起点无从追溯就用当下时刻,只影响时长显示)。
-      compactPanel.overlayModel.onResumeMicrophone = {
-        recordingSession.resumeMicrophone()
-      }
-      compactPanel.overlayModel.isMicrophonePaused = recordingSession.isMicrophonePaused
+      // 暂停态可能由快捷键路径错过 onChange,出现时补一次起点(无从追溯就用当下时刻,只影响时长显示)。
       if recordingSession.isMicrophonePaused, microphonePausedAt == nil {
         microphonePausedAt = Date()
       }
@@ -386,7 +366,6 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       appCoordinator.registerRequestEndMeetingHandler(nil)
       appCoordinator.registerRequestMarkHandler(nil)
       appCoordinator.registerRequestToggleChatHandler(nil)
-      appCoordinator.registerMarkFeedback(overlayVisible: nil, flashOverlay: nil)
     }
     .onChange(of: appCoordinator.pendingSettingsRequest) { _, pending in
       // 菜单 ⌘,/「设置…」(批4):路由到主窗唯一的设置 sheet。
@@ -445,6 +424,11 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
           onJumpToTranscript: showTranscript
         )
         .frame(height: Tokens.Layout.nowStageHeight)
+        .overlay {
+          if let nameAlerts = appCoordinator.meetingPresence?.nameAlerts {
+            NameAlertStageOverlay(session: nameAlerts)
+          }
+        }
         .runtimeAccessibilityIdentifier("dashboard.current")
         .runtimeAccessibilityIdentifier("cockpit.now-stage")
         Divider()
@@ -508,6 +492,9 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       Divider()
       recordingFailureBanner
       systemBanners
+      if let nameAlerts = appCoordinator.meetingPresence?.nameAlerts {
+        NameAlertLibraryStrip(session: nameAlerts)
+      }
       MeetingLibraryView(
         meetingStore: appCoordinator.meetingStore,
         focus: appCoordinator.libraryFocus,
@@ -644,7 +631,9 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   }
 
   func endMeeting() {
+    appCoordinator.beginFinishingMeeting()
     Task {
+      defer { appCoordinator.endFinishingMeeting() }
       await recordingSession.stop()
       let completedDirectory = recordingSession.currentMeetingDirectory
       summaryFeed.ingest(recordingSession.liveSegments)

@@ -50,6 +50,9 @@ final class NotesController: ObservableObject {
   private var meetingGeneration: UInt64 = 0
   private var pendingWorkCounts: [UInt64: Int] = [:]
   private var pendingWorkWaiters: [UInt64: [CheckedContinuation<Void, Never>]] = [:]
+  /// 所有实例、所有会议代次上尚未结束的补充记录写入。应用更新的退出守卫只读它;
+  /// 与 `pendingWorkCounts` 同步增减,切换会议代次或关闭主窗都不会漏计仍在写的旧任务。
+  private(set) static var pendingWriteTotal = 0
 
   func bindRecordingStart(_ date: Date) {
     recordingStartedAt = date
@@ -262,9 +265,11 @@ final class NotesController: ObservableObject {
 
   private func beginPendingWork(for generation: UInt64) {
     pendingWorkCounts[generation, default: 0] += 1
+    Self.pendingWriteTotal += 1
   }
 
   private func finishPendingWork(for generation: UInt64) {
+    Self.pendingWriteTotal = max(0, Self.pendingWriteTotal - 1)
     let remaining = max(0, pendingWorkCounts[generation, default: 1] - 1)
     if remaining > 0 {
       pendingWorkCounts[generation] = remaining

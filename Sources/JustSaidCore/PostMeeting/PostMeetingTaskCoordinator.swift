@@ -128,6 +128,12 @@ public final class PostMeetingTaskCoordinator {
     Set(runningDirectories.values)
   }
 
+  /// 是否有任何会后任务在跑(含尚无会议目录的录音导入)。应用更新的退出守卫只读它;
+  /// 以实际 `tasks` 为准,已结算的横幅或历史待处理输入不算。
+  public var hasActiveTasks: Bool {
+    !tasks.isEmpty
+  }
+
   /// 该会议是否有任何会后任务在跑。三个分裂的启动守卫统一查这一个入口——
   /// 否则同一个 model 实例内就能一边流式写纪要一边启动全量重精转。
   public func isRunning(directory: URL) -> Bool {

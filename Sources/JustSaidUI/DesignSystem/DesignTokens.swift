@@ -258,6 +258,13 @@ enum Tokens {
     static let shimmer: Double = 1.5
     /// PulsingDot 呼吸周期。
     static let pulse: Double = 1.8
+    /// 会中悬浮过渡:把手拉出/收回、面板位移与尺寸(契约 320–420ms)和淡入淡出、
+    /// 点名亮边明暗(契约 350–500ms)取同一时长,几何与亮度共用一条进度。
+    static let presenceTransition: Double = 0.4
+    /// 会中悬浮:减少动态效果时只保留的短淡入淡出。
+    static let presenceReducedFade: Double = 0.15
+    /// 会中悬浮:点名亮边上高光完整行进一圈(契约约 6s)。
+    static let presenceHighlight: Double = 6
   }
 
   /// 驾驶舱整理区话题卡层级(2026-08-09 重塑 P3,用户拍板 08-驾驶舱卡片层级原型-v1):
@@ -357,10 +364,9 @@ enum Tokens {
     static let historyContentWidth: CGFloat = 720
     /// 空态文案限宽(会议库/类型化卡片/纪要文档三处共用)。
     static let emptyStateContentWidth: CGFloat = 420
-    /// 浮窗与弹层宽度。
-    static let compactOverlayWidth: CGFloat = 520
-    /// 缩略置顶窗固定高度：动态总结只更新内部内容，不改变面板位置。
-    static let compactOverlayHeight: CGFloat = 104
+    /// 会中悬浮纵向卡片(C)与独立强提醒卡宽度。高度按内容:名字区/暂停条出现才增高,
+    /// 动态总结只在固定行数内更新,不改变面板几何。
+    static let compactOverlayWidth: CGFloat = 408
     static let sourcePopoverWidth: CGFloat = 322
     static let chapterDirectoryWidth: CGFloat = 300
     /// 库顶栏溢出控件面板;与章节目录 popover 同宽(08-21)。

@@ -25,7 +25,9 @@ let package = Package(
     .package(
       url: "https://github.com/k2-fsa/sherpa-onnx",
       revision: "116a44e72c5bb631dcdbdb9c176f0304f5fc6fb0"
-    )
+    ),
+    // 应用内更新。只由 JustSaidApp 导入;版本锁定,打包脚本核对解析结果与框架哈希。
+    .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
   ],
   targets: [
     .target(
@@ -50,9 +52,17 @@ let package = Package(
         .linkedFramework("Carbon")
       ]
     ),
+    // 分发包把 Sparkle.framework 放在 Contents/Frameworks。
     .executableTarget(
       name: "JustSaidApp",
-      dependencies: ["JustSaidCore", "JustSaidUI"]
+      dependencies: [
+        "JustSaidCore",
+        "JustSaidUI",
+        .product(name: "Sparkle", package: "Sparkle"),
+      ],
+      linkerSettings: [
+        .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
+      ]
     ),
   ],
   swiftLanguageModes: [.v5]

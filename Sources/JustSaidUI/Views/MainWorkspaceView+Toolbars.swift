@@ -16,6 +16,8 @@ extension MainWorkspaceView {
 
       Spacer()
 
+      nameAlertToolbarMenu
+        .runtimeAccessibilityIdentifier("toolbar.name-alerts")
       languageControl
       ContentScaleControl(selection: textScaleSelection)
       primaryActionButton
@@ -70,6 +72,8 @@ extension MainWorkspaceView {
       if isReturnToCockpit {
         libraryRecordingCapsule
       }
+      nameAlertToolbarMenu
+        .runtimeAccessibilityIdentifier("library.toolbar.name-alerts")
       languageControl
         .runtimeAccessibilityIdentifier("library.toolbar.language")
       ContentScaleControl(selection: textScaleSelection)
@@ -97,6 +101,15 @@ extension MainWorkspaceView {
       )
     )
     .runtimeAccessibilityIdentifier("library.toolbar")
+  }
+
+  /// 点名提醒会中开关:驾驶舱与会议库顶栏各一份,读写同一偏好;录制中浏览会议库也可操作。
+  private var nameAlertToolbarMenu: some View {
+    NameAlertToolbarMenu(
+      preferences: appCoordinator.nameAlertPreferences,
+      session: appCoordinator.meetingPresence?.nameAlerts,
+      onOpenSettings: { isShowingSettings = true }
+    )
   }
 
   private var libraryContextTitle: some View {

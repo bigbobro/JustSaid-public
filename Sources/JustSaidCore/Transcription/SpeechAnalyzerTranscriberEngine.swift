@@ -7,16 +7,25 @@
 
   @available(macOS 26.0, *)
   public final class SpeechAnalyzerTranscriberEngine: TranscriberEngine,
+    LiveDecodeObservationProviding,
     @unchecked Sendable
   {
     private let stream: AsyncStream<TranscriptSegment>
     private let streamContinuation: AsyncStream<TranscriptSegment>.Continuation
+    private let observationChannel = LiveDecodeObservationChannel()
+    /// 两路结果任务并发发射;results 与观察成对原子送出,两个流的 segment 顺序一致。
+    private let emissionLock = NSLock()
     private let stateLock = NSLock()
     private var pipelines: [AudioSource: SpeechAnalyzerSourcePipeline] = [:]
+    private var fedAudioDurations: [AudioSource: TimeInterval] = [:]
     private var hasStarted = false
     private var hasStopped = false
 
     public var results: AsyncStream<TranscriptSegment> { stream }
+
+    public var decodeObservations: AsyncStream<LiveDecodeObservation> {
+      observationChannel.observations
+    }
 
     public init() {
       var capturedContinuation: AsyncStream<TranscriptSegment>.Continuation?
@@ -70,8 +79,13 @@
           let pipeline = try await SpeechAnalyzerSourcePipeline(
             source: source,
             transcriber: transcriber
-          ) { [streamContinuation] segment in
-            streamContinuation.yield(segment)
+          ) { [streamContinuation, observationChannel, emissionLock] observation in
+            emissionLock.lock()
+            defer { emissionLock.unlock() }
+            if let segment = observation.emittedSegment {
+              streamContinuation.yield(segment)
+            }
+            observationChannel.yield(observation)
           }
           newPipelines[source] = pipeline
         }
@@ -95,7 +109,21 @@
         throw TranscriberEngineError.invalidState("SpeechAnalyzer 尚未启动或已经停止")
       }
       let copiedBuffer = try SendablePCMBuffer(copying: pcmBuffer)
+      recordFedAudio(
+        TimeInterval(pcmBuffer.frameLength) / max(pcmBuffer.format.sampleRate, 1),
+        for: source
+      )
       pipeline.feed(copiedBuffer)
+    }
+
+    /// Apple 结果时间是分析器流时间:从 0 起按实际送入分析器的音频累计,忽略 captureTime。
+    /// 这里按交给 `feed` 的时长累计;原始输入队列满时丢掉的块不进分析器,读数因此只会偏晚。
+    /// 转成分析器格式的取整未另加余量:按重采样器总输出不超过总输入换算量推断不会累积,未单独证明;
+    /// 真实回放(见实施报告)中结果终点均不晚于该读数。
+    public func inputAudioEnd(for source: AudioSource) -> TimeInterval? {
+      stateLock.lock()
+      defer { stateLock.unlock() }
+      return fedAudioDurations[source]
     }
 
     public func stop() async {
@@ -106,7 +134,17 @@
       for pipeline in activePipelines {
         await pipeline.stop()
       }
-      streamContinuation.finish()
+      emissionLock.withLock {
+        streamContinuation.finish()
+        observationChannel.finish()
+      }
+    }
+
+    private func recordFedAudio(_ duration: TimeInterval, for source: AudioSource) {
+      guard duration.isFinite, duration > 0 else { return }
+      stateLock.lock()
+      fedAudioDurations[source, default: 0] += duration
+      stateLock.unlock()
     }
 
     private func beginStart() -> Bool {
@@ -192,7 +230,7 @@
     init(
       source: AudioSource,
       transcriber: SpeechTranscriber,
-      emit: @escaping @Sendable (TranscriptSegment) -> Void
+      observe: @escaping @Sendable (LiveDecodeObservation) -> Void
     ) async throws {
       guard
         let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
@@ -244,20 +282,25 @@
           for try await result in transcriber.results {
             let text = String(result.text.characters)
               .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else {
-              continue
-            }
-
             let start = max(0, result.range.start.seconds)
             let rawEnd = result.range.end.seconds
             let end = rawEnd.isFinite ? max(start, rawEnd) : start
-            emit(
-              TranscriptSegment(
-                t0: start,
-                t1: end,
+            // Apple 不做相同文本抑制:非空结果都发 segment;空结果只作为观察送达。
+            observe(
+              LiveDecodeObservation(
+                source: source,
+                kind: result.isFinal ? .final : .partial,
+                decodedRange: start...end,
                 text: text,
-                isFinal: result.isFinal,
-                source: source
+                emittedSegment: text.isEmpty
+                  ? nil
+                  : TranscriptSegment(
+                    t0: start,
+                    t1: end,
+                    text: text,
+                    isFinal: result.isFinal,
+                    source: source
+                  )
               )
             )
           }

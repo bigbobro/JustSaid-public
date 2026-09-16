@@ -6,6 +6,7 @@ import SherpaOnnx
 public final class SenseVoiceTranscriberEngine: TranscriberEngine,
   TranscriberASRAnchorGapFramesProviding,
   TranscriberLiveEmissionStatsProviding,
+  LiveDecodeObservationProviding,
   @unchecked Sendable
 {
   public static let maximumSpeechSegmentDuration =
@@ -34,6 +35,10 @@ public final class SenseVoiceTranscriberEngine: TranscriberEngine,
   private var configuredLanguageTokenStorage: String?
 
   public var results: AsyncStream<TranscriptSegment> { runtime.results }
+
+  public var decodeObservations: AsyncStream<LiveDecodeObservation> {
+    runtime.decodeObservations
+  }
 
   /// 本场识别器**实际拿到**的 SenseVoice 语言 token,从交给 C API 的那个配置结构体
   /// 读回(不是入参回显)。`nil` = 还没启动;`""` = `lang_auto`。
@@ -102,6 +107,10 @@ public final class SenseVoiceTranscriberEngine: TranscriberEngine,
 
   public func liveEmissionStats(for source: AudioSource) -> LiveEmissionStats {
     runtime.liveEmissionStats(for: source)
+  }
+
+  public func inputAudioEnd(for source: AudioSource) -> TimeInterval? {
+    runtime.inputAudioEnd(for: source)
   }
 
   public func stop() async {

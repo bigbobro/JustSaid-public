@@ -164,6 +164,15 @@ public final class RecordingSession: ObservableObject {
   @Published public private(set) var currentTitle: String?
   @Published public private(set) var issue: RecordingSessionIssue?
   @Published public private(set) var liveSegments: [TranscriptSegment] = []
+
+  /// 会中每次解码的非持久观察(引擎支持时)。结果任务收到观察、经幻听过滤后立即在主线程同步送出,
+  /// 带 segment 的观察先于该 segment 的写盘等待与 `liveSegments` 更新发出:订阅方(点名提醒)按收到时刻
+  /// 判定资格,写盘耗时不改变资格。幻听过滤会跳过的观察不发。收到顺序不变,无重放;
+  /// `stop()` 返回前最后一条已送出。不支持观察的引擎不产生任何观察。
+  public var liveDecodeObservations: AnyPublisher<LiveDecodeObservation, Never> {
+    liveDecodeObservationSubject.eraseToAnyPublisher()
+  }
+  private let liveDecodeObservationSubject = PassthroughSubject<LiveDecodeObservation, Never>()
   /// 麦克风采集电平(0~1,-50dBFS~0dBFS 线性映射),≤10Hz 节流发布;仅录制中有值。
   @Published public private(set) var microphoneLevel: Float = 0
   /// 只暂停麦克风内容；系统声、录制时钟与母带写入均继续。
@@ -1776,20 +1785,49 @@ public final class RecordingSession: ObservableObject {
       }
 
       let engine = try transcriberFactory(binding.providerID)
+      // 观察流按需建立,必须在引擎开始解码前取得。
+      let observations = (engine as? any LiveDecodeObservationProviding)?.decodeObservations
       try await engine.start(language: language)
       transcriberEngine = engine
+      guard let observations else {
+        transcriberResultsTask = Task { [weak self] in
+          var firstError: Error?
+          for await segment in engine.results {
+            if Self.isLikelyNoiseHallucination(segment) {
+              continue
+            }
+            do {
+              try await writer.append(segment)
+            } catch {
+              firstError = firstError ?? error
+            }
+            self?.receive(segment)
+          }
+          return firstError
+        }
+        return
+      }
+      // 同一个结果任务改读观察流:segment 仍按「幻听过滤 → 写盘 → receive」处理。
+      // 接收边界:观察过滤后立即发布,再等写盘;点名提醒的资格按这里收到的时刻判定,
+      // 写盘挂起期间切换提醒开关不会让已收到的观察获得新资格。没有 segment 的观察只经同一过滤规则,
+      // 不写盘也不进 liveSegments。
       transcriberResultsTask = Task { [weak self] in
         var firstError: Error?
-        for await segment in engine.results {
-          if Self.isLikelyNoiseHallucination(segment) {
-            continue
+        for await observation in observations {
+          if let segment = observation.emittedSegment {
+            if Self.isLikelyNoiseHallucination(segment) {
+              continue
+            }
+            self?.liveDecodeObservationSubject.send(observation)
+            do {
+              try await writer.append(segment)
+            } catch {
+              firstError = firstError ?? error
+            }
+            self?.receive(segment)
+          } else if !Self.isLikelyNoiseHallucination(Self.screeningSegment(for: observation)) {
+            self?.liveDecodeObservationSubject.send(observation)
           }
-          do {
-            try await writer.append(segment)
-          } catch {
-            firstError = firstError ?? error
-          }
-          self?.receive(segment)
         }
         return firstError
       }
@@ -1801,6 +1839,25 @@ public final class RecordingSession: ObservableObject {
       )
       logger.error("本地速记启动失败：\(error.localizedDescription, privacy: .public)")
     }
+  }
+
+  /// 当前引擎该路已送入音频的末端,与观察的 `decodedRange` 同一时钟;作为重新开启检测的屏障。
+  /// 没有引擎、引擎不支持观察或尚未送入音频时为 nil。
+  public func liveDecodeInputAudioEnd(for source: AudioSource) -> TimeInterval? {
+    (transcriberEngine as? any LiveDecodeObservationProviding)?.inputAudioEnd(for: source)
+  }
+
+  /// 幻听过滤只看 isFinal、text 与 source;没有 segment 的观察按同一规则筛,不另立口径。
+  private nonisolated static func screeningSegment(
+    for observation: LiveDecodeObservation
+  ) -> TranscriptSegment {
+    TranscriptSegment(
+      t0: observation.decodedRange.lowerBound,
+      t1: observation.decodedRange.upperBound,
+      text: observation.text,
+      isFinal: observation.kind == .final,
+      source: observation.source
+    )
   }
 
   private func stopTranscription() async -> Error? {

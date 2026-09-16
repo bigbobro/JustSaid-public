@@ -5,9 +5,17 @@ import SwiftUI
 // 2026-08-20 批4 拆分:自 ProviderSettingsView.swift 机械迁出,零行为变更。
 public struct GeneralSettingsPane: View {
   let settingsStore: ProviderSettingsStore?
+  let nameAlertPreferences: NameAlertPreferencesStore?
+  let appUpdates: AppUpdatesModel?
 
-  public init(settingsStore: ProviderSettingsStore? = nil) {
+  public init(
+    settingsStore: ProviderSettingsStore? = nil,
+    nameAlertPreferences: NameAlertPreferencesStore? = nil,
+    appUpdates: AppUpdatesModel? = nil
+  ) {
     self.settingsStore = settingsStore
+    self.nameAlertPreferences = nameAlertPreferences
+    self.appUpdates = appUpdates
   }
 
   public var body: some View {
@@ -18,6 +26,12 @@ public struct GeneralSettingsPane: View {
           .foregroundStyle(Tokens.Color.ink3)
           .fixedSize(horizontal: false, vertical: true)
         AppearanceSettingsCard()
+        if let appUpdates {
+          AppUpdateSettingsCard(model: appUpdates)
+        }
+        if let nameAlertPreferences {
+          NameAlertSettingsCard(preferences: nameAlertPreferences)
+        }
         MicrophoneAECSettingsCard()
         AudioRetentionSettingsCard()
         GlobalHotkeySettingsCard()

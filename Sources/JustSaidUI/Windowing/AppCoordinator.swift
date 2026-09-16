@@ -42,10 +42,28 @@ public final class AppCoordinator: ObservableObject {
   @Published public var pendingChapterDirectoryRequest = false
 
   public let meetingStore: MeetingStore
+  /// 点名提醒偏好的唯一实例:设置页、两套顶栏与会中呈现读写同一份。
+  public let nameAlertPreferences: NameAlertPreferencesStore
+  /// 会中呈现的应用级宿主(点名检测、摘要桥接、悬浮载体);主窗首次出现时安装一次,
+  /// 主窗关闭或重建都不替换。
+  @Published public private(set) var meetingPresence: MeetingPresenceController?
   public let postMeetingPipelineResolver: (() throws -> PostMeetingPipeline)?
   /// 会后长任务的唯一所有者。这里原先并列着一份续查专用的任务字典,已整体并入协调者
   /// ——两个字典就是两个去重源,启动续查会和手动精转对同一目录各跑一遍。
   public let postMeetingTasks: PostMeetingTaskCoordinator
+  /// 应用更新入口(设置页卡片)。由 App 层在启动时设置一次;开发构建为 nil。
+  public var appUpdates: AppUpdatesModel?
+  /// 「结束会议」收尾(停止录制 → 补充记录落盘 → 启动会后处理)进行中的次数。应用更新的
+  /// 退出守卫只读,覆盖补充记录写完到会后任务登记之间的交接;两条收尾入口各自成对增减。
+  public private(set) var finishingMeetingCount = 0
+
+  public func beginFinishingMeeting() {
+    finishingMeetingCount += 1
+  }
+
+  public func endFinishingMeeting() {
+    finishingMeetingCount = max(0, finishingMeetingCount - 1)
+  }
 
   private var menuBar: MenuBarController?
   private weak var recordingSession: RecordingSession?
@@ -71,10 +89,8 @@ public final class AppCoordinator: ObservableObject {
   private var pendingMarkRequest = false
   private var pendingToggleChatRequest = false
   /// 热键/菜单栏标记成功后的不抢焦点回执:悬浮窗在场闪它,否则闪菜单栏图标。
-  private var markOverlayVisible: (() -> Bool)?
-  private var markFlashOverlay: (() -> Void)?
-  /// 闲聊/暂停全局热键的文案回执(开/关两态);回调必须不激活任何窗口。
-  private var actionFlashOverlay: ((String) -> Void)?
+  /// 无可见主窗时重开主窗的 SwiftUI 路由(由主 Scene 内容登记,与菜单命令同一条)。
+  private var mainWindowOpener: (() -> Void)?
   /// Orphaned process states are a launch-time repair. Re-running it on every ⌘L navigation
   /// can misclassify a historical meeting that this process is actively reprocessing.
   private var didReconcileInterruptedMeetings = false
@@ -85,9 +101,11 @@ public final class AppCoordinator: ObservableObject {
   public init(
     meetingStore: MeetingStore = MeetingStore(),
     postMeetingPipelineResolver: (() throws -> PostMeetingPipeline)? = nil,
-    postMeetingTasks: PostMeetingTaskCoordinator? = nil
+    postMeetingTasks: PostMeetingTaskCoordinator? = nil,
+    nameAlertDefaults: UserDefaults = .standard
   ) {
     self.meetingStore = meetingStore
+    nameAlertPreferences = NameAlertPreferencesStore(defaults: nameAlertDefaults)
     self.postMeetingPipelineResolver = postMeetingPipelineResolver
     self.postMeetingTasks =
       postMeetingTasks
@@ -107,8 +125,67 @@ public final class AppCoordinator: ObservableObject {
   /// SwiftUI 主工作台解析到宿主窗口时登记到这里。窗口关闭后弱引用会自然失效;
   /// 新建的 `WindowGroup` 实例再次出现时会重新登记。
   public func registerMainWindow(_ window: NSWindow?) {
+    // 关闭后仍被保留的旧主窗,其视图在状态变化时还会经 WindowAccessor 再次登记;
+    // 新主窗可见时不让它抢回登记,否则随后的前置会把旧窗复活成第二个主窗。
+    if let window, let current = mainWindow, current !== window, current.isVisible,
+      !window.isVisible, !window.isMiniaturized
+    {
+      return
+    }
     window?.identifier = Self.mainWindowIdentifier
     mainWindow = window
+    meetingPresence?.observe(mainWindow: window)
+  }
+
+  /// 安装会中呈现宿主。同一录制会话重复调用(主窗重建)不做任何事;
+  /// 换了录制会话(验证程序)才替换,旧宿主的订阅与面板随之收掉。
+  public func installMeetingPresence<Feed: SummaryFeed>(
+    recordingSession: RecordingSession,
+    summaryFeed: Feed
+  ) {
+    if let meetingPresence, meetingPresence.recordingSession === recordingSession {
+      return
+    }
+    meetingPresence?.invalidate()
+    let presence = MeetingPresenceController(
+      recordingSession: recordingSession,
+      summaryFeed: summaryFeed,
+      preferences: nameAlertPreferences,
+      actions: .init(
+        mark: { [weak self] in self?.requestMark() },
+        returnToMain: { [weak self] in self?.showMainWindow() }
+      )
+    )
+    presence.observe(mainWindow: mainWindow)
+    meetingPresence = presence
+  }
+
+  /// 主 Scene 内容登记 `openWindow(id:)`;窗口关闭后依然可用(菜单命令同款路由)。
+  public func registerMainWindowOpener(_ opener: @escaping () -> Void) {
+    mainWindowOpener = opener
+  }
+
+  /// 悬浮内容「回主窗」:与菜单栏/热键同一唤起路由。
+  public func showMainWindow() {
+    bringUpMainWindow()
+  }
+
+  /// 主窗之外的入口(菜单栏、全局热键、悬浮内容)唤起主窗:主窗在就前置;已关闭就经主 Scene
+  /// 登记的 openWindow 重开(`newWindowForTab` 对本 App 空转),新窗 onAppear 注册 handler 后
+  /// 由 flushPendingMenuRequests 补发挂起请求。主窗自己挂载时只用 `selectCockpit`,
+  /// 不唤起窗口,不会在新窗登记前再触发重开或前置旧窗。
+  private func bringUpMainWindow() {
+    let application = NSApplication.shared
+    // 已关闭的 SwiftUI 主窗对象可能还留在 windows 列表里,只认可见或最小化的主窗。
+    let hasMainWindow = application.windows.contains {
+      $0.identifier == Self.mainWindowIdentifier && ($0.isVisible || $0.isMiniaturized)
+    }
+    guard !hasMainWindow, let mainWindowOpener else {
+      activateMainWindow()
+      return
+    }
+    application.activate(ignoringOtherApps: true)
+    mainWindowOpener()
   }
 
   /// 把最小尺寸钉到 NSWindow 本体(2026-07-31 实测):只在 SwiftUI 内容上写
@@ -154,17 +231,6 @@ public final class AppCoordinator: ObservableObject {
     flushPendingMenuRequests()
   }
 
-  /// 主窗出现时挂上标记回执,消失时注销。回调必须不激活任何窗口。
-  public func registerMarkFeedback(
-    overlayVisible: (() -> Bool)?,
-    flashOverlay: (() -> Void)?,
-    flashOverlayMessage: ((String) -> Void)? = nil
-  ) {
-    markOverlayVisible = overlayVisible
-    markFlashOverlay = flashOverlay
-    actionFlashOverlay = flashOverlayMessage
-  }
-
   /// 菜单栏「标记重点」与全局热键的同一入口。
   /// 门在 `.recording`:starting 态 startedAt 未落,标记会落到 00:00。
   /// 主窗存活时不把主窗拉到前台——共享屏幕盖住主窗正是这条路径的存在理由。
@@ -179,20 +245,21 @@ public final class AppCoordinator: ObservableObject {
     // 主窗已关闭:标记状态机(NotesController)挂在主窗上,先唤起主窗,
     // onAppear 注册 handler 后由 flushPendingMenuRequests 补发这一颗标记。
     pendingMarkRequest = true
-    activateMainWindow()
+    bringUpMainWindow()
   }
 
+  /// 回执不激活任何窗口:悬浮内容在屏幕上就闪它,否则闪菜单栏图标。
   private func presentMarkFeedback() {
-    if markOverlayVisible?() == true {
-      markFlashOverlay?()
+    if let panels = meetingPresence?.panels, panels.isContentVisible {
+      panels.flashMarkConfirmation()
     } else {
       menuBar?.flashMarkConfirmation()
     }
   }
 
   private func presentActionFeedback(_ text: String) {
-    if markOverlayVisible?() == true, let actionFlashOverlay {
-      actionFlashOverlay(text)
+    if let panels = meetingPresence?.panels, panels.isContentVisible {
+      panels.flashActionConfirmation(text)
     } else {
       menuBar?.flashActionConfirmation(tooltip: "JustSaid · \(text)")
     }
@@ -223,7 +290,7 @@ public final class AppCoordinator: ObservableObject {
       return
     }
     pendingStartMeetingRequest = true
-    activateMainWindow()
+    bringUpMainWindow()
   }
 
   /// 补发主窗关闭期间攒下的菜单栏请求。录制已不在进行时直接作废——
@@ -280,7 +347,7 @@ public final class AppCoordinator: ObservableObject {
       return isOpen
     }
     pendingToggleChatRequest = true
-    activateMainWindow()
+    bringUpMainWindow()
     return nil
   }
 
@@ -334,8 +401,14 @@ public final class AppCoordinator: ObservableObject {
 
   /// 回到会中驾驶舱。这个动作只换主窗内容,不触碰录音与转写任务。
   public func showCockpit() {
-    workspaceMode = .cockpit
+    selectCockpit()
     activateMainWindow()
+  }
+
+  /// 只把主窗内容切到驾驶舱,不唤起任何窗口。主窗自己挂载时用它:此时新窗还没登记,
+  /// 唤起会把登记着的旧窗(关闭后仍被持有)重新前置。
+  public func selectCockpit() {
+    workspaceMode = .cockpit
   }
 
   /// ⌘L 在驾驶舱与会议库之间切换;录制期间也只是导航,不会调用 `stop()`。
@@ -394,7 +467,8 @@ public final class AppCoordinator: ObservableObject {
       mainWindow
       ?? application.windows.first { $0.identifier == Self.mainWindowIdentifier }
     if let registeredWindow {
-      mainWindow = registeredWindow
+      // 重新前置的可能是关闭过又保留的同一窗口:经登记入口让呈现宿主重新观察前后台。
+      registerMainWindow(registeredWindow)
       if registeredWindow.isMiniaturized {
         registeredWindow.deminiaturize(nil)
       }
@@ -456,10 +530,12 @@ public final class AppCoordinator: ObservableObject {
         // 直通 endMeeting,没有内容会丢。
         if let self, self.hasOpenChatRange(recordingSession: recordingSession) {
           self.pendingEndMeetingRequest = true
-          self.activateMainWindow()
+          self.bringUpMainWindow()
           return
         }
+        self?.beginFinishingMeeting()
         Task { @MainActor in
+          defer { self?.endFinishingMeeting() }
           await recordingSession.stop()
           summaryFeed?.ingest(recordingSession.liveSegments)
           let directory = recordingSession.currentMeetingDirectory
@@ -476,7 +552,7 @@ public final class AppCoordinator: ObservableObject {
         self?.requestMark()
       },
       onActivateMainWindow: { [weak self] in
-        self?.activateMainWindow()
+        self?.bringUpMainWindow()
       },
       onOpenLibrary: { [weak self] focus in
         self?.openLibrary(focus: focus)
@@ -509,7 +585,15 @@ public final class AppCoordinator: ObservableObject {
 /// **不会被调用**(哨兵曾接在这里,三次真机运行零启动痕迹)——写在这里的启动逻辑
 /// 是无声的死代码。启动期副作用一律走 `JustSaidApp` 的静态引导。
 public final class JustSaidAppDelegate: NSObject, NSApplicationDelegate {
+  /// 应用更新器(App 层)安装的最终退出守卫;nil = 更新器未启用,退出行为与原先一致。
+  /// 守卫只对当前这次由 Sparkle Updater 发出的退出请求读取忙碌状态。
+  @MainActor public static var terminationGuard: (() -> NSApplication.TerminateReply)?
+
   public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     false
+  }
+
+  public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    Self.terminationGuard?() ?? .terminateNow
   }
 }

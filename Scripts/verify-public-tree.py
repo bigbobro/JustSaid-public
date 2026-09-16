@@ -285,6 +285,13 @@ def _provenance_fragments() -> tuple[re.Pattern[str], ...]:
 EMAIL_RE = re.compile(
     r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
 )
+# Upstream copyright contacts inside verbatim third-party license text.  The
+# licenses require the notice to stay unaltered, so the exemption is keyed by
+# exact public path and exact address; the same address anywhere else still
+# fails.  Addresses are split so this source file does not match itself.
+REVIEWED_LICENSE_EMAILS = {
+    "Support/ThirdPartyNotices.txt": frozenset({"orsonpeters" + "@" + "gmail.com"}),
+}
 PRIVATE_HOST_RE = re.compile(
     r"(?i)\b(?:[a-z0-9-]+\.(?:corp|internal|intranet|lan|local)|"
     r"10\.(?:\d{1,3}\.){2}\d{1,3}|"
@@ -870,7 +877,8 @@ def _line_findings(
 
     for match in EMAIL_RE.finditer(line):
         domain = match.group(0).rsplit("@", 1)[-1].lower()
-        if domain not in {"example.com", "example.org", "example.net", "example.invalid"}:
+        if domain not in {"example.com", "example.org", "example.net", "example.invalid"} \
+                and match.group(0) not in REVIEWED_LICENSE_EMAILS.get(path, frozenset()):
             add("PERSONAL_OR_INTERNAL_EMAIL", match.group(0))
 
     # Sibling of MACHINE_ABSOLUTE_PATH: that rule only sees an expanded home
@@ -1273,6 +1281,19 @@ def run_self_test() -> int:
             encoding="utf-8",
         )
 
+        reviewed_email = "orsonpeters" + "@" + "gmail.com"
+        other_email = "someone" + "@" + "gmail.com"
+        notices = root / "Support" / "ThirdPartyNotices.txt"
+        notices.parent.mkdir(parents=True, exist_ok=True)
+        notices.write_text(
+            f"Copyright (c) 2015 Orson Peters <{reviewed_email}>\n"
+            f"Contact <{other_email}>\n",
+            encoding="utf-8",
+        )
+        (root / "reviewed-email-elsewhere.txt").write_text(
+            f"<{reviewed_email}>\n", encoding="utf-8"
+        )
+
         findings = scan_tree(root)
         by_path: dict[str, set[str]] = {}
         by_line: dict[tuple[str, int | None], set[str]] = {}
@@ -1306,6 +1327,7 @@ def run_self_test() -> int:
         require("assignment.swift", {"CREDENTIAL_ASSIGNMENT"})
         require("token-format.txt", {"CREDENTIAL_FORMAT"})
         require("synthetic.swift", set())
+        require("reviewed-email-elsewhere.txt", {"PERSONAL_OR_INTERNAL_EMAIL"})
 
         def require_line(relative: str, line: int, expected: set[str]) -> None:
             got = by_line.get((relative, line), set())
@@ -1314,6 +1336,9 @@ def run_self_test() -> int:
                     f"self-test mismatch for {relative}:{line}: "
                     f"expected {sorted(expected)} got {sorted(got)}"
                 )
+
+        require_line("Support/ThirdPartyNotices.txt", 1, set())
+        require_line("Support/ThirdPartyNotices.txt", 2, {"PERSONAL_OR_INTERNAL_EMAIL"})
 
         # The record line carries both the tilde-path finding and the
         # provenance finding; the copy verb on the next line is evidence only

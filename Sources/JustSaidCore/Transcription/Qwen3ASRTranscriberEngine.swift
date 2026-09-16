@@ -23,10 +23,12 @@ public struct Qwen3ASRStreamLanguageObservation: Codable, Equatable, Sendable {
 public final class Qwen3ASRTranscriberEngine: TranscriberEngine,
   TranscriberASRAnchorGapFramesProviding,
   TranscriberLiveEmissionStatsProviding,
+  LiveDecodeObservationProviding,
   @unchecked Sendable
 {
-  public static let maximumSpeechSegmentDuration =
-    LocalOfflineTranscriptionPolicy.maximumSpeechSegmentDuration
+  /// 连续语音最长段。15 秒缩短长段终稿与其后 partial 的等待(AC8 点名延迟长尾);
+  /// 属于会中分段本身,两路共用,不随点名提醒开关变化。SenseVoice 仍用共享默认 30 秒。
+  public static let maximumSpeechSegmentDuration: TimeInterval = 15
 
   public static func defaultModelDirectory(
     fileManager: FileManager = .default
@@ -57,12 +59,18 @@ public final class Qwen3ASRTranscriberEngine: TranscriberEngine,
   private let modelDirectory: URL
   private let vadModelURL: URL
   private let observationBox = Qwen3ASRObservationBox()
-  private let runtime = LocalOfflineTranscriptionRuntime(
+  /// internal 仅供验证核对实例实际取得的段长;调用方仍只经公开 API 使用。
+  let runtime = LocalOfflineTranscriptionRuntime(
     engineDisplayName: "Qwen3-ASR",
-    loggerCategory: "Qwen3ASRTranscriber"
+    loggerCategory: "Qwen3ASRTranscriber",
+    maximumSpeechSegmentDuration: Qwen3ASRTranscriberEngine.maximumSpeechSegmentDuration
   )
 
   public var results: AsyncStream<TranscriptSegment> { runtime.results }
+
+  public var decodeObservations: AsyncStream<LiveDecodeObservation> {
+    runtime.decodeObservations
+  }
 
   /// 每个真实 decode stream 通过 sherpa C API 读回的 language option。
   /// `.auto` 必须记录为 `hasLanguageOption == false`，不是空字符串 option。
@@ -109,6 +117,10 @@ public final class Qwen3ASRTranscriberEngine: TranscriberEngine,
 
   public func liveEmissionStats(for source: AudioSource) -> LiveEmissionStats {
     runtime.liveEmissionStats(for: source)
+  }
+
+  public func inputAudioEnd(for source: AudioSource) -> TimeInterval? {
+    runtime.inputAudioEnd(for: source)
   }
 
   public func stop() async {
@@ -259,7 +271,19 @@ private actor Qwen3ASRRecognizer: OfflineSpeechRecognizer {
     }
 
     stream.acceptWaveform(samples: samples, sampleRate: 16_000)
+    // 原生推理的进出时刻:两条记录严格夹住同步的 `recognizer.decode(stream:)` 调用本身,
+    // 不含外层 await、特征送入或结果读取,免得把等待时间当成推理时间。debug 构建才有。
+    #if DEBUG
+      LocalOfflineVerificationTrace.shared.record(
+        event: "nativeStart", origin: "native", source: "recognizer",
+        sampleCount: samples.count)
+    #endif
     recognizer.decode(stream: stream)
+    #if DEBUG
+      LocalOfflineVerificationTrace.shared.record(
+        event: "nativeReturn", origin: "native", source: "recognizer",
+        sampleCount: samples.count)
+    #endif
     return recognizer.getResult(stream: stream).text
   }
 

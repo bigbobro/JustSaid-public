@@ -98,6 +98,8 @@ public struct ProviderSettingsView: View {
   @ObservedObject var modelAssetManager: LocalModelAssetManager
   let dictionaryStore: DictionaryStore
   let secretDigest: any StoredSecretDigest
+  let nameAlertPreferences: NameAlertPreferencesStore?
+  let appUpdates: AppUpdatesModel?
 
   @Environment(\.dismiss) private var dismiss
   @State private var section: SettingsSection = .providers
@@ -111,8 +113,12 @@ public struct ProviderSettingsView: View {
     settingsStore: ProviderSettingsStore,
     modelAssetManager: LocalModelAssetManager,
     dictionaryStore: DictionaryStore = DictionaryStore(),
-    secretDigest: (any StoredSecretDigest)? = nil
+    secretDigest: (any StoredSecretDigest)? = nil,
+    nameAlertPreferences: NameAlertPreferencesStore? = nil,
+    appUpdates: AppUpdatesModel? = nil
   ) {
+    self.nameAlertPreferences = nameAlertPreferences
+    self.appUpdates = appUpdates
     self.registry = registry
     self.settingsStore = settingsStore
     self.modelAssetManager = modelAssetManager
@@ -135,7 +141,9 @@ public struct ProviderSettingsView: View {
       case .providers:
         providerPane
       case .general:
-        GeneralSettingsPane(settingsStore: settingsStore)
+        GeneralSettingsPane(
+          settingsStore: settingsStore, nameAlertPreferences: nameAlertPreferences,
+          appUpdates: appUpdates)
       case .dictionary:
         DictionarySettingsView(store: dictionaryStore)
       }
