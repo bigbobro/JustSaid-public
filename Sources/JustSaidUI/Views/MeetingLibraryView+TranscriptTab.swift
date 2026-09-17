@@ -45,6 +45,7 @@ extension MeetingLibraryView {
               ) { newName in
                 model.setSpeakerName(newName, for: label, of: item)
               }
+              .id("\(item.id):\(item.transcriptFingerprint ?? "")")
             }
           }
           .padding(.horizontal, Tokens.Spacing.lg)
@@ -93,7 +94,7 @@ extension MeetingLibraryView {
       || hasExclusions
     if isTranscriptSearchPresented || hasFilterCombination
       || model.speakerHighlight != nil
-      || model.pendingOverrideLine != nil
+      || model.pendingSpeakerOverride != nil
       || model.exclusionError != nil
       || (overrideError != nil && model.speakerLabels(for: item).isEmpty)
     {
@@ -213,12 +214,13 @@ extension MeetingLibraryView {
             onClear: { model.clearSpeakerHighlight() }
           )
         }
-        if let line = model.pendingOverrideLine {
-          NewSpeakerNameField(line: line) { name in
-            model.setSpeakerOverride(name, for: line, of: item)
+        if let pending = model.pendingSpeakerOverride {
+          NewSpeakerNameField(line: pending.line) { name in
+            model.setSpeakerOverride(name, for: pending.line, of: pending.item)
           } onCancel: {
-            model.pendingOverrideLine = nil
+            model.pendingSpeakerOverride = nil
           }
+          .id("\(pending.item.id):\(pending.item.transcriptFingerprint ?? "")")
         }
       }
       .padding(.horizontal, Tokens.Spacing.lg)

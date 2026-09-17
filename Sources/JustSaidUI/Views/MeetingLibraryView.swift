@@ -39,6 +39,7 @@ public struct MeetingLibraryView: View {
   @State var librarySearchSpeakerFilter: String?
   /// 鼠标点选与删除邻近选中保留列表位置;键盘 / 回程仍同步滚动。
   @State var suppressNextSelectionScroll = false
+  @State var echoReductionMeeting: MeetingLibraryItem?
   @Binding var retainedQueueFilter: LibraryQueueFilter
 
   public init(
@@ -191,6 +192,10 @@ public struct MeetingLibraryView: View {
           )
         }
       )
+    }
+    .sheet(item: $echoReductionMeeting) { item in
+      EchoReductionSheet(item: item, libraryModel: model)
+        .id(item.id)
     }
     .confirmationDialog(
       "这份录音较大且本机压不了",

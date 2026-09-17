@@ -11,7 +11,8 @@ public struct AudioRetentionSweepResult: Sendable, Equatable {
   }
 }
 
-/// 按用户档位删除超期且已精转会议的顶层 m4a。不删文本,不碰会议库外目录。
+/// 按用户档位删除超期且已精转会议的顶层 m4a 与本应用生成的回声副本。
+/// 不删文本或副本报告,不递归清理用户文件,不碰会议库外目录。
 public struct AudioRetentionSweeper {
   public var fileManager: FileManager
   public var calendar: Calendar
@@ -75,10 +76,13 @@ public struct AudioRetentionSweeper {
         continue
       }
 
-      let audioFiles = try topLevelM4AFiles(in: record.paths.directory)
+      let audioFiles =
+        try topLevelM4AFiles(in: record.paths.directory)
+        + echoReductionAudioFiles(in: record)
       for file in audioFiles {
         try fileManager.removeItem(at: file)
-        let line = "\(record.paths.directory.lastPathComponent)/\(file.lastPathComponent)"
+        let relativePath = String(file.path.dropFirst(record.paths.directory.path.count + 1))
+        let line = "\(record.paths.directory.lastPathComponent)/\(relativePath)"
         result.deletedFiles.append(line)
         try appendLog(
           to: diagnosticsRoot,
@@ -114,6 +118,37 @@ public struct AudioRetentionSweeper {
       url.pathExtension.lowercased() == "m4a"
         && (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
     }
+  }
+
+  /// Only the service-owned layout and matching report identify a derived audio file.
+  /// Reject links and unknown folders; the existing retention policy is not a recursive delete.
+  private func echoReductionAudioFiles(in record: MeetingRecord) throws -> [URL] {
+    func hasType(_ url: URL, _ type: FileAttributeType) -> Bool {
+      (try? fileManager.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == type
+    }
+    let root = record.paths.directory.appendingPathComponent("echo-reduction", isDirectory: true)
+    guard hasType(record.paths.directory, .typeDirectory), hasType(root, .typeDirectory) else {
+      return []
+    }
+    return try fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+      .compactMap { directory in
+        guard let id = UUID(uuidString: directory.lastPathComponent),
+          hasType(directory, .typeDirectory)
+        else { return nil }
+        let report = directory.appendingPathComponent("report.json")
+        let audio = directory.appendingPathComponent("microphone.wav")
+        guard hasType(report, .typeRegular), hasType(audio, .typeRegular),
+          let size = try? report.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+          size < 65_536,
+          let data = try? Data(contentsOf: report),
+          let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          value["schemaVersion"] as? Int == 1,
+          let generationID = value["id"] as? String, UUID(uuidString: generationID) == id,
+          let meetingID = value["meetingID"] as? String,
+          UUID(uuidString: meetingID) == record.metadata.id
+        else { return nil }
+        return audio
+      }
   }
 
   private func appendLog(to diagnosticsRoot: URL, now: Date, line: String) throws {

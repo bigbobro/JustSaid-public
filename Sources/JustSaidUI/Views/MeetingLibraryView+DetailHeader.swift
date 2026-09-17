@@ -109,6 +109,7 @@ extension MeetingLibraryView {
     } message: {
       Text(
         "会重新上传录音并按全时长计费 ASR。重跑结果可能与上次不同(包括数字与措辞)。"
+          + "新结果替换时会备份旧转写和人物标注；新转写的人物标注需重新确认。"
           + "若只是改了发言人名字，请改用「生成纪要」(不重新精转)。"
       )
     }
@@ -282,6 +283,21 @@ extension MeetingLibraryView {
   @ViewBuilder
   private func headerNextActions(_ item: MeetingLibraryItem) -> some View {
     let nextAction = model.pipelineState(for: item).nextAction
+    Menu {
+      Button("减少外放串音…") {
+        guard EchoReductionModel.canChange(item, in: model) else { return }
+        echoReductionMeeting = item
+      }
+      .disabled(!EchoReductionModel.canChange(item, in: model))
+      .runtimeAccessibilityIdentifier("library.echo-reduction.open")
+    } label: {
+      Label("录音", systemImage: "waveform")
+    }
+    .menuStyle(.borderlessButton)
+    .fixedSize()
+    .font(.system(size: Tokens.FontSize.ui))
+    .help("在本机生成减少外放串音的副本，试听后再选择是否用于精转")
+    .runtimeAccessibilityIdentifier("library.audio-menu")
     if model.canGenerateMinutes(for: item) {
       let generateButton = Button {
         model.pendingMinutesGeneration = item

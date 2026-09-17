@@ -15,7 +15,7 @@ extension MeetingPaths {
 /// `suggestions` 元素与 minutes.json v2 的 `SpeakerNameSuggestion` 完全同构(复用类型);
 /// `transcriptFingerprint` 是生成时输入 transcript.md 的字节指纹(SHA-256 hex,与
 /// `MinutesFingerprint` 同口径),读取端凭它判定建议是否过期——精转重跑后旧建议作废,
-/// 回落 minutes.json。
+/// 有发布历史的新转写不得回落到旧 minutes.json 的编号建议。
 public struct SpeakerSuggestionsSidecar: Codable, Equatable, Sendable {
   public let version: Int
   public let generatedAt: Date
@@ -57,7 +57,7 @@ public struct SpeakerSuggestionsSidecar: Codable, Equatable, Sendable {
 
   /// 读取优先级(08-20 naming-first design 决策 6)的**唯一结算点**:
   /// sidecar 在场且指纹与当前 transcript.md 字节匹配 → 只用 sidecar;
-  /// 否则回落 minutes.json 的 speakerSuggestions(老会议/提取失败/精转重跑后过期)。
+  /// 否则仅在没有替换转写的历史证据时回落 minutes.json 的 speakerSuggestions。
   /// **两源绝不合并**——合并会产生重复行与来历不明的建议。
   public static func resolvedSuggestions(
     paths: MeetingPaths,
@@ -68,6 +68,11 @@ public struct SpeakerSuggestionsSidecar: Codable, Equatable, Sendable {
       sidecar.matches(transcriptData: transcriptData)
     {
       return sidecar.suggestions
+    }
+    if let transcriptData = try? Data(contentsOf: paths.transcript),
+      TranscriptHistoryWriter.hasReplacedTranscript(at: paths, transcriptData: transcriptData)
+    {
+      return []
     }
     return structuredMinutesFallback() ?? []
   }

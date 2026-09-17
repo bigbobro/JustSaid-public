@@ -59,7 +59,7 @@ extension MeetingLibraryView {
             onOverride: { line, name in
               model.setSpeakerOverride(name, for: line, of: selected)
             },
-            onRequestNewName: { model.pendingOverrideLine = $0 },
+            onRequestNewName: { model.requestSpeakerOverride(for: $0, of: selected) },
             excludedRanges: selected.excludedRanges,
             excludedSpeakers: selected.excludedSpeakers,
             onExcludeLine: { model.excludeTranscriptLine($0, of: selected) },

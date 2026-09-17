@@ -42,16 +42,16 @@ public enum TranscriptSpeakerNaming {
 
   /// 单段覆盖的键:时间戳 + 行序。
   ///
-  /// 时间戳进键是刻意的**自失效**设计:重新精转后同一行序的时间戳多半变了,键对不上,
-  /// 这一条覆盖就自动作废。宁可让用户重填,也不能把「这段是张三」按错到别人头上。
+  /// 时间戳与行序只定位同一份转写中的行，重新精转可能仍产生相同键。
+  /// 版本失效由 MeetingStore.publishTranscript 在替换正文前归档并清空旧覆盖保证。
   public static func overrideKey(timestamp: String, index: Int) -> String {
     "\(timestamp)#\(index)"
   }
 
   /// 转写里出现过的说话人标签,按首次出现顺序去重;不含「我」。
   ///
-  /// 标签形态由 `PostMeetingPipeline.normalizedOtherSpeaker` 决定:通常是「发言人 N」,
-  /// 供应商给不出编号时会退化成「其他人」/「其他人(原始标签)」——这些同样值得命名,
+  /// 标签由会后管线生成，非空供应商 ID 使用中性的「发言人 N」。
+  /// 旧会议的「其他人(原始标签)」与缺编号回退「其他人」同样值得命名,
   /// 所以判据是「不是我」,而不是「以发言人开头」。
   public static func speakerLabels(in transcript: String) -> [String] {
     var seen: Set<String> = []

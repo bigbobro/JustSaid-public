@@ -16,9 +16,7 @@ extension MeetingLibraryModel {
   /// 后台扫描一场会议所需的全部输入,在主线程一次取齐(值拷贝),扫描不回头碰 model。
   private struct LibrarySearchScanInput: Sendable {
     let meetingID: String
-    let transcriptURL: URL
-    let speakerNames: [String: String]
-    let speakerOverrides: [String: String]
+    let paths: MeetingPaths
   }
 
   /// query 变更(防抖 250ms)与 reload 重扫(不防抖)共用的唯一入口。
@@ -37,11 +35,10 @@ extension MeetingLibraryModel {
     let inputs = meetings.map { item in
       LibrarySearchScanInput(
         meetingID: item.id,
-        transcriptURL: item.paths.transcript,
-        speakerNames: item.speakerNames,
-        speakerOverrides: item.speakerOverrides
+        paths: item.paths
       )
     }
+    let store = meetingStore
     librarySearchTask = Task { [weak self] in
       if debounce {
         try? await Task.sleep(for: .milliseconds(250))
@@ -54,7 +51,7 @@ extension MeetingLibraryModel {
       for input in inputs {
         // 会议间取消检查:上一轮被新输入取消后,不再多读一份文件。
         guard !Task.isCancelled else { return }
-        let hits = await Self.scanTranscript(input, query: query)
+        let hits = await Self.scanTranscript(input, query: query, store: store)
         guard let self, !Task.isCancelled else { return }
         if !hits.isEmpty {
           hitLineCount += hits.count
@@ -85,18 +82,20 @@ extension MeetingLibraryModel {
   /// nonisolated async:落在全局并发执行器上执行,不占主线程。
   private nonisolated static func scanTranscript(
     _ input: LibrarySearchScanInput,
-    query: String
+    query: String,
+    store: MeetingStore
   ) async -> [LibrarySearchHit] {
     guard
-      let transcript = try? String(contentsOf: input.transcriptURL, encoding: .utf8),
+      let snapshot = try? store.readTranscriptSnapshot(at: input.paths),
+      let transcript = snapshot.transcript,
       !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
       return []
     }
     let rows = TranscriptSpeakerNaming.rows(
       in: transcript,
-      names: input.speakerNames,
-      overrides: input.speakerOverrides
+      names: snapshot.metadata.speakerNames ?? [:],
+      overrides: snapshot.metadata.speakerOverrides ?? [:]
     )
     return LibrarySearchScanner.matches(rows: rows, query: query)
   }
@@ -195,7 +194,7 @@ extension MeetingLibraryModel {
   func canExport(_ item: MeetingLibraryItem) -> Bool {
     guard !isExporting else { return false }
     guard item.hasAuthoritativeTranscript, item.hasChineseMinutes else { return false }
-    guard let artifacts = artifactCache[item.id] else {
+    guard let artifacts = artifactCache[item.id]?.artifacts else {
       scheduleArtifactLoad(for: item)
       return false
     }
@@ -216,7 +215,7 @@ extension MeetingLibraryModel {
     if !missing.isEmpty {
       return "暂不能导出，还缺：\(missing.joined(separator: "、"))"
     }
-    guard let artifacts = artifactCache[item.id] else {
+    guard let artifacts = artifactCache[item.id]?.artifacts else {
       scheduleArtifactLoad(for: item)
       return "正在读取会议内容…"
     }
@@ -243,8 +242,7 @@ extension MeetingLibraryModel {
       title: item.title,
       startedAt: item.startedAt,
       endedAt: item.endedAt,
-      names: item.speakerNames,
-      overrides: item.speakerOverrides,
+      meetingStore: meetingStore,
       transcriptionStatus: transcriptionStatusLabel(for: item),
       paths: item.paths,
       destinationDirectory: destinationDirectory

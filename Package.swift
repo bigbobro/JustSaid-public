@@ -31,9 +31,18 @@ let package = Package(
   ],
   targets: [
     .target(
+      name: "SpeexEchoCanceller",
+      exclude: ["LICENSE", "PROVENANCE.json"],
+      publicHeadersPath: "include",
+      cSettings: [
+        .headerSearchPath("vendor"), .headerSearchPath("vendor/include"), .define("HAVE_CONFIG_H"),
+      ]
+    ),
+    .target(
       name: "JustSaidCore",
       dependencies: [
-        .product(name: "sherpa-onnx", package: "sherpa-onnx")
+        .product(name: "sherpa-onnx", package: "sherpa-onnx"),
+        "SpeexEchoCanceller",
       ],
       linkerSettings: [
         .linkedFramework("AudioToolbox"),

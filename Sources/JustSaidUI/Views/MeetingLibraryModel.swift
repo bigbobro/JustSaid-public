@@ -217,9 +217,10 @@ public struct MeetingLibraryItem: Identifiable, Sendable {
   var excludedSpeakers: [String]
   /// 每个**原始标签**的双路发言时长统计(08-14 声道来源提示,数据层 commit 6f67205)。
   /// nil = 旧会议没有统计,UI 不渲染任何来源提示。UI 只读不写,且没有局部刷新路径——
-  /// 精转终态落盘走 `artifactsChanged` → 整表 `reload()`(见 `handlePostMeetingTaskEvent`),
-  /// 重新精转后自然刷新,所以是 `let`。
-  let channelStats: [String: SpeakerChannelStats]?
+  /// 详情从与正文同次读取的 snapshot 安装，不能沿用异步列表里的旧标签统计。
+  var channelStats: [String: SpeakerChannelStats]?
+  /// 编辑上下文捕获的原始正文字节指纹；仅内存值，列表未加载详情时为 nil。
+  var transcriptFingerprint: String? = nil
   /// 客户标签(08-17 R-b 数据层):详情页行内编辑后就地更新,不整表 reload
   /// (与 `speakerNames` 同理:填个标签不该赔上页签与滚动位置),所以是 var。
   var client: String?
@@ -485,7 +486,12 @@ public final class MeetingLibraryModel: ObservableObject {
   @Published public internal(set) var speakerHighlightIndex = 0
   /// 右键选了「新名字…」的那一段:非空时转写页顶上出现一个就地输入框。
   /// 刻意不用 sheet/alert——这一步只是填个名字,不值得盖住整页转写。
-  @Published var pendingOverrideLine: TranscriptSpeechLine?
+  struct PendingSpeakerOverride {
+    let line: TranscriptSpeechLine
+    let item: MeetingLibraryItem
+  }
+  @Published var pendingSpeakerOverride: PendingSpeakerOverride?
+  public var hasPendingSpeakerOverride: Bool { pendingSpeakerOverride != nil }
   /// 批量选段(08-14 exclusion-batch-select):非空时转写行渲染选中态、底部浮出
   /// 「标为闲聊」动作条。单击时间戳设锚、Shift+单击/拖拽推进焦点,两条路径都写这里。
   /// public:探针直接预置选区驱动 model 级断言(预置不了整页 probe 的内部状态)。
@@ -589,7 +595,8 @@ public final class MeetingLibraryModel: ObservableObject {
   private var importSelectionAnchor: String?
   private var pendingFocus: URL?
   /// 每场会议只读一次磁盘;`reload()` 会整体丢弃缓存,因为会后精转会改写 transcript.md / minutes.md。
-  var artifactCache: [String: MeetingArtifacts] = [:]
+  var artifactCache: [String: MeetingDetailSnapshot] = [:]
+  private var failedArtifactLoads: Set<String> = []
   /// 与 artifactCache 同生命周期的转写呈现快照；排除、高亮、搜索与后台阶段不失效。
   private var transcriptPresentationCache: [String: TranscriptPresentation] = [:]
   /// public 只用于判别性 verification：同一 artifact revision 应恰好构建一次。
@@ -669,12 +676,58 @@ public final class MeetingLibraryModel: ObservableObject {
   }
 
   public var selectedItem: MeetingLibraryItem? {
-    meetings.first { $0.id == selectedID }
+    meetings.first { $0.id == selectedID }.map { detailItem(for: $0) }
   }
 
   public func libraryItem(atDirectory directory: URL) -> MeetingLibraryItem? {
     let id = directory.standardizedFileURL.path
-    return meetings.first { $0.id == id }
+    return meetings.first { $0.id == id }.map { detailItem(for: $0) }
+  }
+
+  /// List items own list facts. All transcript-dependent fields come from the detail snapshot.
+  /// Returning a value captures its fingerprint for callbacks, even after a later reload.
+  func detailItem(for item: MeetingLibraryItem) -> MeetingLibraryItem {
+    var detail = item
+    let snapshot = artifactCache[item.id]?.transcript
+    detail.speakerNames = snapshot?.metadata.speakerNames ?? [:]
+    detail.speakerOverrides = snapshot?.metadata.speakerOverrides ?? [:]
+    detail.dismissedSpeakerSuggestions = snapshot?.metadata.dismissedSpeakerSuggestions ?? []
+    detail.excludedRanges = snapshot?.metadata.excludedRanges ?? []
+    detail.excludedSpeakers = snapshot?.metadata.excludedSpeakers ?? []
+    detail.channelStats = snapshot?.metadata.speakerChannelStats
+    detail.transcriptFingerprint = snapshot?.transcriptFingerprint
+    return detail
+  }
+
+  public func canEditTranscript(for item: MeetingLibraryItem) -> Bool {
+    (try? requireTranscriptEditContext(for: item)) != nil
+  }
+
+  private enum TranscriptEditError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? { "正在更新会议内容，请读取完成后再编辑" }
+  }
+
+  /// No caller may substitute the freshly loaded fingerprint for the one captured by its UI.
+  func requireTranscriptEditContext(for item: MeetingLibraryItem) throws -> String {
+    guard !isReloading, !postMeetingTasks.isRunning(directory: item.paths.directory),
+      artifactLoadTasks[item.id] == nil, artifactCache[item.id]?.transcript.transcript != nil
+    else { throw TranscriptEditError.unavailable }
+    guard let fingerprint = item.transcriptFingerprint,
+      fingerprint == artifactCache[item.id]?.transcript.transcriptFingerprint
+    else {
+      throw MeetingStoreError.transcriptChanged
+    }
+    return fingerprint
+  }
+
+  func updateTranscriptMetadata(_ metadata: MeetingMetadata, for item: MeetingLibraryItem) {
+    guard var snapshot = artifactCache[item.id],
+      snapshot.transcript.transcriptFingerprint == item.transcriptFingerprint
+    else { return }
+    snapshot.transcript.metadata = metadata
+    artifactCache[item.id] = snapshot
   }
 
   var snapshots: [MeetingSummarySnapshot] {
@@ -756,13 +809,16 @@ public final class MeetingLibraryModel: ObservableObject {
   }
 
   func scheduleArtifactLoad(for item: MeetingLibraryItem) {
-    guard artifactCache[item.id] == nil, artifactLoadTasks[item.id] == nil else { return }
+    guard !isReloading, artifactCache[item.id] == nil, artifactLoadTasks[item.id] == nil,
+      !failedArtifactLoads.contains(item.id)
+    else { return }
     let generation = artifactGeneration
     let loader = artifactLoader
+    let store = meetingStore
     let paths = item.paths
     let itemID = item.id
     artifactLoadTasks[itemID] = Task { [weak self] in
-      let snapshot = await loader.load(from: paths)
+      let snapshot = await loader.load(from: paths, using: store)
       guard
         !Task.isCancelled,
         let self,
@@ -770,6 +826,7 @@ public final class MeetingLibraryModel: ObservableObject {
         self.meetings.contains(where: { $0.id == itemID })
       else { return }
       self.artifactCache[itemID] = snapshot
+      if snapshot == nil { self.failedArtifactLoads.insert(itemID) }
       self.transcriptPresentationCache.removeValue(forKey: itemID)
       self.artifactLoadTasks[itemID] = nil
       self.artifactLoadRevision &+= 1
@@ -778,6 +835,7 @@ public final class MeetingLibraryModel: ObservableObject {
 
   private func applyReloadSnapshot(_ items: [MeetingLibraryItem], generation: UInt) {
     guard reloadGeneration == generation else { return }
+    invalidateArtifactLoads()
     meetings = items
     // 后台化 reload 后 SwiftUI body 会在 loading 态用空表先把快照缓存写成全零;
     // reload() 起点的那次 reset 救不了它。不清掉这次毒化,指挥台会一直按零计数
@@ -809,7 +867,7 @@ public final class MeetingLibraryModel: ObservableObject {
     speakerFilter = nil
     speakerHighlight = nil
     speakerHighlightIndex = 0
-    pendingOverrideLine = nil
+    pendingSpeakerOverride = nil
     transcriptSelection = nil
     transcriptJumpRequest = nil
     copyNoticeTask?.cancel()
@@ -824,6 +882,7 @@ public final class MeetingLibraryModel: ObservableObject {
     }
     artifactLoadTasks.removeAll(keepingCapacity: true)
     artifactCache.removeAll(keepingCapacity: true)
+    failedArtifactLoads.removeAll(keepingCapacity: true)
     transcriptPresentationCache.removeAll(keepingCapacity: true)
   }
 
@@ -1021,7 +1080,7 @@ public final class MeetingLibraryModel: ObservableObject {
     speakerFilter = nil
     speakerHighlight = nil
     speakerHighlightIndex = 0
-    pendingOverrideLine = nil
+    pendingSpeakerOverride = nil
     transcriptSelection = nil
     transcriptJumpRequest = nil
     returnTrail = nil
@@ -1096,7 +1155,7 @@ public final class MeetingLibraryModel: ObservableObject {
   }
 
   func speakerName(_ label: String, for item: MeetingLibraryItem) -> String {
-    item.speakerNames[label] ?? ""
+    artifactCache[item.id]?.transcript.metadata.speakerNames?[label] ?? ""
   }
 
   /// 这场会转写里**生效后**的说话人显示名,按出场顺序(含「我」)。
@@ -1194,15 +1253,17 @@ public final class MeetingLibraryModel: ObservableObject {
     if let cached = transcriptPresentationCache[item.id] {
       return cached
     }
-    guard let transcript = artifacts(for: item).transcript else {
+    _ = artifacts(for: item)
+    guard let snapshot = artifactCache[item.id]?.transcript, let transcript = snapshot.transcript
+    else {
       let empty = TranscriptPresentation(rows: [], speakerLabels: [], displaySpeakers: [])
       transcriptPresentationCache[item.id] = empty
       return empty
     }
     let rows = TranscriptSpeakerNaming.rows(
       in: transcript,
-      names: item.speakerNames,
-      overrides: item.speakerOverrides
+      names: snapshot.metadata.speakerNames ?? [:],
+      overrides: snapshot.metadata.speakerOverrides ?? [:]
     )
     var seenLabels: Set<String> = []
     var labels: [String] = []
@@ -1300,7 +1361,7 @@ public final class MeetingLibraryModel: ObservableObject {
       returnTrail = LibraryReturnTrail(sourceTab: tab)
     }
     speakerFilter = nil
-    pendingOverrideLine = nil
+    pendingSpeakerOverride = nil
     tab = .transcript
     transcriptJumpRequest = TranscriptJumpRequest(seconds: seconds)
   }

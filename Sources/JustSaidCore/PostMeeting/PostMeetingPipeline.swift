@@ -781,7 +781,7 @@ public struct PostMeetingPipeline: Sendable {
         for: recoveryCandidate
       )
     } else {
-      try Self.writeTranscript(merged, to: paths.transcript)
+      try meetingStore.publishTranscript(Self.transcriptContent(merged), at: paths)
     }
     _ = try meetingStore.recordSpeakerChannelStats(
       channelStats,
@@ -990,9 +990,22 @@ public struct PostMeetingPipeline: Sendable {
       do {
         report(.composing)
         recordStage("composing", context: context, paths: input.paths)
-        stereoURL = try await PostMeetingStereoAudioComposer.makeUploadCopy(
-          microphoneURL: input.paths.microphoneAudio,
-          systemURL: input.paths.systemAudio
+        stereoURL = try await Self.makeStereoUploadCopy(
+          paths: input.paths,
+          onSelected: { selected in
+            recordStage(
+              "echoReductionInputComposed",
+              detail:
+                "generation=\(selected.deletingLastPathComponent().lastPathComponent) engine=SpeexDSP-1.2.1",
+              context: context, paths: input.paths)
+          },
+          onFallback: { reason in
+            recordStage(
+              "echoReductionFallback", detail: reason, context: context, paths: input.paths)
+            Self.logger.notice(
+              "回声副本回退原录音 reason=\(reason, privacy: .public) meeting=\(context.meetingShortID, privacy: .public)"
+            )
+          }
         )
       } catch is CancellationError {
         throw CancellationError()
@@ -1058,6 +1071,43 @@ public struct PostMeetingPipeline: Sendable {
       audioDurations: audioDurations,
       context: context
     )
+  }
+
+  static func makeStereoUploadCopy(
+    paths: MeetingPaths,
+    resolve: @Sendable (URL) async throws -> URL? = {
+      try await PostMeetingEchoReductionService.shared.selectedMicrophone(at: $0)
+    },
+    compose: @Sendable (URL, URL) async throws -> URL = {
+      try await PostMeetingStereoAudioComposer.makeUploadCopy(microphoneURL: $0, systemURL: $1)
+    },
+    onSelected: @Sendable (URL) -> Void = { _ in },
+    onFallback: @Sendable (String) -> Void = { _ in }
+  ) async throws -> URL {
+    try Task.checkCancellation()
+    var microphone = paths.microphoneAudio
+    do {
+      if let selected = try await resolve(paths.directory) { microphone = selected }
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      try Task.checkCancellation()
+      onFallback("selection_invalid")
+    }
+    try Task.checkCancellation()
+    do {
+      let output = try await compose(microphone, paths.systemAudio)
+      if microphone != paths.microphoneAudio { onSelected(microphone) }
+      return output
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      try Task.checkCancellation()
+      guard microphone != paths.microphoneAudio else { throw error }
+      // Retry the original stereo input before the existing dual-mono fallback.
+      onFallback("derived_composition_failed")
+      return try await compose(paths.microphoneAudio, paths.systemAudio)
+    }
   }
 
   private static func isNonEmptyAudioFile(_ url: URL) -> Bool {
@@ -1693,6 +1743,18 @@ private struct TranscribedUpload: Sendable {
   let segments: [BatchTranscriptSegment]
 }
 
+/// 每轮最多一个任务占用各 upload.source 槽，恢复路径也由这两个持久化槽重建。
+/// source 缺失是独立编号域；不能先按上传槽兜底，再与明确声道的同号 speaker 合并。
+private struct SpeakerCluster: Hashable {
+  let requestSource: AudioSource
+  let declaredSource: AudioSource?
+  let rawSpeaker: String
+
+  var orderingKey: [String] {
+    [requestSource.rawValue, declaredSource?.rawValue ?? "", rawSpeaker]
+  }
+}
+
 private struct AudioTiming: Sendable {
   let durations: [AudioSource: TimeInterval]
   let offsets: [AudioSource: TimeInterval]
@@ -1717,7 +1779,8 @@ private actor UploadedObjectTracker {
 private struct MergedTranscriptSegment: EchoDeduplicatableSegment {
   let t0: TimeInterval
   let t1: TimeInterval
-  let speaker: String
+  var speaker: String
+  let speakerCluster: SpeakerCluster?
   let text: String
   let source: AudioSource
   let volumeDB: Double?
@@ -1728,6 +1791,7 @@ private struct MergedTranscriptSegment: EchoDeduplicatableSegment {
       t0: t0,
       t1: t1,
       speaker: speaker,
+      speakerCluster: speakerCluster,
       text: text,
       source: source,
       volumeDB: volumeDB,
@@ -1848,12 +1912,18 @@ extension PostMeetingPipeline {
       return upload.segments.map {
         let source = $0.source ?? upload.source
         let offset = $0.source == nil ? (offsets[source] ?? 0) : 0
+        let rawSpeaker = $0.speaker.trimmingCharacters(in: .whitespacesAndNewlines)
         return MergedTranscriptSegment(
           t0: $0.t0 + offset,
           t1: $0.t1 + offset,
-          speaker: $0.speaker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          // 保留旧排序键，身份映射在原去重完成后生成，不改变同起止时间的行顺序。
+          speaker: rawSpeaker.isEmpty
             ? (source == .me ? "我" : "其他人")
             : normalizedOtherSpeaker($0.speaker),
+          speakerCluster: rawSpeaker.isEmpty
+            ? nil
+            : SpeakerCluster(
+              requestSource: upload.source, declaredSource: $0.source, rawSpeaker: rawSpeaker),
           text: $0.text,
           source: source,
           volumeDB: $0.volumeDB,
@@ -1882,14 +1952,28 @@ extension PostMeetingPipeline {
         "权威转写去掉 \(deduplicated.droppedCount, privacy: .public) 条麦克风回声片段"
       )
     }
-    return deduplicated.segments
-  }
-
-  fileprivate static func writeTranscript(
-    _ segments: [MergedTranscriptSegment],
-    to url: URL
-  ) throws {
-    try write(transcriptContent(segments), to: url)
+    // 编号只在本次结果内有效。为首次出现完全并列的簇加确定性排序，避免异步任务
+    // 完成顺序改变标签；这份排序只分配标签，实际输出仍用上面原有的保留行顺序。
+    let labelOrder = deduplicated.segments.sorted {
+      if $0.t0 != $1.t0 { return $0.t0 < $1.t0 }
+      if $0.t1 != $1.t1 { return $0.t1 < $1.t1 }
+      if $0.speaker != $1.speaker { return $0.speaker < $1.speaker }
+      return ($0.speakerCluster?.orderingKey ?? []).lexicographicallyPrecedes(
+        $1.speakerCluster?.orderingKey ?? [])
+    }
+    var labels: [SpeakerCluster: String] = [:]
+    for segment in labelOrder {
+      if let cluster = segment.speakerCluster, labels[cluster] == nil {
+        labels[cluster] = "发言人 \(labels.count + 1)"
+      }
+    }
+    return deduplicated.segments.map { segment in
+      var result = segment
+      if let cluster = segment.speakerCluster, let label = labels[cluster] {
+        result.speaker = label
+      }
+      return result
+    }
   }
 
   /// 只统计去回声后的权威段落；否则麦克风回声会把远端说话人误报成「混合来源」。

@@ -2,7 +2,7 @@
   "files": [
     {
       "path": ".gitattributes",
-      "sha256": "c36399e82bf82445bea9bddc126eac912aebfd43633e29e255aa6f1e16e7f595"
+      "sha256": "7f860cea524f0d764f55bb6ec808477eaa97a03af359b18029073ad6cb1fec7e"
     },
     {
       "path": ".github/workflows/pr-validation.yml",
@@ -22,7 +22,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "3e9e0903292e591e633496b072a769e1000bd1117f7b1b94ce1022aab06ce8a9"
+      "sha256": "a4a354271a0126bba482815ae8f452feb4eed5baeb7cf9a7f290ea5700f4fd12"
     },
     {
       "path": "LICENSE",
@@ -34,7 +34,7 @@
     },
     {
       "path": "Package.swift",
-      "sha256": "4e2ac06e76ee230ec96dd806969d8722d3876d6b0c277b3511d9d5b04aeec02b"
+      "sha256": "838cd745d6c3e55154a357351aa3d739adedbb63ee8ae80b7d70c3fd2ce4c8e6"
     },
     {
       "path": "README.md",
@@ -178,7 +178,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Persistence/AudioRetentionSweeper.swift",
-      "sha256": "2d16ebc0022c07318a8bdfd2334543490b1138f3f37bc64c6004bd27c15805be"
+      "sha256": "98b29f035a1b79a75eb9051bd4654c2a2c0c45ef29af0ae8ba108fb9131b61ef"
     },
     {
       "path": "Sources/JustSaidCore/Persistence/CompletenessAck.swift",
@@ -222,11 +222,11 @@
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MeetingMetadata.swift",
-      "sha256": "f5a4c52390c9233e5b3715940393982602b04cb1185b268fe669ceb36ef496d2"
+      "sha256": "0a5abf300518f0ea8a12aa77cb22aa328b9a0553f46b3bbb380576d2046aa8d2"
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MeetingStore.swift",
-      "sha256": "9dc58d01fb3b3514a30150a5cd1cf9443d8633e821d275782bffab7557ad3747"
+      "sha256": "9a229a53cfee4384c554c133a7ed9e6f78044df8f6d9961e732bb89abc2fa234"
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MinutesHistory.swift",
@@ -241,8 +241,12 @@
       "sha256": "999aa4757decf0eb3423ed83e04e49b25afbf3753ba88e5cd46b76bb63b52031"
     },
     {
+      "path": "Sources/JustSaidCore/Persistence/TranscriptHistoryWriter.swift",
+      "sha256": "38a32838991c7fdf9b7b0fa509fabfe01a5136792e7480120d9a3c058fc6871b"
+    },
+    {
       "path": "Sources/JustSaidCore/Persistence/TranscriptSpeakerNaming.swift",
-      "sha256": "b6674804b89b173763662e5b694bfed0255271a53269d725522aaef348e7a077"
+      "sha256": "52bf5c991ec17bb0eca0b8d95d9c9e62c7d794c17c5c5440722a029484b94528"
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/ActionItemsRenderer.swift",
@@ -270,7 +274,7 @@
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/MeetingPackageExporter.swift",
-      "sha256": "c4f2e563185111d50a67b4e349fb82b3ca8276ed943c5a5f2a2970d294f15cbd"
+      "sha256": "2d6da05b67fdee1e7f869357fbc060887ed997e268813c2c09d0de4780eb3ad2"
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/PartialMinutesRenderer.swift",
@@ -285,12 +289,20 @@
       "sha256": "eef99b22d87a51fbc199077ba56ba3c175052f3aa166a9b1bc0eb2e789dee8c8"
     },
     {
+      "path": "Sources/JustSaidCore/PostMeeting/PostMeetingEchoPCM.swift",
+      "sha256": "664505104c37762f2ae2cf0262826f114f3e9dd38c89b0795e38ae622f380445"
+    },
+    {
+      "path": "Sources/JustSaidCore/PostMeeting/PostMeetingEchoReductionService.swift",
+      "sha256": "0a3a3890550f3c4b65b3e7498a46304472457653e504549c9ab766ce737079c6"
+    },
+    {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingNoticeDismissal.swift",
       "sha256": "9789095b3f1faa296280b64a89f59220b9651e5c4bb9a2596751fadc54a96573"
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingPipeline.swift",
-      "sha256": "cf6d8b10c8feb90132a736c30d9f2826d72336997f43a0946bc529a74f5c9905"
+      "sha256": "d752216f2ba5ebed649fab7c77e9dbdb214e2ec5c9defd95d1564b1b66e360de"
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingProgress.swift",
@@ -310,7 +322,7 @@
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/SpeakerSuggestionsSidecar.swift",
-      "sha256": "d231567cdec8e204763c4aaf66cff2970f7aa4bd1f90d7474af67d3f11afd0c8"
+      "sha256": "634b37ea81afff4a999bab28a0ab33ee53db26cb607412dbf458b2015b3737bb"
     },
     {
       "path": "Sources/JustSaidCore/Providers/LLMTransportFailure.swift",
@@ -481,6 +493,14 @@
       "sha256": "6c3d7b9c3d3c3d514022b38807a0881439980584eec8125fd5cacc987906dcca"
     },
     {
+      "path": "Sources/JustSaidUI/Views/EchoReductionModel.swift",
+      "sha256": "db089a9bc4d2305bcba0aa55eaa32045beeee41452bf339dc474876fdc1dff02"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/EchoReductionSheet.swift",
+      "sha256": "2331f89ad86e698c3e153f6205d3181b2bf03c619a17a204387fedb4841e4209"
+    },
+    {
       "path": "Sources/JustSaidUI/Views/ExclusionSupport.swift",
       "sha256": "0f70b0c5d94c8cc55a083812faf0acf33275525bbec478fe8408e19f5a53150a"
     },
@@ -546,31 +566,31 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryBackgroundIO.swift",
-      "sha256": "71a6187529c5346ef4c734f44122b952c1dfa2e7fdeb8bf63344704fff0f2abd"
+      "sha256": "645da55975585c8b7eef84c5d1d5bf700939e6b9841216ba026b3907640a8029"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel+Exclusions.swift",
-      "sha256": "7694ef6d10ad3284fe2bcca80284b51b47121999a9dc53e4cdb39838e61c1af7"
+      "sha256": "587ebf120e35008eb80ef8b5d9be0124ed49aac7323c2e9ee25be0fd814f0d72"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel+Naming.swift",
-      "sha256": "a8ace905f36f75fd67a81219b5b2ec1bfe9526eb895bfbae5677356db8718a7d"
+      "sha256": "25f408eedb776c968fcb91212844a72b6698458910cef42cea4f00131e7086b5"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel+Search.swift",
-      "sha256": "27589e1dbf19e7bf456d995dd05a3b412e46077f9f8106bd71cd0e802cbea310"
+      "sha256": "352e578a4a6773b14f6007484e3af3dab2a6ba5a6d725364c0716769d61d2180"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel.swift",
-      "sha256": "f57b56136bad0990d163c0eafe1f8dd23021c15545be6ddfd0f29859a79e482e"
+      "sha256": "eaa6b38e1f2eba36b5355041a4e72b12d93e09376817ca9129c402a79b880a94"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailHeader.swift",
-      "sha256": "62674949f03f52af3cab605e001319535b7e89a8f60b413f9a4f12751721dd34"
+      "sha256": "81d9a23513c8174692d4a7d6599203db21c196cca1442cf73ecdc5e28c83e10f"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailPane.swift",
-      "sha256": "1975265366b078ab913d4ae334593b3fd6a75b6e3bf4694c0e3a25f5dc373f1f"
+      "sha256": "946b2910b7df5923209be84dc5dc2caf5f9da22a13e135cfafffc2669f271004"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailTools.swift",
@@ -590,11 +610,11 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+TranscriptTab.swift",
-      "sha256": "48fba0dc070b8661d510285de1a7944a96ecd3570f362d396814d9e9eda2de1d"
+      "sha256": "7fa163a5e4c6e8273c5567b1e175a190064ddba0a5e3533e88cbf28e9ce087dc"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView.swift",
-      "sha256": "163ec4b8de04210460550d60a8a1238fb4c91f29cb52bf77c0b5f8e7703f0e3a"
+      "sha256": "af8991aae97529840451157962f9e0e9a8f6ebef92a71d70626436cbe5f2208d"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingNotesDocumentView.swift",
@@ -733,6 +753,74 @@
       "sha256": "3bbda032832d54c792170993991974881a7696ed08e194e43c738a681c18705a"
     },
     {
+      "path": "Sources/SpeexEchoCanceller/LICENSE",
+      "sha256": "2654a4264b2bfe298dedc508748d140111840c315cc8eb646a3a68c13fa75b01"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/PROVENANCE.json",
+      "sha256": "db0d3c949aeedb5226e72cb1323c709a2e399a7abb8f8ba901dc807afdf18d3a"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/include/JustSaidSpeex.h",
+      "sha256": "f2b6a2f7ed7a18c8831ae5aa85b00c58a21e7b7ce57634a4ce2a367c8c9254cf"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/arch.h",
+      "sha256": "102f6a14a95f8ae0bcfc69270f3a9e3fbba08b63bba688ca524f71e3faa48c23"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/config.h",
+      "sha256": "0482bc8833423b6958776d9e754ac9aad4c148aa3ef75a0ecc801d6473d8d17e"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/fftwrap.c",
+      "sha256": "a59ec583e5660207da9cf3c1ddd6a7ff1ed91382eb40df2a4e77d5cddfe14c52"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/fftwrap.h",
+      "sha256": "fd289dcc47b9ddb2b33039c1990c4644bb279c9413ede6e74fdb2742c3888ee5"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/include/speex/speex_echo.h",
+      "sha256": "ab18db97564a241c9e06d723351c2155bf04a23ac30e0c27a3d86dcc04de3426"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/include/speex/speexdsp_config_types.h",
+      "sha256": "adae4ec8c26f2ed0fcc9cb5d1bdc029b0e21fde99af6dbcbd430e729a48afa18"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/include/speex/speexdsp_types.h",
+      "sha256": "4f97187c057fd8493c787f2526752859cf57007d50fef8d2e03c9b79b2fed490"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/math_approx.h",
+      "sha256": "a024693b0d29dc4e904021a1b442908c1fa726b18f5d31b0935e38646f2701ff"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/mdf.c",
+      "sha256": "a096297873dfd0a07509028d2cdd02d12edf8f1d03319fcecedda003d18d22a8"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/os_support.h",
+      "sha256": "5ab9c979e8ac1f72c7441d24e39e7840828dd9356aac49a31eabeddb808bf1d3"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/pseudofloat.h",
+      "sha256": "0bd544dbed0096e02da2fd800d673bafb19bd97f56e268b98402ad641726daae"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/smallft.c",
+      "sha256": "25bcc6e38baeca23e828bfcbbb1cc0a0d3f6f898d9e02c95cbb4b4c0fb4b3df7"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/vendor/smallft.h",
+      "sha256": "715352e7efe55cb671f37fa341610ce7df893016625506e22175d9f1b1b817e9"
+    },
+    {
+      "path": "Sources/SpeexEchoCanceller/wrapper.c",
+      "sha256": "1f90f5b199f78b02441d6d03b7796614e9ac84d32903b9e9d1aa1bc367fb4749"
+    },
+    {
       "path": "Support/LocalModelAssets.json",
       "sha256": "b4b0c167d7bb563c5265bf6fad1f2502bc6fc2e396d1434abc2ecf6337fd2c21"
     },
@@ -750,11 +838,11 @@
     },
     {
       "path": "Support/ThirdPartyNotices.txt",
-      "sha256": "e27fbfdf79ad83a8fbfe7895d99d2a4fe3c477ce41cca9320c1a30afb829e938"
+      "sha256": "edc69d41f19a612c4a90de618cf68861931fbf4a86fc3662e90537c2ff1f7bf8"
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "3e9e0903292e591e633496b072a769e1000bd1117f7b1b94ce1022aab06ce8a9"
+      "sha256": "a4a354271a0126bba482815ae8f452feb4eed5baeb7cf9a7f290ea5700f4fd12"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -762,7 +850,7 @@
     },
     {
       "path": "docs/publication/Package.public.swift",
-      "sha256": "4e2ac06e76ee230ec96dd806969d8722d3876d6b0c277b3511d9d5b04aeec02b"
+      "sha256": "838cd745d6c3e55154a357351aa3d739adedbb63ee8ae80b7d70c3fd2ce4c8e6"
     },
     {
       "path": "docs/publication/README.public.md",
@@ -773,14 +861,14 @@
   "manifest_path_excluded_from_file_hashes": "PUBLIC_EXPORT_MANIFEST.json",
   "package_manifest": {
     "canonical_signature": {
-      "canonical_target_count": 31,
+      "canonical_target_count": 33,
       "dependencies": [
         [
           "https://github.com/k2-fsa/sherpa-onnx",
           "116a44e72c5bb631dcdbdb9c176f0304f5fc6fb0"
         ]
       ],
-      "expected_public_target_count": 3,
+      "expected_public_target_count": 4,
       "name": "JustSaid",
       "products": [
         [
@@ -815,7 +903,7 @@
           "path": null
         },
         {
-          "declaration_digest": "1ac746100390b08b",
+          "declaration_digest": "bfc026919fbcf4a8",
           "kind": "target",
           "name": "JustSaidCore",
           "path": null
@@ -825,6 +913,12 @@
           "kind": "target",
           "name": "JustSaidUI",
           "path": null
+        },
+        {
+          "declaration_digest": "065c0f84224d6803",
+          "kind": "target",
+          "name": "SpeexEchoCanceller",
+          "path": null
         }
       ]
     },
@@ -832,6 +926,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "3e299c1d62c03527e8cf1b848748fd3e5f3e5602",
+  "source_sha": "2c6d9893406e1d30e50f7f15da2cd999fdccadd3",
   "source_status": "clean"
 }

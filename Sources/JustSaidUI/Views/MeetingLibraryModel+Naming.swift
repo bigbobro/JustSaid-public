@@ -16,8 +16,9 @@ extension MeetingLibraryModel {
     guard !suggestions.isEmpty else { return [] }
     return Self.namingSuggestionRows(
       suggestions: suggestions,
-      speakerNames: item.speakerNames,
-      dismissedSuggestions: item.dismissedSpeakerSuggestions,
+      speakerNames: artifactCache[item.id]?.transcript.metadata.speakerNames ?? [:],
+      dismissedSuggestions: artifactCache[item.id]?.transcript.metadata.dismissedSpeakerSuggestions
+        ?? [],
       rosterForms: rosterForms(neededFor: suggestions)
     )
   }
@@ -111,7 +112,7 @@ extension MeetingLibraryModel {
   }
 
   /// 采纳 = 与手动改名完全同一条通道(setSpeakerName);真名随之在转写呈现生效。
-  func adoptNamingSuggestion(
+  public func adoptNamingSuggestion(
     _ suggestion: SpeakerNameSuggestion,
     of item: MeetingLibraryItem
   ) {
@@ -119,19 +120,22 @@ extension MeetingLibraryModel {
   }
 
   /// 「不是」:拒绝写入 meeting.json,本场该建议不再预填;只作用于这一场会议。
-  func dismissNamingSuggestion(
+  public func dismissNamingSuggestion(
     _ suggestion: SpeakerNameSuggestion,
     of item: MeetingLibraryItem
   ) {
     guard let index = meetings.firstIndex(where: { $0.id == item.id }) else { return }
     do {
+      let fingerprint = try requireTranscriptEditContext(for: item)
       let metadata = try meetingStore.dismissSpeakerSuggestion(
         label: suggestion.label,
         name: suggestion.name,
-        at: item.paths
+        at: item.paths,
+        expectedTranscriptFingerprint: fingerprint
       )
       meetings[index].dismissedSpeakerSuggestions =
         metadata.dismissedSpeakerSuggestions ?? []
+      updateTranscriptMetadata(metadata, for: item)
       speakerNameError = nil
     } catch {
       speakerNameError = "这次拒绝没能存进 meeting.json:\(error.localizedDescription)"

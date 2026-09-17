@@ -65,19 +65,22 @@ extension MeetingLibraryModel {
 
   /// 单段更正(N2)。`name` 为空即撤销这一段的覆盖,回到全局映射结算的结果。
   /// 只写 `meeting.json`,`transcript.md` 一个字节都不碰。
-  func setSpeakerOverride(
+  public func setSpeakerOverride(
     _ name: String?,
     for line: TranscriptSpeechLine,
     of item: MeetingLibraryItem
   ) {
     guard let index = meetings.firstIndex(where: { $0.id == item.id }) else { return }
     do {
+      let fingerprint = try requireTranscriptEditContext(for: item)
       let metadata = try meetingStore.setSpeakerOverride(
         name,
         forSegment: line.overrideKey,
-        at: item.paths
+        at: item.paths,
+        expectedTranscriptFingerprint: fingerprint
       )
       meetings[index].speakerOverrides = metadata.speakerOverrides ?? [:]
+      updateTranscriptMetadata(metadata, for: item)
       invalidateTranscriptPresentation(forMeetingID: item.id)
       speakerNameError = nil
       // 刻意不让筛选跟着改后的人跑:典型动作是「只看张三 → 挑出不是他的那几段改掉」,
@@ -85,25 +88,44 @@ extension MeetingLibraryModel {
     } catch {
       speakerNameError = "这一段的更正没能存进 meeting.json:\(error.localizedDescription)"
     }
-    pendingOverrideLine = nil
+    pendingSpeakerOverride = nil
+  }
+
+  /// A delayed context-menu action must retain the item from the menu that created it.
+  public func requestSpeakerOverride(for line: TranscriptSpeechLine, of item: MeetingLibraryItem) {
+    do {
+      _ = try requireTranscriptEditContext(for: item)
+      pendingSpeakerOverride = PendingSpeakerOverride(line: line, item: item)
+      speakerNameError = nil
+    } catch {
+      speakerNameError = error.localizedDescription
+    }
+  }
+
+  public func commitPendingSpeakerOverride(_ name: String) {
+    guard let pending = pendingSpeakerOverride else { return }
+    setSpeakerOverride(name, for: pending.line, of: pending.item)
   }
 
   /// 失焦即存。只写 `meeting.json`,不碰 `transcript.md`(F2 红线:权威转写保持产物纯净)。
   public func setSpeakerName(_ name: String, for label: String, of item: MeetingLibraryItem) {
     guard let index = meetings.firstIndex(where: { $0.id == item.id }) else { return }
-    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard trimmed != (item.speakerNames[label] ?? "") else { return }
-    // 改名跟随(验收硬项):高亮/只看都按生效后的显示名建桶,名字一换,
-    // 旧桶名就再也命中不了任何行——必须把状态换到新显示名上(清名则回退标签本身)。
-    let oldDisplayName = item.speakerNames[label].flatMap { $0.isEmpty ? nil : $0 } ?? label
-    let newDisplayName = trimmed.isEmpty ? label : trimmed
     do {
+      let fingerprint = try requireTranscriptEditContext(for: item)
+      let current = detailItem(for: item)
+      let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard trimmed != (current.speakerNames[label] ?? "") else { return }
+      // Follow the renamed display bucket without changing the transcript version.
+      let oldDisplayName = current.speakerNames[label].flatMap { $0.isEmpty ? nil : $0 } ?? label
+      let newDisplayName = trimmed.isEmpty ? label : trimmed
       let metadata = try meetingStore.setSpeakerName(
         trimmed.isEmpty ? nil : trimmed,
         for: label,
-        at: item.paths
+        at: item.paths,
+        expectedTranscriptFingerprint: fingerprint
       )
       meetings[index].speakerNames = metadata.speakerNames ?? [:]
+      updateTranscriptMetadata(metadata, for: item)
       invalidateTranscriptPresentation(forMeetingID: item.id)
       if speakerHighlight == oldDisplayName {
         speakerHighlight = newDisplayName
@@ -123,7 +145,7 @@ extension MeetingLibraryModel {
   /// 会后选段排除(postSelect):起点取该行时间戳,终点取到下一条发言行**之前**;
   /// 已是最后一条时兜底 +30 秒(与会中 bullet 排除同一口径)。
   /// 只写 `meeting.json` 的排除记录,`transcript.md` 一个字节都不碰。
-  func excludeTranscriptLine(_ line: TranscriptSpeechLine, of item: MeetingLibraryItem) {
+  public func excludeTranscriptLine(_ line: TranscriptSpeechLine, of item: MeetingLibraryItem) {
     guard
       let index = meetings.firstIndex(where: { $0.id == item.id }),
       let start = TranscriptAnchor(timecode: line.timestamp).seconds
@@ -137,15 +159,18 @@ extension MeetingLibraryModel {
     // 下一行与本行同秒时退成点区间 [start, start](同秒本就无法区分)。
     let end = nextSpeechStart.map { max(start, $0 - 1) } ?? start + 30
     do {
+      let fingerprint = try requireTranscriptEditContext(for: item)
       let range = try meetingStore.addExcludedRange(
         start: start,
         end: end,
         origin: ExclusionUI.Origin.postSelect,
-        at: item.paths
+        at: item.paths,
+        expectedTranscriptFingerprint: fingerprint
       )
       // add 只回区间不回整份 metadata;按 MeetingStore 的追加语义本地补齐,
       // 与 `setSpeakerOverride` 的局部更新同款,不整表 reload。
       meetings[index].excludedRanges.append(range)
+      appendDetailExcludedRange(range, for: item)
       exclusionError = nil
     } catch {
       exclusionError = "这段排除没能存进 meeting.json:\(error.localizedDescription)"
@@ -178,14 +203,17 @@ extension MeetingLibraryModel {
     }.min()
     let end = nextSpeechStart.map { max(lastStart, $0 - 1) } ?? lastStart + 30
     do {
+      let fingerprint = try requireTranscriptEditContext(for: item)
       let range = try meetingStore.addExcludedRange(
         start: start,
         end: end,
         origin: ExclusionUI.Origin.postSelect,
-        at: item.paths
+        at: item.paths,
+        expectedTranscriptFingerprint: fingerprint
       )
       // 与 excludeTranscriptLine 同款:按 MeetingStore 追加语义本地补齐,不整表 reload。
       meetings[index].excludedRanges.append(range)
+      appendDetailExcludedRange(range, for: item)
       exclusionError = nil
       transcriptSelection = nil
     } catch {
@@ -203,8 +231,11 @@ extension MeetingLibraryModel {
   public func removeExclusion(id: UUID, of item: MeetingLibraryItem) {
     guard let index = meetings.firstIndex(where: { $0.id == item.id }) else { return }
     do {
-      let metadata = try meetingStore.removeExcludedRange(id: id, at: item.paths)
+      let fingerprint = try requireTranscriptEditContext(for: item)
+      let metadata = try meetingStore.removeExcludedRange(
+        id: id, at: item.paths, expectedTranscriptFingerprint: fingerprint)
       meetings[index].excludedRanges = metadata.excludedRanges ?? []
+      updateTranscriptMetadata(metadata, for: item)
       exclusionError = nil
     } catch {
       exclusionError = "撤销排除没能存进 meeting.json:\(error.localizedDescription)"
@@ -212,19 +243,28 @@ extension MeetingLibraryModel {
   }
 
   /// 发言人整体排除/恢复。`label` 是转写原始标签,不是改名后的显示名(契约红线)。
-  func setSpeakerExcluded(_ label: String, excluded: Bool, of item: MeetingLibraryItem) {
+  public func setSpeakerExcluded(_ label: String, excluded: Bool, of item: MeetingLibraryItem) {
     guard let index = meetings.firstIndex(where: { $0.id == item.id }) else { return }
     do {
+      let fingerprint = try requireTranscriptEditContext(for: item)
       let metadata = try meetingStore.setSpeakerExcluded(
         label,
         excluded: excluded,
-        at: item.paths
+        at: item.paths,
+        expectedTranscriptFingerprint: fingerprint
       )
       meetings[index].excludedSpeakers = metadata.excludedSpeakers ?? []
+      updateTranscriptMetadata(metadata, for: item)
       exclusionError = nil
     } catch {
       exclusionError = "发言人排除状态没能存进 meeting.json:\(error.localizedDescription)"
     }
+  }
+
+  private func appendDetailExcludedRange(_ range: ExcludedRange, for item: MeetingLibraryItem) {
+    guard var metadata = artifactCache[item.id]?.transcript.metadata else { return }
+    metadata.excludedRanges = (metadata.excludedRanges ?? []) + [range]
+    updateTranscriptMetadata(metadata, for: item)
   }
 
   func document(for item: MeetingLibraryItem, tab: MeetingDetailTab) -> MeetingDocument {
@@ -296,8 +336,8 @@ extension MeetingLibraryModel {
         // 呈现层套真名;落盘的 transcript.md 一个字都没动。
         body: artifacts.transcript.map {
           TranscriptSpeakerNaming.applyingNames(
-            item.speakerNames,
-            overrides: item.speakerOverrides,
+            artifactCache[item.id]?.transcript.metadata.speakerNames ?? [:],
+            overrides: artifactCache[item.id]?.transcript.metadata.speakerOverrides ?? [:],
             to: $0
           )
         },
@@ -571,7 +611,7 @@ extension MeetingLibraryModel {
 
   func artifacts(for item: MeetingLibraryItem) -> MeetingArtifacts {
     if let cached = artifactCache[item.id] {
-      return cached
+      return cached.artifacts
     }
     scheduleArtifactLoad(for: item)
     return .emptyLibrarySnapshot

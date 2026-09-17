@@ -5,6 +5,9 @@ public enum MeetingStoreError: LocalizedError, Sendable {
   case editedFormalMinutesAlreadyExists
   case emptyTitle
   case formalMinutesPairRecoveryFailed
+  case unsafeTranscriptPublicationPath
+  case transcriptPublicationRecoveryFailed
+  case transcriptChanged
 
   public var errorDescription: String? {
     switch self {
@@ -16,6 +19,12 @@ public enum MeetingStoreError: LocalizedError, Sendable {
       return "会议名称不能为空"
     case .formalMinutesPairRecoveryFailed:
       return "纪要结构化文件写入失败，且正文回滚失败；请保留会议目录并重试"
+    case .unsafeTranscriptPublicationPath:
+      return "转写发布路径不是普通文件或目录，已停止写入"
+    case .transcriptPublicationRecoveryFailed:
+      return "转写发布失败且未能安全恢复原件；旧版本已保存在 transcript-history，请保留会议目录"
+    case .transcriptChanged:
+      return "转写已更新，请重新选择发言后再操作"
     }
   }
 }
@@ -85,6 +94,29 @@ public struct MeetingRecord: Sendable {
   public init(paths: MeetingPaths, metadata: MeetingMetadata) {
     self.paths = paths
     self.metadata = metadata
+  }
+}
+
+/// 正文与人物关联在发布锁内一起读取；指纹只属于这份原始正文，不持久化新版本字段。
+public struct MeetingTranscriptSnapshot: Sendable {
+  public var metadata: MeetingMetadata
+  public let transcript: String?
+  public let transcriptFingerprint: String?
+
+  public init(metadata: MeetingMetadata, transcript: String?, transcriptFingerprint: String?) {
+    self.metadata = metadata
+    self.transcript = transcript
+    self.transcriptFingerprint = transcriptFingerprint
+  }
+}
+
+public struct MeetingDetailSnapshot: Sendable {
+  public let artifacts: MeetingArtifacts
+  public var transcript: MeetingTranscriptSnapshot
+
+  public init(artifacts: MeetingArtifacts, transcript: MeetingTranscriptSnapshot) {
+    self.artifacts = artifacts
+    self.transcript = transcript
   }
 }
 
@@ -307,6 +339,40 @@ public final class MeetingStore: @unchecked Sendable {
     }
   }
 
+  /// 搜索等只需要转写的消费者不必读取纪要与全部历史。调用方应在后台执行文件 IO。
+  public func readTranscriptSnapshot(at paths: MeetingPaths) throws -> MeetingTranscriptSnapshot {
+    try synchronized {
+      let metadata = try read(from: paths)
+      let data =
+        fileManager.fileExists(atPath: paths.transcript.path)
+        ? try Data(contentsOf: paths.transcript) : nil
+      let text = data.flatMap { String(data: $0, encoding: .utf8) }
+      return MeetingTranscriptSnapshot(
+        metadata: metadata,
+        transcript: text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+          ? text : nil,
+        transcriptFingerprint: data.map(MinutesFingerprint.hex)
+      )
+    }
+  }
+
+  /// 与 publishTranscript 同锁，不能把较早列表元数据配到较晚正文上。
+  public func readDetailSnapshot(at paths: MeetingPaths) throws -> MeetingDetailSnapshot {
+    try synchronized {
+      let transcript = try readTranscriptSnapshot(at: paths)
+      return MeetingDetailSnapshot(
+        artifacts: MeetingArtifacts.read(from: paths, fileManager: fileManager),
+        transcript: transcript)
+    }
+  }
+
+  private func requireTranscriptFingerprint(_ expected: String?, at paths: MeetingPaths) throws {
+    guard let expected else { return }
+    guard let data = try? Data(contentsOf: paths.transcript),
+      MinutesFingerprint.hex(of: data) == expected
+    else { throw MeetingStoreError.transcriptChanged }
+  }
+
   /// 改会议名只更新 `meeting.json`。目录名是会议的稳定身份,录音、转写、笔记与纪要
   /// 都可能正被其他任务持有,所以这里绝不移动目录或重写任何产物文件。可选的当前标题
   /// 条件与写入共用同一把锁,避免后台自动命名覆盖同时发生的用户改名。
@@ -368,9 +434,11 @@ public final class MeetingStore: @unchecked Sendable {
   public func setSpeakerName(
     _ name: String?,
     for speakerLabel: String,
-    at paths: MeetingPaths
+    at paths: MeetingPaths,
+    expectedTranscriptFingerprint: String? = nil
   ) throws -> MeetingMetadata {
     try mutateMetadata(at: paths) {
+      try requireTranscriptFingerprint(expectedTranscriptFingerprint, at: paths)
       let label = speakerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !label.isEmpty else { return }
       var names = $0.speakerNames ?? [:]
@@ -411,9 +479,11 @@ public final class MeetingStore: @unchecked Sendable {
   public func dismissSpeakerSuggestion(
     label: String,
     name: String,
-    at paths: MeetingPaths
+    at paths: MeetingPaths,
+    expectedTranscriptFingerprint: String? = nil
   ) throws -> MeetingMetadata {
     try mutateMetadata(at: paths) {
+      try requireTranscriptFingerprint(expectedTranscriptFingerprint, at: paths)
       let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
       let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmedLabel.isEmpty, !trimmedName.isEmpty else { return }
@@ -430,9 +500,11 @@ public final class MeetingStore: @unchecked Sendable {
   public func setSpeakerOverride(
     _ name: String?,
     forSegment key: String,
-    at paths: MeetingPaths
+    at paths: MeetingPaths,
+    expectedTranscriptFingerprint: String? = nil
   ) throws -> MeetingMetadata {
     try mutateMetadata(at: paths) {
+      try requireTranscriptFingerprint(expectedTranscriptFingerprint, at: paths)
       let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmedKey.isEmpty else { return }
       var overrides = $0.speakerOverrides ?? [:]
@@ -496,7 +568,8 @@ public final class MeetingStore: @unchecked Sendable {
     end: TimeInterval? = nil,
     reason: String? = nil,
     origin: String,
-    at paths: MeetingPaths
+    at paths: MeetingPaths,
+    expectedTranscriptFingerprint: String? = nil
   ) throws -> ExcludedRange {
     let excludedRange = ExcludedRange(
       start: start,
@@ -505,6 +578,7 @@ public final class MeetingStore: @unchecked Sendable {
       origin: origin
     )
     _ = try mutateMetadata(at: paths) {
+      try requireTranscriptFingerprint(expectedTranscriptFingerprint, at: paths)
       var ranges = $0.excludedRanges ?? []
       ranges.append(excludedRange)
       $0.excludedRanges = ranges
@@ -534,9 +608,11 @@ public final class MeetingStore: @unchecked Sendable {
   @discardableResult
   public func removeExcludedRange(
     id: UUID,
-    at paths: MeetingPaths
+    at paths: MeetingPaths,
+    expectedTranscriptFingerprint: String? = nil
   ) throws -> MeetingMetadata {
     try mutateMetadata(at: paths) {
+      try requireTranscriptFingerprint(expectedTranscriptFingerprint, at: paths)
       guard var ranges = $0.excludedRanges else { return }
       ranges.removeAll { $0.id == id }
       $0.excludedRanges = ranges.isEmpty ? nil : ranges
@@ -548,9 +624,11 @@ public final class MeetingStore: @unchecked Sendable {
   public func setSpeakerExcluded(
     _ label: String,
     excluded: Bool,
-    at paths: MeetingPaths
+    at paths: MeetingPaths,
+    expectedTranscriptFingerprint: String? = nil
   ) throws -> MeetingMetadata {
     try mutateMetadata(at: paths) {
+      try requireTranscriptFingerprint(expectedTranscriptFingerprint, at: paths)
       let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty else { return }
       var speakers = $0.excludedSpeakers ?? []
@@ -1171,21 +1249,97 @@ public final class MeetingStore: @unchecked Sendable {
     }
   }
 
-  /// request_id 校验与 transcript.md 原子替换共用 metadataLock。这样若用户此刻手动重转：
-  /// 要么先换 ID，旧恢复被拒；要么旧恢复先写完，随后新任务再写，永远是新结果最终胜出。
+  /// 正常完成与恢复共用发布边界：先归档原字节，再清旧人物关联，最后替换正文。
+  /// 共享锁不是跨文件磁盘事务。进程在后两步之间退出时可能留下旧正文和空标注，
+  /// 原标注已在历史中；不会留下新正文与旧标注。相同正文重放完全幂等。
+  public func publishTranscript(
+    _ content: String,
+    at paths: MeetingPaths,
+    ifCurrentRecoveryJobs expectedJobs: [PostMeetingRecoveryJob]? = nil
+  ) throws {
+    try synchronized {
+      var metadata = try read(from: paths)
+      try Self.requireCurrentRecoveryJobs(expectedJobs, in: metadata)
+      guard !metadata.finalized else { throw MeetingStoreError.finalized }
+      let history = TranscriptHistoryWriter(paths: paths, fileManager: fileManager)
+      try history.requireDirectory(paths.directory)
+      let oldMetadata = try history.readRegularIfPresent(paths.metadata)
+      guard let oldMetadata else { throw CocoaError(.fileReadNoSuchFile) }
+      let previous = try history.readRegularIfPresent(paths.transcript)
+      let replacement = Data(content.utf8)
+      guard previous != replacement else { return }
+      let suggestions = try history.readRegularIfPresent(paths.speakerSuggestionsSidecar)
+      let hasOldAssociations =
+        !(metadata.speakerNames ?? [:]).isEmpty
+        || !(metadata.speakerOverrides ?? [:]).isEmpty
+        || !(metadata.excludedSpeakers ?? []).isEmpty
+        || !(metadata.dismissedSpeakerSuggestions ?? []).isEmpty
+        || !(metadata.speakerChannelStats ?? [:]).isEmpty
+        || !(metadata.speakerAcousticObservations ?? [:]).isEmpty
+      if previous != nil || hasOldAssociations || suggestions != nil {
+        try history.archive(transcript: previous, metadata: oldMetadata, suggestions: suggestions)
+      }
+      metadata.speakerNames = nil
+      metadata.speakerOverrides = nil
+      metadata.excludedSpeakers = nil
+      metadata.dismissedSpeakerSuggestions = nil
+      metadata.speakerChannelStats = nil
+      metadata.speakerAcousticObservations = nil
+      let encoder = JSONEncoder()
+      encoder.dateEncodingStrategy = .iso8601
+      encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+      let clearedMetadata = try encoder.encode(metadata)
+      do {
+        // Recheck before each replacement. Never follow an output symlink or overwrite a
+        // concurrent external edit observed after the archive was prepared.
+        guard try history.readRegularIfPresent(paths.metadata) == oldMetadata,
+          try history.readRegularIfPresent(paths.transcript) == previous
+        else { throw MeetingStoreError.unsafeTranscriptPublicationPath }
+        try clearedMetadata.write(to: paths.metadata, options: .atomic)
+        guard try history.readRegularIfPresent(paths.transcript) == previous else {
+          throw MeetingStoreError.unsafeTranscriptPublicationPath
+        }
+        try replacement.write(to: paths.transcript, options: .atomic)
+      } catch {
+        let publicationError = error
+        do {
+          let currentTranscript = try history.readRegularIfPresent(paths.transcript)
+          if currentTranscript != previous {
+            guard currentTranscript == replacement else {
+              throw MeetingStoreError.transcriptPublicationRecoveryFailed
+            }
+            if let previous {
+              try previous.write(to: paths.transcript, options: .atomic)
+            } else {
+              try fileManager.removeItem(at: paths.transcript)
+            }
+          }
+          // Restore associations only after old text is confirmed/restored. An unknown external
+          // edit is never overwritten, and the complete archive remains available on failure.
+          guard try history.readRegularIfPresent(paths.transcript) == previous else {
+            throw MeetingStoreError.transcriptPublicationRecoveryFailed
+          }
+          let currentMetadata = try history.readRegularIfPresent(paths.metadata)
+          if currentMetadata != oldMetadata {
+            guard currentMetadata == clearedMetadata else {
+              throw MeetingStoreError.transcriptPublicationRecoveryFailed
+            }
+            try oldMetadata.write(to: paths.metadata, options: .atomic)
+          }
+        } catch {
+          throw MeetingStoreError.transcriptPublicationRecoveryFailed
+        }
+        throw publicationError
+      }
+    }
+  }
+
+  /// request_id 校验与发布共用 metadataLock；旧恢复结果不得覆盖手动重转的新任务。
   public func commitRecoveredTranscript(
     _ content: String,
     for candidate: PostMeetingRecoveryCandidate
   ) throws {
-    try synchronized {
-      let metadata = try read(from: candidate.paths)
-      try Self.requireCurrentRecoveryJobs(candidate.jobs, in: metadata)
-      try fileManager.createDirectory(
-        at: candidate.paths.transcript.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-      )
-      try Data(content.utf8).write(to: candidate.paths.transcript, options: .atomic)
-    }
+    try publishTranscript(content, at: candidate.paths, ifCurrentRecoveryJobs: candidate.jobs)
   }
 
   @discardableResult

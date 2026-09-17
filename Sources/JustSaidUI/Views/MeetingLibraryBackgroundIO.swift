@@ -31,21 +31,23 @@ public struct MeetingLibrarySnapshotLoader: Sendable {
 /// The full detail payload is deliberately independent from the list snapshot.  A large transcript
 /// should not delay the first useful library frame.
 public struct MeetingArtifactSnapshotLoader: Sendable {
-  private let operation: @Sendable (MeetingPaths) async -> MeetingArtifacts
+  private let operation: @Sendable (MeetingStore, MeetingPaths) async -> MeetingDetailSnapshot?
 
   public init(
-    operation: @escaping @Sendable (MeetingPaths) async -> MeetingArtifacts
+    operation: @escaping @Sendable (MeetingStore, MeetingPaths) async -> MeetingDetailSnapshot?
   ) {
     self.operation = operation
   }
 
-  public func load(from paths: MeetingPaths) async -> MeetingArtifacts {
-    await operation(paths)
+  public func load(from paths: MeetingPaths, using store: MeetingStore) async
+    -> MeetingDetailSnapshot?
+  {
+    await operation(store, paths)
   }
 
-  public static let live = MeetingArtifactSnapshotLoader { paths in
+  public static let live = MeetingArtifactSnapshotLoader { store, paths in
     let worker = Task.detached(priority: .userInitiated) {
-      MeetingArtifacts.read(from: paths)
+      try? store.readDetailSnapshot(at: paths)
     }
     return await withTaskCancellationHandler {
       await worker.value
@@ -253,8 +255,7 @@ public struct MeetingPackageExportRequest: Sendable {
   let title: String
   let startedAt: Date
   let endedAt: Date?
-  let names: [String: String]
-  let overrides: [String: String]
+  let meetingStore: MeetingStore
   let transcriptionStatus: String
   let paths: MeetingPaths
   let destinationDirectory: URL
@@ -263,8 +264,7 @@ public struct MeetingPackageExportRequest: Sendable {
     title: String,
     startedAt: Date,
     endedAt: Date?,
-    names: [String: String],
-    overrides: [String: String],
+    meetingStore: MeetingStore,
     transcriptionStatus: String,
     paths: MeetingPaths,
     destinationDirectory: URL
@@ -272,8 +272,7 @@ public struct MeetingPackageExportRequest: Sendable {
     self.title = title
     self.startedAt = startedAt
     self.endedAt = endedAt
-    self.names = names
-    self.overrides = overrides
+    self.meetingStore = meetingStore
     self.transcriptionStatus = transcriptionStatus
     self.paths = paths
     self.destinationDirectory = destinationDirectory
@@ -315,14 +314,15 @@ private enum MeetingLibraryExportWorker {
   static func exportPackage(_ request: MeetingPackageExportRequest) async throws -> URL {
     let worker = Task.detached(priority: .userInitiated) {
       try Task.checkCancellation()
-      let artifacts = MeetingArtifacts.read(from: request.paths)
+      let snapshot = try request.meetingStore.readDetailSnapshot(at: request.paths)
+      let artifacts = snapshot.artifacts
       guard let document = MeetingArtifactProjection.onePager(from: artifacts) else {
         throw MeetingPackageExportError.missingMinutes
       }
       let participants = MeetingArtifactProjection.participants(
         transcript: artifacts.transcript,
-        names: request.names,
-        overrides: request.overrides
+        names: snapshot.transcript.metadata.speakerNames ?? [:],
+        overrides: snapshot.transcript.metadata.speakerOverrides ?? [:]
       )
       let output = try MeetingPackageExporter().export(
         title: request.title,
@@ -333,7 +333,8 @@ private enum MeetingLibraryExportWorker {
         paths: request.paths,
         document: document,
         hasStructuredMinutes: artifacts.structuredMinutes != nil,
-        to: request.destinationDirectory
+        to: request.destinationDirectory,
+        expectedTranscriptFingerprint: snapshot.transcript.transcriptFingerprint
       )
       if Task.isCancelled {
         try? FileManager.default.removeItem(at: output)

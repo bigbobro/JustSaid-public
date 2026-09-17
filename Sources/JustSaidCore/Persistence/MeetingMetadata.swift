@@ -565,7 +565,8 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
   /// - `postMeetingSubmittedAt` 非空 = 确证已提交 → false;
   /// - 阶段史为 nil = 旧档(request_id 落盘晚于 submit 的年代)→ 必须当已提交 → false;
   /// - 阶段史只含提交前阶段(processingStarted/composing/uploading/submitting,
-  ///   忽略 failed)才判从未提交。**不能只看「有史 + 无 submittedAt」**:续查(resume)
+  ///   以及本地回声副本的 echoReductionInputComposed/echoReductionFallback,忽略 failed)
+  ///   才判从未提交。**不能只看「有史 + 无 submittedAt」**:续查(resume)
   ///   会写入 vendorQueued/resultReceived 等阶段却从不写 submittedAt,那种史意味着
   ///   任务确实在火山侧存在过,误判成未提交会自动重新 submit——重复计费。
   public var hasNeverSubmittedPostMeetingJob: Bool {
@@ -577,6 +578,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     }
     let preSubmitStages: Set<String> = [
       "processingStarted", "composing", "uploading", "submitting",
+      "echoReductionInputComposed", "echoReductionFallback",
     ]
     return history.map(\.stage)
       .filter { $0 != "failed" }

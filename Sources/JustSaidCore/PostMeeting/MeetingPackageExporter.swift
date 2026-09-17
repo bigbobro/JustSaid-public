@@ -35,7 +35,8 @@ public struct MeetingPackageExporter {
     paths: MeetingPaths,
     document: MeetingMinutesDocument,
     hasStructuredMinutes: Bool,
-    to destinationDirectory: URL
+    to destinationDirectory: URL,
+    expectedTranscriptFingerprint: String? = nil
   ) throws -> URL {
     var isDirectory: ObjCBool = false
     guard
@@ -50,6 +51,11 @@ public struct MeetingPackageExporter {
 
     guard let transcript = nonEmptyData(at: paths.transcript) else {
       throw MeetingPackageExportError.missingTranscript
+    }
+    if let expectedTranscriptFingerprint,
+      MinutesFingerprint.hex(of: transcript) != expectedTranscriptFingerprint
+    {
+      throw MeetingStoreError.transcriptChanged
     }
     guard
       let activeMinutes =
