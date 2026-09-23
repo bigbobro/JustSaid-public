@@ -6,15 +6,21 @@ import SwiftUI
 public struct ChapterDirectoryView: View {
   let topics: [SummaryTopic]
   let nowCoveredLabel: String?
+  /// 会后看转写时,一行标题回答不了「凭什么这是一章」,点进去只能落到第一句
+  /// (owner 2026-09-20)。话题自己的要点就是答案,它一直在数据里,只是没画出来。
+  /// 会中那一份目录是边聊边长的,要点还在变,所以默认关,只有会后的转写页打开。
+  let showsBullets: Bool
   let onSelectTopic: (UUID) -> Void
 
   public init(
     topics: [SummaryTopic],
     nowCoveredLabel: String? = nil,
+    showsBullets: Bool = false,
     onSelectTopic: @escaping (UUID) -> Void
   ) {
     self.topics = topics
     self.nowCoveredLabel = nowCoveredLabel
+    self.showsBullets = showsBullets
     self.onSelectTopic = onSelectTopic
   }
 
@@ -46,13 +52,18 @@ public struct ChapterDirectoryView: View {
         Button {
           onSelectTopic(topic.id)
         } label: {
-          row(
-            color: Tokens.Color.chapterAccent(index),
-            title: topic.title,
-            rangeLabel: topic.timeRangeLabel,
-            hasVisualization: topic.hasVisualization,
-            isAccent: false
-          )
+          VStack(alignment: .leading, spacing: .zero) {
+            row(
+              color: Tokens.Color.chapterAccent(index),
+              title: topic.title,
+              rangeLabel: topic.timeRangeLabel,
+              hasVisualization: topic.hasVisualization,
+              isAccent: false
+            )
+            if showsBullets {
+              bullets(topic)
+            }
+          }
         }
         .buttonStyle(.plain)
         .hoverRowBackground()
@@ -70,6 +81,35 @@ public struct ChapterDirectoryView: View {
         )
         .runtimeAccessibilityIdentifier("chapter.now")
       }
+    }
+  }
+
+  /// 这一章聊了什么:最多三条要点。三条以上再列就成了第二份纪要,
+  /// 目录的活是让你决定跳不跳,不是替代正文。
+  @ViewBuilder
+  private func bullets(_ topic: SummaryTopic) -> some View {
+    let lines = topic.bullets.prefix(3)
+    if !lines.isEmpty {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
+        ForEach(lines) { bullet in
+          Text(bullet.text.plainText)
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink3)
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if topic.bullets.count > lines.count {
+          Text("还有 \(topic.bullets.count - lines.count) 条")
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink4)
+        }
+      }
+      .padding(.leading, Tokens.Spacing.xl + Tokens.V1.Space.md)
+      .padding(.trailing, Tokens.Spacing.xl)
+      .padding(.bottom, Tokens.V1.Space.xs)
+      .runtimeAccessibilityIdentifier("chapter.bullets")
     }
   }
 

@@ -990,22 +990,9 @@ public struct PostMeetingPipeline: Sendable {
       do {
         report(.composing)
         recordStage("composing", context: context, paths: input.paths)
-        stereoURL = try await Self.makeStereoUploadCopy(
-          paths: input.paths,
-          onSelected: { selected in
-            recordStage(
-              "echoReductionInputComposed",
-              detail:
-                "generation=\(selected.deletingLastPathComponent().lastPathComponent) engine=SpeexDSP-1.2.1",
-              context: context, paths: input.paths)
-          },
-          onFallback: { reason in
-            recordStage(
-              "echoReductionFallback", detail: reason, context: context, paths: input.paths)
-            Self.logger.notice(
-              "回声副本回退原录音 reason=\(reason, privacy: .public) meeting=\(context.meetingShortID, privacy: .public)"
-            )
-          }
+        stereoURL = try await PostMeetingStereoAudioComposer.makeUploadCopy(
+          microphoneURL: input.paths.microphoneAudio,
+          systemURL: input.paths.systemAudio
         )
       } catch is CancellationError {
         throw CancellationError()
@@ -1071,43 +1058,6 @@ public struct PostMeetingPipeline: Sendable {
       audioDurations: audioDurations,
       context: context
     )
-  }
-
-  static func makeStereoUploadCopy(
-    paths: MeetingPaths,
-    resolve: @Sendable (URL) async throws -> URL? = {
-      try await PostMeetingEchoReductionService.shared.selectedMicrophone(at: $0)
-    },
-    compose: @Sendable (URL, URL) async throws -> URL = {
-      try await PostMeetingStereoAudioComposer.makeUploadCopy(microphoneURL: $0, systemURL: $1)
-    },
-    onSelected: @Sendable (URL) -> Void = { _ in },
-    onFallback: @Sendable (String) -> Void = { _ in }
-  ) async throws -> URL {
-    try Task.checkCancellation()
-    var microphone = paths.microphoneAudio
-    do {
-      if let selected = try await resolve(paths.directory) { microphone = selected }
-    } catch is CancellationError {
-      throw CancellationError()
-    } catch {
-      try Task.checkCancellation()
-      onFallback("selection_invalid")
-    }
-    try Task.checkCancellation()
-    do {
-      let output = try await compose(microphone, paths.systemAudio)
-      if microphone != paths.microphoneAudio { onSelected(microphone) }
-      return output
-    } catch is CancellationError {
-      throw CancellationError()
-    } catch {
-      try Task.checkCancellation()
-      guard microphone != paths.microphoneAudio else { throw error }
-      // Retry the original stereo input before the existing dual-mono fallback.
-      onFallback("derived_composition_failed")
-      return try await compose(paths.microphoneAudio, paths.systemAudio)
-    }
   }
 
   private static func isNonEmptyAudioFile(_ url: URL) -> Bool {

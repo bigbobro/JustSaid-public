@@ -96,7 +96,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate {
   }
 
   /// 最终退出边界:只有当前这次 quit 来自已加载 Sparkle 框架的 Updater.app 时才介入;
-  /// ⌘Q、菜单栏退出和其他发送者一律沿用原退出行为。
+  /// ⌘Q、菜单栏退出和其他发送者这里一律放行,录制中是否先问一句由退出确认(`QuitConfirmation`)决定。
   private func terminationReply() -> NSApplication.TerminateReply {
     let updaterAppURL = Bundle(for: SPUUpdater.self).url(forAuxiliaryExecutable: "Updater.app")
     guard

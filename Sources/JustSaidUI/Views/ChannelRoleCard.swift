@@ -10,18 +10,24 @@ import SwiftUI
 ///
 /// 公开是为了让 `UIHierarchyVerification` 能独立摆出卡片做反向断言
 /// (卡内不得出现地址/密钥输入)。
-public struct ChannelRoleCard: View {
+/// 泛型类型里不能有 static stored property,常量挪到外面。
+enum ChannelRoleCardConstants {
+  static let automaticSelection = "automatic-language-routing"
+}
+
+public struct ChannelRoleCard<Extra: View>: View {
   private let role: ProviderRole
   private let registry: ProviderRegistry
   @ObservedObject private var settingsStore: ProviderSettingsStore
   private let secretDigest: any StoredSecretDigest
   private let connectionTestAction: (() -> Void)?
   private let modelAssetManager: LocalModelAssetManager?
+  /// 挂在本组末尾的额外行。设计稿把「本机模型」并进会中速记、把「对象存储」并进
+  /// 会后精转——它们是这个角色要配的东西,不是另一张卡。
+  @ViewBuilder private let extraRows: () -> Extra
 
   @State private var lastSavedAt: Date?
   @State private var connectionState: ConnectionTestState
-
-  private static let automaticSelection = "automatic-language-routing"
 
   public init(
     role: ProviderRole,
@@ -30,7 +36,8 @@ public struct ChannelRoleCard: View {
     secretDigest: any StoredSecretDigest,
     connectionTestState: ConnectionTestState = .idle,
     connectionTestAction: (() -> Void)? = nil,
-    modelAssetManager: LocalModelAssetManager? = nil
+    modelAssetManager: LocalModelAssetManager? = nil,
+    @ViewBuilder extraRows: @escaping () -> Extra
   ) {
     self.role = role
     self.registry = registry
@@ -38,6 +45,7 @@ public struct ChannelRoleCard: View {
     self.secretDigest = secretDigest
     self.connectionTestAction = connectionTestAction
     self.modelAssetManager = modelAssetManager
+    self.extraRows = extraRows
     _connectionState = State(initialValue: connectionTestState)
   }
 
@@ -95,140 +103,160 @@ public struct ChannelRoleCard: View {
   private var subtitle: String {
     switch role {
     case .liveTranscriber:
-      return descriptor?.requiresAPIKey == false ? "本地引擎 · 无需密钥" : "云端 · 按量"
+      return descriptor?.requiresAPIKey == false ? "在本机转写，无需密钥。" : "云端按量使用，转写会中对话。"
     case .batchASR:
-      return "云端 · 按量 · 对象存储在下方独立配置"
-    case .liveSummaryLLM, .minutesLLM:
-      return "云端 · 按量 · 独立选择，不与其他角色同步"
+      return "云端按量使用，重新整理整场转写。"
+    case .liveSummaryLLM:
+      return "云端按量使用，与会后纪要分别选择。"
+    case .minutesLLM:
+      return "云端按量使用，与会中总结分别选择。"
     }
   }
 
   public var body: some View {
-    RoleCardShell(title: role.displayName, subtitle: subtitle) {
-      channelPicker
+    SettingsFormGroup(role.displayName, hint: subtitle) {
+      channelRow
 
       if isVolcengineASR {
-        asrResourcePicker
+        asrResourceRow
       } else if role != .liveTranscriber || descriptor?.requiresAPIKey == true {
-        modelControl
+        modelRow
       }
 
       if role.isLLMRole {
-        reasoningPicker
+        reasoningRow
       }
 
-      // 两个 LLM 角色都有「测试连接」(08-13 D3:纪要角色此前是遗漏不是设计——
-      // ConnectionProbe 的 30 秒外层硬超时本来就为纪要角色的 600s 超时准备)。
-      // ASR 角色维持无按钮:无安全轻量探针的 adapter 不显示测试入口。
+      // 推理强度的提示是**后果**(选到中高档会中总结可能缺轮),不是解释,所以留着。
+      if role.isLLMRole, let hint = reasoningHint {
+        SettingsFormNote(hint, tone: .warn)
+      }
+
+      extraRows()
+
+      // 「当前生效」只在它**和你刚选的不一样**时才说话。
+      //
+      // 本地引擎那一组,下拉里写着「自动(Qwen3-ASR,质量优先,会有数秒延迟)」,
+      // 下面又来一条「当前生效:自动路由 · Qwen3-ASR 质量优先」——同一件事说第三遍。
+      // 它真正该守的是「你改了但还没保存」「保存的和在跑的不是一个」这种落差,
+      // 没有落差就什么都不显示(设计系统:没有状态就什么都不显示)。
+      if descriptor?.requiresAPIKey == true || lastSavedAt != nil {
+        SettingsFormNote(
+          ProviderEffectiveSummary.text(segments: effectiveSegments, savedAt: lastSavedAt))
+      }
+
+      // 连接测试的**结果**整行宽:出错时是一段带原因的长文,塞不进控件行。
+      if role.isLLMRole, let detail = connectionState.settingsNote {
+        SettingsFormNote(detail, tone: connectionState.isFailure ? .warn : .meta)
+      }
+    }
+    .runtimeAccessibilityIdentifier("settings.role-card.\(role.rawValue)")
+  }
+
+  /// 渠道行。下拉只列**声明支持该角色**的渠道——能力不兼容的选项不该出现在界面上。
+  /// 两个 LLM 角色在同一行右边带「测试连接」(08-13 D3:纪要角色此前是遗漏不是设计——
+  /// ConnectionProbe 的 30 秒外层硬超时本来就为纪要角色的 600s 超时准备)。
+  /// ASR 角色维持无按钮:无安全轻量探针的 adapter 不显示测试入口。
+  @ViewBuilder
+  private var channelRow: some View {
+    SettingsFormRow(role == .liveTranscriber ? "转写引擎" : "渠道", isFirst: true) {
+      V1Dropdown(
+        value: channelSelection.wrappedValue == ChannelRoleCardConstants.automaticSelection
+          ? "自动（Qwen3-ASR，质量优先，会有数秒延迟）" : channelLabel(effectiveChannel),
+        identifier: "settings.channel-select.\(role.rawValue)"
+      ) {
+        if role == .liveTranscriber {
+          Button("自动（Qwen3-ASR，质量优先，会有数秒延迟）") {
+            channelSelection.wrappedValue = ChannelRoleCardConstants.automaticSelection
+          }
+        }
+        ForEach(channels) { candidate in
+          Button(channelLabel(candidate)) { channelSelection.wrappedValue = candidate.id }
+            .disabled(isChannelDisabled(candidate))
+        }
+      }
+      .frame(width: Tokens.V1.Size.settingsModelField)
+      .help(
+        channelSelection.wrappedValue == ChannelRoleCardConstants.automaticSelection
+          ? "自动（Qwen3-ASR，质量优先，会有数秒延迟）" : channelLabel(effectiveChannel)
+      )
+
       if role.isLLMRole {
-        ConnectionTestRow(state: connectionState) {
+        Button(connectionState.isRunning ? "测试中…" : "测试连接") {
           if let connectionTestAction {
             connectionTestAction()
           } else {
             runRoleConnectionTest()
           }
         }
+        .buttonStyle(.v1Outline)
+        .disabled(connectionState.isRunning)
         .runtimeAccessibilityIdentifier("settings.role-test.\(role.rawValue)")
-      }
-
-      if descriptor?.requiresAPIKey == false {
-        Label("本地引擎无需 API 密钥", systemImage: "lock.shield")
-          .font(.system(size: Tokens.FontSize.ui))
-          .foregroundStyle(Tokens.Color.ink3)
-      }
-
-      EffectiveConfigurationRow(
-        summary: ProviderEffectiveSummary.text(
-          segments: effectiveSegments,
-          savedAt: lastSavedAt
-        )
-      )
-    }
-    .runtimeAccessibilityIdentifier("settings.role-card.\(role.rawValue)")
-  }
-
-  /// 渠道下拉只列**声明支持该角色**的渠道——能力不兼容的选项不该出现在界面上。
-  @ViewBuilder
-  private var channelPicker: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-      Text(role == .liveTranscriber ? "转写引擎" : "渠道")
-        .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink3)
-      Picker(role == .liveTranscriber ? "转写引擎" : "渠道", selection: channelSelection) {
-        if role == .liveTranscriber {
-          Text("自动（Qwen3-ASR，质量优先，会有数秒延迟）")
-            .tag(Self.automaticSelection)
-        }
-        ForEach(channels) { candidate in
-          Text(channelLabel(candidate)).tag(candidate.id)
-            .disabled(isChannelDisabled(candidate))
+        if connectionState.isRunning {
+          BreathingDots()
         }
       }
-      .labelsHidden()
     }
-    .runtimeAccessibilityIdentifier("settings.channel-select.\(role.rawValue)")
   }
 
-  /// 模型:渠道声明了列表就只能从列表挑(不支持的组合在界面上就不存在);
+  /// 模型行。渠道声明了列表就只能从列表挑(不支持的组合在界面上就不存在);
   /// 空列表 = 不约束,保留自由填写(很多网关不实现 /models)。
+  /// 推理强度另起一行，为每个控件保留完整的操作宽度。
   @ViewBuilder
-  private var modelControl: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-      Text("模型")
-        .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink3)
+  private var modelRow: some View {
+    SettingsFormRow("模型") {
       if effectiveChannel.availableModels.isEmpty {
-        TextField("自由填写，如 deepseek-v4-flash", text: modelTextBinding)
-          .textFieldStyle(.plain)
-          .font(.system(size: Tokens.FontSize.body))
-          .padding(.horizontal, Tokens.Spacing.xsm)
-          .padding(.vertical, Tokens.Spacing.xs)
-          .insetPanel()
-          .accessibilityLabel("模型名称")
+        V1TextField(
+          placeholder: "自由填写，如 deepseek-v4-flash", text: modelTextBinding,
+          identifier: "settings.model-input.\(role.rawValue)"
+        )
+        .frame(width: Tokens.V1.Size.settingsModelField)
+        .accessibilityLabel("模型名称")
       } else {
-        Picker("模型", selection: modelPickerBinding) {
+        V1Dropdown(
+          value: modelPickerBinding.wrappedValue,
+          identifier: "settings.model-select.\(role.rawValue)"
+        ) {
           ForEach(effectiveChannel.availableModels, id: \.self) { model in
-            Text(model).tag(model)
+            Button(model) { modelPickerBinding.wrappedValue = model }
           }
         }
-        .labelsHidden()
+        .frame(width: Tokens.V1.Size.settingsModelField)
       }
     }
     .runtimeAccessibilityIdentifier("settings.model.\(role.rawValue)")
+  }
+
+  private var reasoningRow: some View {
+    SettingsFormRow("推理强度") {
+      // 下拉只列这个渠道真支持的档:选了也不生效的选项不该出现在界面上。
+      V1Dropdown(
+        value: reasoningBinding.wrappedValue.displayName,
+        identifier: "settings.reasoning.\(role.rawValue)"
+      ) {
+        ForEach(settingsStore.supportedReasoningLevels(for: role), id: \.self) { level in
+          Button(level.displayName) { reasoningBinding.wrappedValue = level }
+        }
+      }
+      .frame(width: Tokens.V1.Size.settingsModelField)
+    }
+    .runtimeAccessibilityIdentifier("settings.reasoning-row.\(role.rawValue)")
   }
 
   /// 火山精转的模型版本是角色级资源选择,不进渠道模型列表。
   @ViewBuilder
-  private var asrResourcePicker: some View {
-    LabeledField(label: "模型版本") {
-      Picker("", selection: asrResourceSelection) {
-        Text("2.0 · 质量优先").tag("volc.seedasr.auc")
-        Text("1.0 · 额度充裕").tag("volc.bigasr.auc")
-      }
-      .pickerStyle(.segmented)
-      .frame(width: 240)
+  private var asrResourceRow: some View {
+    SettingsFormRow("模型版本") {
+      V1SegmentedPicker(
+        "模型版本", selection: asrResourceSelection,
+        options: [
+          .init("volc.seedasr.auc", "2.0 · 质量优先"),
+          .init("volc.bigasr.auc", "1.0 · 额度充裕"),
+        ]
+      )
+      .fixedSize()
     }
     .runtimeAccessibilityIdentifier("settings.model.\(role.rawValue)")
-  }
-
-  @ViewBuilder
-  private var reasoningPicker: some View {
-    // 下拉只列这个渠道真支持的档:选了也不生效的选项不该出现在界面上。
-    VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-      Picker("推理强度", selection: reasoningBinding) {
-        ForEach(settingsStore.supportedReasoningLevels(for: role), id: \.self) { level in
-          Text(level.displayName).tag(level)
-        }
-      }
-      .font(.system(size: Tokens.FontSize.bodyMinimum))
-      if let hint = reasoningHint {
-        Text(hint)
-          .font(.system(size: Tokens.FontSize.secondary))
-          .foregroundStyle(Tokens.Color.ink3)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-    .runtimeAccessibilityIdentifier("settings.reasoning.\(role.rawValue)")
   }
 
   private var effectiveSegments: [String?] {
@@ -243,7 +271,7 @@ public struct ChannelRoleCard: View {
         binding.selectedASRResourceID == "volc.bigasr.auc" ? "模型 1.0" : "模型 2.0",
         usingNewKey
           ? ProviderEffectiveSummary.keySegment(
-            label: "key",
+            label: "密钥",
             suffix: secretDigest.suffix(slot: .apiKey, forChannel: effectiveChannel)
           )
           : (effectiveChannel.appID.isEmpty
@@ -259,7 +287,7 @@ public struct ChannelRoleCard: View {
       channelName,
       model,
       ProviderEffectiveSummary.keySegment(
-        label: "key",
+        label: "密钥",
         suffix: secretDigest.suffix(slot: .apiKey, forChannel: effectiveChannel)
       ),
     ]
@@ -283,12 +311,12 @@ public struct ChannelRoleCard: View {
     Binding(
       get: {
         if role == .liveTranscriber, binding.usesAutomaticLanguageRouting {
-          return Self.automaticSelection
+          return ChannelRoleCardConstants.automaticSelection
         }
         return effectiveChannel.id
       },
       set: { newValue in
-        if newValue == Self.automaticSelection {
+        if newValue == ChannelRoleCardConstants.automaticSelection {
           settingsStore.selectAutomaticLiveTranscriberRouting()
         } else if let candidate = channels.first(where: { $0.id == newValue }) {
           if isChannelDisabled(candidate) { return }
@@ -372,7 +400,10 @@ public struct ChannelRoleCard: View {
       }
       return nil
     case .minutesLLM:
-      return "会后纪要不赶时间，默认取这家可用的最高档。"
+      // 这里原来有一句「会后纪要不赶时间,默认取这家可用的最高档。」——
+      // 它不是后果,是解释,而且挂在警告样式下像是出了事(设计系统原则 1)。
+      // 当前档位下拉自己写着,不用再说一遍。
+      return nil
     case .liveTranscriber, .batchASR:
       return nil
     }
@@ -396,5 +427,28 @@ public struct ChannelRoleCard: View {
         connectionState = .failed(message: error.localizedDescription)
       }
     }
+  }
+}
+
+extension ChannelRoleCard where Extra == EmptyView {
+  /// 不挂额外行的角色组(会中总结 / 会后纪要)。
+  public init(
+    role: ProviderRole,
+    registry: ProviderRegistry,
+    settingsStore: ProviderSettingsStore,
+    secretDigest: any StoredSecretDigest,
+    connectionTestState: ConnectionTestState = .idle,
+    connectionTestAction: (() -> Void)? = nil,
+    modelAssetManager: LocalModelAssetManager? = nil
+  ) {
+    self.init(
+      role: role,
+      registry: registry,
+      settingsStore: settingsStore,
+      secretDigest: secretDigest,
+      connectionTestState: connectionTestState,
+      connectionTestAction: connectionTestAction,
+      modelAssetManager: modelAssetManager,
+      extraRows: { EmptyView() })
   }
 }

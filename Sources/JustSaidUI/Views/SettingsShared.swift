@@ -11,21 +11,24 @@ struct RoleCardShell<Content: View>: View {
   @ViewBuilder let content: () -> Content
 
   var body: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.smd) {
-      VStack(alignment: .leading, spacing: Tokens.Spacing.hairline) {
-        Text(title)
-          .font(.system(size: Tokens.FontSize.cardTitle, weight: .semibold))
-          .foregroundStyle(Tokens.Color.ink)
-        Text(subtitle)
-          .font(.system(size: Tokens.FontSize.ui))
-          .foregroundStyle(Tokens.Color.ink3)
-      }
+    // 2026-09-20 并到会议页那套积木:细边 + paper-2 底 + 大圆角、标题在块内、不带阴影。
+    // 原来是 raised 白底 + 描边 + 投影 + 32 内边距的大卡,标题 17 号——同一个 app 里
+    // 设置页和会议页长着两种盒子,而且留白松到一屏放不下两张卡。
+    // 副题挪到标题行右侧(SectionHeaderRow 的既有形态),不再自己占一行。
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
+      SectionHeaderRow(title: title, subtitle: subtitle)
       content()
     }
-    .padding(Tokens.Spacing.xl)
+    .padding(Tokens.V1.Space.md)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .cardShell()
-    .tokenShadow(Tokens.Shadow.sh1)
+    // 用 background(_:in:) + strokeBorder,不要 background + clipShape:后者会把这一块
+    // 推到离屏图层渲染,文字的次像素抗锯齿被关掉,看着发糊。
+    .background(
+      Tokens.V1.Color.paper2, in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg))
+    .overlay {
+      RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg)
+        .strokeBorder(Tokens.V1.Color.rule, lineWidth: Tokens.V1.Size.controlRuleWidth)
+    }
   }
 }
 
@@ -138,12 +141,9 @@ public enum ProviderEffectiveSummary {
     return "\(label) ····\(suffix)"
   }
 
+  /// 「已保存 17:00」的钟点。走 `ChineseDateText` 与别处同一套时区与缓存。
   private static func timeLabel(_ date: Date) -> String {
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "HH:mm"
-    return formatter.string(from: date)
+    ChineseDateText.time(date)
   }
 }
 
@@ -273,6 +273,27 @@ public enum ConnectionTestState: Equatable, Sendable {
   case failed(message: String)
 
   var isRunning: Bool { self == .running }
+
+  public var isFailure: Bool {
+    if case .failed = self { return true }
+    return false
+  }
+
+  /// 设置页表单里的结果整行宽:失败时是一段带服务端原文的长文,塞不进控件行。
+  /// 措辞与 `ConnectionTestRow` 的四态一致,只是压成一行。
+  public var settingsNote: String? {
+    switch self {
+    case .idle:
+      return nil
+    case .running:
+      return "正在发一条最短的英文问句，等模型回话…最多等 30 秒。"
+    case .succeeded(let latency, let preview):
+      return "连接成功 · \(latency) ms · 模型回话：\(preview)"
+    case .failed(let message):
+      // 服务端原文照登:吞掉它等于让用户去猜自己是欠费还是没开权限。
+      return message
+    }
+  }
 }
 
 /// 测试连接文案:LLM 探针与对象存储 HEAD 自检共用四态行,措辞不同。

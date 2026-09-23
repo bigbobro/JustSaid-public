@@ -111,6 +111,131 @@ extension MeetingLibraryModel {
     }
   }
 
+  /// 一条认名证据在画面上要说清的三件事:它主张谁叫什么、这个主张是怎么来的、
+  /// 以及**原文到底怎么说的**。
+  ///
+  /// 为什么不直接用 `evidenceQuote`:那是提取模型自己写的引文,不保证等于锚点处的原话。
+  /// 2026-09-20 实测这场会 13 条建议里 7 条的引文根本不含被建议的名字,还有一条
+  /// (发言人 1 → 袁建嵩 @00:39:13)的引文与该时刻的转写对不上。锚点是可信的,引文不是。
+  /// 所以按锚点回原文取真话;取不到才退回引文,并如实标出。
+  struct NamingEvidence: Identifiable {
+    let suggestion: SpeakerNameSuggestion
+    /// 锚点处那一段的真实说话人。`addressed` 证据天然是**别人**在叫他,
+    /// 所以这里经常不是 `suggestion.label`——画面必须说出来,否则点过去像跳错了。
+    let spokenBy: String?
+    let quote: String
+    /// 引文取自原文(true)还是退回模型写的那句(false)。
+    let fromTranscript: Bool
+    /// 原话里根本没有这个名字。这条证据支撑不了它的主张,排最后并标出来。
+    let nameMissingFromQuote: Bool
+    /// 锚点之后第一个换人说话的段落。`addressed` 证据里,被叫的人通常就是接话的那个。
+    let answeredBy: String?
+    /// 拿转写核对这条归属的结论。**只报告,不改数据**——修归属是推理机制的事,
+    /// 不是这一批前端重构的事(owner 2026-09-20)。
+    let verdict: Verdict
+
+    enum Verdict {
+      /// 说这句的不是他、接话的是他——方向对。
+      case consistent
+      /// 锚点那句就是他自己说的。没人用第三人称叫自己,所以这条归属反了:
+      /// 他是**叫别人**的那个,名字应该归接话的人。
+      case inverted
+      /// 说这句的不是他,但接话的也不是他。看不出来。
+      case unclear
+      /// 不是称呼级证据,或者锚点在原文里找不到,核不了。
+      case notChecked
+    }
+    var id: String { "\(suggestion.label)|\(suggestion.name)|\(suggestion.anchor?.timecode ?? "-")" }
+
+    var howLabel: String {
+      switch suggestion.level {
+      case .selfIntro: return "他自己说的"
+      case .addressed: return "别人这么叫他"
+      case .thirdParty: return "别人提到他"
+      }
+    }
+
+    /// 核对结论的一句话说明;nil = 不用说。
+    var verdictNote: String? {
+      switch verdict {
+      case .consistent:
+        return answeredBy.map { "接话的是「\($0)」——对得上" }
+      case .inverted:
+        let who = answeredBy.map { "「\($0)」" } ?? "接话的那个人"
+        return "这句是「\(suggestion.label)」自己说的——他在叫别人。这个名字八成是 \(who) 的"
+      case .unclear:
+        return "接话的不是他，看不出来"
+      case .notChecked:
+        return nil
+      }
+    }
+
+    var verdictIsBad: Bool { verdict == .inverted }
+  }
+
+  /// 把建议配上锚点处的真实原话与真实说话人,按可信度排序(原话里有名字的在前)。
+  func namingEvidence(
+    _ suggestions: [SpeakerNameSuggestion],
+    of item: MeetingLibraryItem
+  ) -> [NamingEvidence] {
+    let rows = transcriptPresentation(for: item).rows
+    var speech: [TranscriptSpeechLine] = []
+    for row in rows {
+      if case .speech(let line) = row { speech.append(line) }
+    }
+    var indexByTimecode: [String: Int] = [:]
+    for (index, line) in speech.enumerated() where indexByTimecode[line.timestamp] == nil {
+      indexByTimecode[line.timestamp] = index
+    }
+    return suggestions.map { suggestion in
+      // 只认时间戳精确相等。取到隔壁那一段比退回引文更糟——它会挂上一个错的说话人。
+      let index = suggestion.anchor.flatMap { indexByTimecode[$0.timecode] }
+      let line = index.map { speech[$0] }
+      let quote =
+        line?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? suggestion.evidenceQuote
+      let needle = suggestion.name.count > 2 ? String(suggestion.name.suffix(2)) : suggestion.name
+      let answeredBy = index.flatMap { Self.nextDifferentSpeaker(after: $0, in: speech) }
+      let verdict: NamingEvidence.Verdict
+      if suggestion.level != .addressed || line == nil {
+        verdict = .notChecked
+      } else if line?.speaker == suggestion.label {
+        verdict = .inverted
+      } else if answeredBy == suggestion.label {
+        verdict = .consistent
+      } else {
+        verdict = .unclear
+      }
+      return NamingEvidence(
+        suggestion: suggestion,
+        spokenBy: line?.speaker,
+        quote: quote,
+        fromTranscript: line != nil,
+        nameMissingFromQuote: !quote.contains(suggestion.name) && !quote.contains(needle),
+        answeredBy: answeredBy,
+        verdict: verdict
+      )
+    }
+    // 站得住的排前面:先按核对结论,再按原话里有没有这个名字。
+    .sorted { lhs, rhs in
+      if lhs.verdictIsBad != rhs.verdictIsBad { return !lhs.verdictIsBad }
+      return !lhs.nameMissingFromQuote && rhs.nameMissingFromQuote
+    }
+  }
+
+  /// 锚点之后第一个换人说的那一段。只往后看几段——隔太远就不是在回应这句称呼了。
+  nonisolated private static func nextDifferentSpeaker(
+    after index: Int,
+    in speech: [TranscriptSpeechLine]
+  ) -> String? {
+    let speaker = speech[index].speaker
+    for offset in 1...5 {
+      let next = index + offset
+      guard next < speech.count else { return nil }
+      if speech[next].speaker != speaker { return speech[next].speaker }
+    }
+    return nil
+  }
+
   /// 采纳 = 与手动改名完全同一条通道(setSpeakerName);真名随之在转写呈现生效。
   public func adoptNamingSuggestion(
     _ suggestion: SpeakerNameSuggestion,

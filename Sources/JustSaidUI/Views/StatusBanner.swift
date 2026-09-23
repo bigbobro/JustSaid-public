@@ -43,50 +43,28 @@ struct StatusBannerCore: View {
   @ViewBuilder
   var body: some View {
     if stage != .none {
-      HStack(spacing: Tokens.Spacing.xsm) {
-        switch stage {
-        case .running(let detail):
-          BreathingDots()
-          // 文案只跟真实进度事件;无事件时用中性「处理中」,不编造阶段名。
-          Text(detail ?? "处理中…")
-        case .finished(let notice):
-          Image(systemName: "checkmark.circle.fill")
-          Text(notice)
-        case .failed(let reason):
-          Image(systemName: "exclamationmark.triangle.fill")
-          if let failedReasonProbeID {
-            Text(failedText(reason))
-              .runtimeAccessibilityIdentifier(failedReasonProbeID)
-          } else {
-            Text(failedText(reason))
-          }
-        case .none:
-          EmptyView()
-        }
-
-        Spacer()
-
+      // 2026-09-20 并进 NoticeShell:原来失败态用 amber、其余用 acSoft(绿),
+      // 而设计系统那张分级表写的是**警示 = warn-soft 底 + warn 图标,
+      // 信息 = paper-2 底 + accent 图标**。绿底绿勾是另起的一套,
+      // 在截图装置里把十三种摆在一起才看出来(owner 2026-09-20 要的验收材料)。
+      NoticeShell(
+        level: isFailure ? .warn : .info,
+        systemImage: iconName,
+        text: bodyText
+      ) {
         if let action {
           Button(action.title) {
             action.onTap()
           }
           .buttonStyle(.textAction)
-          .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .semibold))
-          .foregroundStyle(action.tint ?? Tokens.Color.acDeep)
+          .font(Tokens.V1.Text.label.font)
+          .fontWeight(.semibold)
+          .foregroundStyle(isFailure ? Tokens.V1.Color.warn : Tokens.V1.Color.accent)
           .disabled(!action.isEnabled)
           .runtimeAccessibilityIdentifier(action.probeID)
         }
       }
-      .font(.system(size: Tokens.FontSize.uiEmphasis))
-      .foregroundStyle(isFailure ? Tokens.Color.warn : Tokens.Color.acDeep)
-      .padding(.horizontal, horizontalPadding)
-      .padding(.vertical, Tokens.Spacing.xs)
-      .background(isFailure ? Tokens.Color.amber : Tokens.Color.acSoft)
-      .overlay(alignment: .bottom) {
-        Rectangle()
-          .fill(isFailure ? Tokens.Color.amberLine : Tokens.Color.acLine)
-          .frame(height: 1)
-      }
+      .modifier(FailedReasonProbe(id: isFailure ? failedReasonProbeID : nil))
       .modifier(ContainChildrenIfNeeded(isEnabled: containsChildren))
       .runtimeAccessibilityIdentifier(probeID(stage))
     }
@@ -95,6 +73,39 @@ struct StatusBannerCore: View {
   private var isFailure: Bool {
     if case .failed = stage { return true }
     return false
+  }
+
+  private var iconName: String {
+    switch stage {
+    case .running: return "arrow.triangle.2.circlepath"
+    case .finished: return "checkmark.circle.fill"
+    case .failed: return "exclamationmark.triangle.fill"
+    case .none: return ""
+    }
+  }
+
+  private var bodyText: String {
+    switch stage {
+    // 文案只跟真实进度事件;无事件时说「会后处理中」,不编造阶段名。
+    // 原来是光秃秃一句「处理中…」,不说是什么在处理。
+    case .running(let detail): return detail ?? "会后处理中"
+    case .finished(let notice): return notice
+    case .failed(let reason): return failedText(reason)
+    case .none: return ""
+    }
+  }
+}
+
+/// 失败原因的探针标识挂在整条上——正文已经并进外壳,拿不到单独那一段 Text。
+private struct FailedReasonProbe: ViewModifier {
+  let id: String?
+
+  func body(content: Content) -> some View {
+    if let id {
+      content.runtimeAccessibilityIdentifier(id)
+    } else {
+      content
+    }
   }
 }
 

@@ -30,11 +30,12 @@ struct EditableMeetingTitle: View {
   }
 
   var body: some View {
-    HStack(spacing: Tokens.Spacing.xxs) {
+    HStack(spacing: Tokens.V1.Space.s2xs) {
       TextField("会议名称", text: $draft)
         .textFieldStyle(.plain)
-        .font(.system(size: Tokens.FontSize.headline, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink)
+        .lineLimit(1)
+        .font(.system(size: Tokens.V1.Text.barTitle.size, weight: .semibold))
+        .foregroundStyle(Tokens.V1.Color.ink)
         .focused(focus, equals: id)
         .onSubmit { commit() }
         .onChange(of: focus.wrappedValue) { previous, current in
@@ -49,19 +50,19 @@ struct EditableMeetingTitle: View {
         }
         .runtimeAccessibilityIdentifier("library.meeting-title")
       Image(systemName: "pencil")
-        .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink3)
+        .font(.system(size: Tokens.V1.Text.meta.size, weight: .semibold))
+        .foregroundStyle(Tokens.V1.Color.ink3)
         .opacity(isHovering || isFocused ? 1 : 0)
         .accessibilityHidden(true)
         .allowsHitTesting(false)
     }
     .background(
-      RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-        .fill(isHovering || isFocused ? Tokens.Color.cardWash : Color.clear)
+      RoundedRectangle(cornerRadius: Tokens.V1.Radius.md)
+        .fill(isHovering || isFocused ? Tokens.V1.Color.paper2 : Color.clear)
     )
     .contentShape(Rectangle())
     .onHover { isHovering = $0 }
-    .animation(reduceMotion ? nil : .easeOut(duration: Tokens.Motion.hover), value: isHovering)
+    .animation(reduceMotion ? nil : .easeOut(duration: Tokens.V1.Motion.fast), value: isHovering)
     .help("单击编辑会议名称")
   }
 
@@ -100,93 +101,21 @@ extension MeetingTagKind {
   }
 }
 
-/// 会议标签 chip:有值显示值,无值「+ 客户 / + 项目」灰态;点击行内编辑,
-/// 回车/失焦提交(空值即清除),Esc 取消——交互与 `EditableMeetingTitle` 同款,
-/// 但默认态是 chip 而不是常驻输入框:标签大多数时刻只是被看,不该长得像表单。
+/// Meeting tags use the same searchable directory and visible affordance as todo forms.
 struct EditableTagChip: View {
   let kind: MeetingTagKind
   let value: String?
+  var client = ""
+  @ObservedObject var directory = ClientProjectDirectory()
   let onCommit: (String) -> Void
 
-  @State private var isEditing = false
-  @State private var draft = ""
-  @FocusState private var isFocused: Bool
-
   var body: some View {
-    if isEditing {
-      TextField(kind.displayLabel, text: $draft)
-        .textFieldStyle(.plain)
-        .font(.system(size: Tokens.FontSize.secondary))
-        .frame(width: 120)
-        .focused($isFocused)
-        .onSubmit { commit() }
-        .onKeyPress(.escape) {
-          cancel()
-          return .handled
-        }
-        .onChange(of: isFocused) { previous, current in
-          // 失焦提交;Esc 已在按键一步先把编辑态收掉,这里不会二次提交。
-          if previous, !current, isEditing {
-            commit()
-          }
-        }
-        .padding(.horizontal, Tokens.Spacing.xsm)
-        .padding(.vertical, Tokens.Spacing.hairline)
-        .background(Tokens.Color.card, in: Capsule())
-        .overlay(Capsule().stroke(Tokens.Color.ac, lineWidth: 1))
-        .onAppear { isFocused = true }
-        .accessibilityLabel("编辑\(kind.displayLabel)标签")
-        .runtimeAccessibilityIdentifier("\(kind.chipIdentifier).editor")
-    } else {
-      Button {
-        draft = value ?? ""
-        isEditing = true
-      } label: {
-        HStack(spacing: Tokens.Spacing.hairline) {
-          Image(systemName: kind.symbolName)
-            .font(.system(size: Tokens.FontSize.glyphSmall, weight: .semibold))
-            .accessibilityHidden(true)
-          Text(value ?? "+ \(kind.displayLabel)")
-            .font(.system(size: Tokens.FontSize.caption, weight: value == nil ? .regular : .semibold))
-            .lineLimit(1)
-            .truncationMode(.tail)
-        }
-        .foregroundStyle(value == nil ? Tokens.Color.ink4 : Tokens.Color.ink2)
-        .padding(.horizontal, Tokens.Spacing.xsm)
-        .padding(.vertical, Tokens.Spacing.hairline)
-        .background(Capsule().fill(value == nil ? Color.clear : Tokens.Color.cardWash))
-        .overlay(
-          Capsule().stroke(value == nil ? Tokens.Color.line2 : Tokens.Color.line, lineWidth: 1)
-        )
-        .contentShape(Capsule())
-      }
-      .buttonStyle(.plain)
-      // 「点它进编辑态」此前只有 .help 说,画面上零反馈(走查 P-7e)。
-      .hoverStrokeOutline(cornerRadius: Tokens.Radius.pill)
-      .help(
-        value.map { "\(kind.displayLabel):\($0)。点击编辑" }
-          ?? "添加\(kind.displayLabel)标签"
-      )
-      .accessibilityLabel(
-        value.map { "\(kind.displayLabel)标签：\($0)" } ?? "添加\(kind.displayLabel)标签"
-      )
-      .runtimeAccessibilityIdentifier(kind.chipIdentifier)
-    }
-  }
-
-  private func commit() {
-    isEditing = false
-    isFocused = false
-    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard trimmed != (value ?? "") else { return }
-    onCommit(draft)
-  }
-
-  private func cancel() {
-    // 先把 draft 还原成现值:即使失焦 onChange 与本次取消竞态,提交也是无变化直通。
-    draft = value ?? ""
-    isEditing = false
-    isFocused = false
+    V1ComboBox(
+      label: kind.displayLabel, value: value ?? "",
+      suggestions: kind == .client ? directory.clients : directory.projects(for: client),
+      size: .compact, identifier: kind.chipIdentifier, onSelect: onCommit
+    )
+    .frame(maxWidth: Tokens.V1.Size.panelWidth)
   }
 }
 
@@ -334,6 +263,13 @@ struct SpeakerNameField: View {
   let onCommit: (String) -> Void
 
   @State private var draft: String
+  /// 只有用户自己敲过的草稿才允许提交。
+  ///
+  /// 没有这一位会丢数据:面板打开时焦点自动落在第一个输入框,此时采纳一条认名建议,
+  /// 外部同步被 `if !isFocused` 挡住,草稿仍是空串;关面板失焦触发 `onCommit("")`,
+  /// 把刚写进 meeting.json 的名字清掉(owner 2026-09-20 实拍:计数 5 退回 7、
+  /// 正文仍是「发言人 1」、meeting.json 的 speakerNames 从有值变回 None)。
+  @State private var userDidEdit = false
   @FocusState private var isFocused: Bool
 
   init(
@@ -429,11 +365,12 @@ struct SpeakerNameField: View {
         .font(.system(size: Tokens.FontSize.uiEmphasis))
         .frame(width: 88)
         .focused($isFocused)
-        .onSubmit { onCommit(draft) }
+        .onChange(of: draft) { _, _ in
+          if isFocused { userDidEdit = true }
+        }
+        .onSubmit { commitDraft() }
         .onChange(of: isFocused) { _, focused in
-          if !focused {
-            onCommit(draft)
-          }
+          if !focused { commitDraft() }
         }
         .accessibilityLabel("给\(label)填写真名")
     }
@@ -456,12 +393,25 @@ struct SpeakerNameField: View {
         )
     )
     .opacity(isExcluded ? 0.6 : 1)
-    // 外部改名(比如换了一场会)时把草稿拉回真值,免得显示上一场的名字。
+    // 外部改名(换了一场会、采纳了认名建议、单段更正回写)一律把草稿拉回真值。
+    // 这里不再看有没有焦点——原来带 `if !isFocused` 守卫,而面板打开时焦点正好
+    // 落在第一个输入框上,于是采纳的名字同步不进来,失焦又被空草稿写回去。
+    // 用户自己敲过的不覆盖,由 `userDidEdit` 判。
     .onChange(of: name) { _, newValue in
-      if !isFocused {
-        draft = newValue
-      }
+      guard !userDidEdit else { return }
+      draft = newValue
     }
+  }
+
+  /// 提交:只有用户自己改过才写。没改过就把草稿对回真值,绝不拿一个没同步过的
+  /// 空草稿去清掉已经存好的名字。
+  private func commitDraft() {
+    guard userDidEdit else {
+      draft = name
+      return
+    }
+    onCommit(draft)
+    userDidEdit = false
   }
 
   /// 右键菜单里按显示名说人话(填过真名就用真名),桶口径与单击高亮一致。

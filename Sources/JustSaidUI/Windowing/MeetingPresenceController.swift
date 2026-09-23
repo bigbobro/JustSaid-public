@@ -189,6 +189,10 @@ public final class MeetingPresenceController: ObservableObject {
     }
     overlayModel.update(from: summaryFeed.now)
     overlayModel.isMicrophonePaused = recordingSession.isMicrophonePaused
+    recordingSession.$startedAt
+      .removeDuplicates()
+      .sink { [weak self] in self?.overlayModel.startedAt = $0 }
+      .store(in: &cancellables)
 
     recordingSession.$currentMeetingDirectory
       .dropFirst()

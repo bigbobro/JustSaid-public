@@ -68,17 +68,25 @@ public struct MinutesDialogNamingHint: View {
   }
 }
 
-/// 转写页的认名预填横幅。显隐判断收在本视图内(红线 6):没有可显示的行时整条
+/// 转写页的认名预填建议。显隐判断收在本视图内(红线 6):没有可显示的行时整条
 /// 结构不存在;调用点无条件实例化。改名走既有 speakerNames 通道,本视图只发回调。
+///
+/// 2026-09-20 重排:原来是一条横跨正文顶部的全宽横幅,一行里塞「发言人 2 → 张三？」
+/// + 证据 chip + 采纳 + 不是。认名收进 300 宽的右栏之后,这一行每一段都被挤成省略号,
+/// 采纳/不是几乎点不中(owner「采纳意见完全缩住、看不清楚」)。
+/// 现在按竖排三层:问句一层(可折行)、证据一层、动作一层。横幅自己的底色与横向留白
+/// 一并去掉——它现在长在右栏里,再画一层底就是卡中卡。
 struct SpeakerNamingSuggestionBanner: View {
   let rows: [SpeakerNamingSuggestionRow]
   let onAdopt: (SpeakerNameSuggestion) -> Void
   let onDismiss: (SpeakerNameSuggestion) -> Void
   let onJump: (TimeInterval) -> Void
+  /// 把建议配上锚点处的真实原话与真实说话人。见 `MeetingLibraryModel.namingEvidence`。
+  var resolve: (([SpeakerNameSuggestion]) -> [MeetingLibraryModel.NamingEvidence])? = nil
 
   var body: some View {
     if !rows.isEmpty {
-      VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
         ForEach(rows) { row in
           switch row {
           case .prefill(let suggestion):
@@ -88,66 +96,160 @@ struct SpeakerNamingSuggestionBanner: View {
           }
         }
       }
-      .padding(.horizontal, Tokens.Spacing.lg)
-      .padding(.vertical, Tokens.Spacing.xs)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Tokens.Color.pane)
-      .overlay(alignment: .bottom) { Divider() }
     }
   }
 
   private func prefillRow(_ suggestion: SpeakerNameSuggestion) -> some View {
-    HStack(spacing: Tokens.Spacing.xsm) {
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.s2xs) {
+      // 问句本身要看得全。栏只有 300 宽,长名字必须能折行,不能截成「发言人 2 →…」。
       Text("\(suggestion.label) → \(suggestion.name)？")
-        .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink)
-        .lineLimit(1)
+        .font(Tokens.V1.Text.label.font)
+        .foregroundStyle(Tokens.V1.Color.ink)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
       evidenceChip(suggestion)
-      Spacer(minLength: Tokens.Spacing.xxs)
-      Button("采纳") {
-        onAdopt(suggestion)
+      HStack(spacing: Tokens.V1.Space.xs) {
+        Button("采纳") {
+          onAdopt(suggestion)
+        }
+        .buttonStyle(.v1Outline)
+        .help("把「\(suggestion.label)」命名为「\(suggestion.name)」(与手动改名同一通道)")
+        .accessibilityLabel("采纳建议：\(suggestion.label) 是 \(suggestion.name)")
+        .runtimeAccessibilityIdentifier("library.transcript.naming-suggestion.adopt")
+        Button("不是") {
+          onDismiss(suggestion)
+        }
+        .buttonStyle(.v1Quiet)
+        .help("拒绝这条建议，本场不再提示")
+        .accessibilityLabel("拒绝建议：\(suggestion.label) 不是 \(suggestion.name)")
+        .runtimeAccessibilityIdentifier("library.transcript.naming-suggestion.dismiss")
+        Spacer(minLength: .zero)
       }
-      .buttonStyle(.textAction)
-      .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-      .help("把「\(suggestion.label)」命名为「\(suggestion.name)」(与手动改名同一通道)")
-      .accessibilityLabel("采纳建议：\(suggestion.label) 是 \(suggestion.name)")
-      .runtimeAccessibilityIdentifier("library.transcript.naming-suggestion.adopt")
-      Button("不是") {
-        onDismiss(suggestion)
-      }
-      .buttonStyle(.textAction)
-      .font(.system(size: Tokens.FontSize.ui))
-      .foregroundStyle(Tokens.Color.ink3)
-      .help("拒绝这条建议，本场不再提示")
-      .accessibilityLabel("拒绝建议：\(suggestion.label) 不是 \(suggestion.name)")
-      .runtimeAccessibilityIdentifier("library.transcript.naming-suggestion.dismiss")
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .runtimeAccessibilityIdentifier("library.transcript.naming-suggestion.row")
   }
 
+  /// 冲突行。
+  ///
+  /// 原来这里写「「X」可能混了两个人:自我介绍证据指向不同名字」。两处都不对:
+  /// 一,「混」说不清是什么混(owner 2026-09-20「还是让人有点看不懂」);
+  /// 二,「自我介绍证据」是写死的——2026-09-20 这场会 13 条建议里**一条自我介绍都没有**,
+  /// 全是「别人这么叫他」,这句话在画面上直接是假话。
+  /// 现在按事实说:几个人分别管他叫不同的名字,列出每个候选名和它凭什么。
   private func conflictRow(
     label: String,
     evidences: [SpeakerNameSuggestion]
   ) -> some View {
-    HStack(spacing: Tokens.Spacing.xsm) {
-      Image(systemName: "exclamationmark.triangle")
-        .font(.system(size: Tokens.FontSize.secondary))
-        .foregroundStyle(Tokens.Color.warn)
-        .accessibilityHidden(true)
-      Text("「\(label)」可能混了两个人：自我介绍证据指向不同名字")
-        .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink)
-        .lineLimit(1)
-        .help("「\(label)」可能混了两个人：自我介绍证据指向不同名字")
-      ForEach(evidences, id: \.name) { evidence in
-        evidenceChip(evidence)
+    let names = Array(NSOrderedSet(array: evidences.map(\.name)).compactMap { $0 as? String })
+    let resolved = resolve?(evidences) ?? []
+    return VStack(alignment: .leading, spacing: Tokens.V1.Space.s2xs) {
+      HStack(alignment: .firstTextBaseline, spacing: Tokens.V1.Space.s2xs) {
+        Image(systemName: "questionmark.circle")
+          .font(.system(size: Tokens.V1.Text.meta.size))
+          .foregroundStyle(Tokens.V1.Color.warn)
+          .accessibilityHidden(true)
+        Text("「\(label)」有 \(names.count) 个候选名字，对不上")
+          .font(Tokens.V1.Text.label.font)
+          .foregroundStyle(Tokens.V1.Color.ink)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
       }
-      Spacer(minLength: Tokens.Spacing.xxs)
+      Text("会上有人这么叫过他：\(names.joined(separator: "、"))。自己挑一个填进下面的名字框。")
+        .font(Tokens.V1.Text.meta.font)
+        .foregroundStyle(Tokens.V1.Color.ink3)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      if resolved.isEmpty {
+        ForEach(evidences, id: \.name) { evidence in
+          evidenceChip(evidence)
+        }
+      } else {
+        ForEach(resolved) { evidence in
+          evidenceCard(evidence)
+        }
+      }
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .runtimeAccessibilityIdentifier("library.transcript.naming-suggestion.conflict")
   }
 
-  /// 证据 chip:引文截断 + 时间戳,点击回跳原话;拿不到秒数就只展示不跳,不编时间。
+  /// 一条证据:主张谁叫什么、凭什么、原文怎么说的、那句话是谁说的。
+  ///
+  /// 「谁说的」必须画出来:`addressed` 级证据本来就是**别人**在叫他,点过去当然落到
+  /// 别人那一段。不写这一句,用户会以为跳错了(owner 2026-09-20:「我点这 2 个证据,
+  /// 一个是发言人 1,一个是发言人 4,不知道这个提示是怎么给的」)。
+  private func evidenceCard(_ evidence: MeetingLibraryModel.NamingEvidence) -> some View {
+    let suggestion = evidence.suggestion
+    let seconds = suggestion.anchor?.seconds
+    return Button {
+      if let seconds { onJump(seconds) }
+    } label: {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.V1.Space.s2xs) {
+          Text(suggestion.name)
+            .font(Tokens.V1.Text.label.font)
+            .foregroundStyle(Tokens.V1.Color.ink)
+          Text(evidence.howLabel)
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink4)
+          Spacer(minLength: .zero)
+          if let timecode = suggestion.anchor?.timecode {
+            Text(timecode)
+              .font(Tokens.V1.Text.timecode.font)
+              .foregroundStyle(Tokens.V1.Color.ink4)
+          }
+        }
+        Text("「\(evidence.quote)」")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .lineLimit(3)
+          .multilineTextAlignment(.leading)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        if let spokenBy = evidence.spokenBy, spokenBy != suggestion.label {
+          Text("这句是「\(spokenBy)」说的")
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink4)
+        }
+        // 拿转写核对这条归属的结论。只报告,不替它改数据——归属是推理那一层的事。
+        if let note = evidence.verdictNote {
+          Text(note)
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(
+              evidence.verdictIsBad ? Tokens.V1.Color.warn : Tokens.V1.Color.ink4)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if evidence.nameMissingFromQuote {
+          Text(
+            evidence.fromTranscript
+              ? "原话里没有「\(suggestion.name)」，这条不一定靠谱"
+              : "在原文里没找到这一句，下面是模型写的引文"
+          )
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.warn)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, Tokens.V1.Space.xs)
+      .padding(.vertical, Tokens.V1.Space.s2xs)
+      .background(
+        RoundedRectangle(cornerRadius: Tokens.V1.Radius.sm).fill(Tokens.V1.Color.paper2)
+      )
+    }
+    .buttonStyle(.plain)
+    .hoverStrokeOutline(cornerRadius: Tokens.V1.Radius.sm)
+    .disabled(seconds == nil)
+    .help(seconds == nil ? "这条证据没有可回跳的时间戳" : "点击回跳到这一句")
+    .accessibilityLabel("证据：\(suggestion.name)，\(evidence.howLabel)")
+  }
+
+  /// 证据 chip:时间戳 + 引文,点击回跳原话;拿不到秒数就只展示不跳,不编时间。
+  /// 窄栏里引文给两行,截成一行看不出这条证据凭什么成立。
   private func evidenceChip(_ suggestion: SpeakerNameSuggestion) -> some View {
     let timecode = suggestion.anchor?.timecode
     let seconds = suggestion.anchor?.seconds
@@ -156,38 +258,34 @@ struct SpeakerNamingSuggestionBanner: View {
         onJump(seconds)
       }
     } label: {
-      HStack(spacing: Tokens.Spacing.xxs) {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
         if let timecode {
           Text(timecode)
-            .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-            .foregroundStyle(Tokens.Color.ink4)
+            .font(Tokens.V1.Text.timecode.font)
+            .foregroundStyle(Tokens.V1.Color.ink4)
         }
         Text("「\(suggestion.evidenceQuote)」")
-          .font(.system(size: Tokens.FontSize.secondary))
-          .foregroundStyle(Tokens.Color.ink3)
-          .lineLimit(1)
-          .truncationMode(.tail)
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .lineLimit(2)
+          .multilineTextAlignment(.leading)
+          .fixedSize(horizontal: false, vertical: true)
       }
-      .padding(.horizontal, Tokens.Spacing.xs)
-      .padding(.vertical, Tokens.Spacing.hairline)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, Tokens.V1.Space.xs)
+      .padding(.vertical, Tokens.V1.Space.s2xs)
       .background(
-        RoundedRectangle(cornerRadius: Tokens.Radius.widget).fill(Tokens.Color.cardWash)
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-          .stroke(Tokens.Color.line, lineWidth: 1)
+        RoundedRectangle(cornerRadius: Tokens.V1.Radius.sm).fill(Tokens.V1.Color.paper2)
       )
     }
     .buttonStyle(.plain)
-    .hoverStrokeOutline(cornerRadius: Tokens.Radius.widget)
+    .hoverStrokeOutline(cornerRadius: Tokens.V1.Radius.sm)
     .disabled(seconds == nil)
-    // 引文本身单行尾截断,完整原话并进 tooltip(走查 N-9)。
     .help(
       seconds == nil
         ? "「\(suggestion.evidenceQuote)」——这条证据没有可回跳的时间戳"
         : "「\(suggestion.evidenceQuote)」——点击回跳到原话"
     )
     .accessibilityLabel("证据：\(suggestion.evidenceQuote)")
-    .frame(maxWidth: 260, alignment: .leading)
   }
 }

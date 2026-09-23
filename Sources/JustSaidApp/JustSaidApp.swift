@@ -71,7 +71,7 @@ struct JustSaidApp: App {
     _providerSettings = StateObject(
       wrappedValue: providerSettings
     )
-    // 录制会话、协调者(含会后任务)与模型管理器同时交给更新器的最终退出守卫,必须是界面用的同一实例。
+    // 录制会话、协调者(含会后任务)与模型管理器同时交给更新器的最终退出守卫与退出确认,必须是界面用的同一实例。
     let recordingSession = RecordingSession(store: meetingStore)
     _recordingSession = StateObject(
       wrappedValue: recordingSession
@@ -111,6 +111,7 @@ struct JustSaidApp: App {
       modelAssets: modelAssetManager
     )
     appCoordinator.appUpdates = appUpdater?.model
+    QuitConfirmation.install(recordingSession: recordingSession, appCoordinator: appCoordinator)
   }
 
   var body: some Scene {
@@ -127,6 +128,7 @@ struct JustSaidApp: App {
         AppAppearance.persisted(appearanceRawValue).preferredColorScheme
       )
       .background(MainWindowOpenerRegistrar(appCoordinator: appCoordinator))
+      .background(FullSizeContentWindowConfigurator())
       .task {
         // 菜单栏常驻入口(T11):关主窗不退出、录音继续,菜单栏是唯一入口。
         appCoordinator.installMenuBarIfNeeded(
@@ -159,6 +161,9 @@ struct JustSaidApp: App {
       }
     }
     .defaultSize(width: 1320, height: 780)
+    // 2026-09-20 owner:独立标题栏横在整个应用上面太难看。内容顶到 y=0,
+    // 图标轨与页面都从最上面开始,系统红绿灯浮在轨的顶端空位上,轨宽由 V1 令牌留足余量。
+    .windowStyle(.hiddenTitleBar)
     // 设置的唯一入口路径(2026-08-20 批4 容器收敛):此前 Settings scene 固定
     // frame 760×680 会裁长词表,且与 gear/轨按钮凑成 ⌘, 三注册。现在 ⌘, 唯一
     // owner 是这条菜单命令(无主窗也生效),真身始终是主窗上那张可拉伸 sheet。
@@ -187,6 +192,26 @@ extension JustSaidApp {
 
 /// 把 SwiftUI 的 `openWindow(id:)` 登记给 AppCoordinator:悬浮内容「回主窗」在主窗
 /// 已关闭时走这条与菜单命令相同的重开路由(`newWindowForTab` 对本 App 空转)。
+/// 让内容真的顶到 y=0。`.windowStyle(.hiddenTitleBar)` 只把标题栏做成透明并藏掉标题,
+/// 内容仍旧从标题栏底下开始,顶上因此留了一条约 28 点的白带,图标轨的底色进不去,
+/// 红绿灯浮在白带上而不是浮在轨上(2026-09-20 真机放大实测)。真正管用的开关是
+/// `.fullSizeContentView`,SwiftUI 不暴露它,所以到 NSWindow 上直接加。
+private struct FullSizeContentWindowConfigurator: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSView { ConfiguratorView() }
+
+  func updateNSView(_ nsView: NSView, context: Context) {}
+
+  private final class ConfiguratorView: NSView {
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      guard let window else { return }
+      window.styleMask.insert(.fullSizeContentView)
+      window.titlebarAppearsTransparent = true
+      window.titleVisibility = .hidden
+    }
+  }
+}
+
 private struct MainWindowOpenerRegistrar: View {
   @Environment(\.openWindow) private var openWindow
   let appCoordinator: AppCoordinator
@@ -236,14 +261,54 @@ private struct MeetingSessionCommands: Commands {
   }
 
   private var workspaceToggleTitle: String {
-    if appCoordinator.workspaceMode == .library {
-      return isSessionActive ? "返回驾驶舱" : "切换到驾驶舱"
+    if appCoordinator.workspaceMode != .cockpit {
+      return isSessionActive ? "返回会中" : "切换到会中"
     }
     return "切换到会议库"
   }
 
   var body: some Commands {
+    CommandGroup(replacing: .newItem) {
+      // ⌘R 只在文件菜单注册,其他开始入口沿用协调者同一动作。
+      Button("开始一场会议") {
+        ensureMainWindow()
+        appCoordinator.requestStartMeeting()
+      }
+      .keyboardShortcut("r", modifiers: .command)
+      .disabled(isSessionActive)
+      Button("导入录音…") {
+        appCoordinator.requestImportRecording()
+      }
+      Button("重新扫描录音文件夹") {
+        appCoordinator.requestRescanRecordings()
+      }
+      Divider()
+      Button("在 Finder 中显示录音") { appCoordinator.revealRecordingsInFinder() }
+    }
+
     CommandMenu("会议") {
+      Button("标记重点") { appCoordinator.requestMark() }
+        .disabled(!isRecording)
+      Button(appCoordinator.isChatExclusionOpen ? "结束闲聊" : "闲聊") {
+        ensureMainWindow()
+        appCoordinator.requestToggleChat()
+      }
+      .keyboardShortcut("x", modifiers: [.command, .option])
+      .disabled(recordingSession.startedAt == nil || !isRecording)
+      Button(recordingSession.isMicrophonePaused ? "恢复麦克风" : "暂停麦克风") {
+        appCoordinator.requestToggleMicrophonePause()
+      }
+      .keyboardShortcut("p", modifiers: [.command, .option])
+      .disabled(!isRecording)
+      Divider()
+      Button("结束会议") { appCoordinator.requestEndMeeting() }
+        .disabled(!isRecording)
+      Divider()
+      Button("查看历史会议") {
+        ensureMainWindow()
+        appCoordinator.openLibrary()
+      }
+      Divider()
       Button(workspaceToggleTitle) {
         ensureMainWindow()
         appCoordinator.toggleWorkspaceMode()
@@ -257,18 +322,6 @@ private struct MeetingSessionCommands: Commands {
       .keyboardShortcut("k", modifiers: .command)
       .disabled(!isSessionActive)
 
-      Button("闲聊") {
-        ensureMainWindow()
-        appCoordinator.requestToggleChat()
-      }
-      .keyboardShortcut("x", modifiers: [.command, .option])
-      .disabled(recordingSession.startedAt == nil || !isRecording)
-
-      Button(recordingSession.isMicrophonePaused ? "恢复麦克风" : "暂停麦克风") {
-        appCoordinator.requestToggleMicrophonePause()
-      }
-      .keyboardShortcut("p", modifiers: [.command, .option])
-      .disabled(!isRecording)
     }
   }
 

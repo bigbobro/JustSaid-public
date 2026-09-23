@@ -30,9 +30,11 @@ extension MainWorkspaceView {
       let metadata = try? appCoordinator.meetingStore.read(from: paths)
     else {
       exclusionRanges = []
+      appCoordinator.isChatExclusionOpen = false
       return
     }
     exclusionRanges = metadata.excludedRanges ?? []
+    appCoordinator.isChatExclusionOpen = openChatRange != nil
   }
 
   func requestEndMeeting() {

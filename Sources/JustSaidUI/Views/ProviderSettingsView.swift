@@ -3,19 +3,20 @@ import JustSaidCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 设置页的三个页签;「完成」属于容器层,三个页签共用一个。
-private enum SettingsSection: String, CaseIterable, Identifiable {
-  case providers
+/// 设置内容区顶部的三个分段。
+public enum SettingsSection: String, CaseIterable, Identifiable {
   case general
-  case dictionary
+  case providers
+  case nameAlert
 
-  var id: String { rawValue }
+  public var id: String { rawValue }
 
-  var title: String {
+  /// public:截图装置按页签命名输出文件。
+  public var title: String {
     switch self {
     case .providers: return "模型与服务"
     case .general: return "通用"
-    case .dictionary: return "词典"
+    case .nameAlert: return "点名提醒"
     }
   }
 }
@@ -72,7 +73,7 @@ public enum ProviderChannelPurpose {
       labels.append(
         ProviderChannelPurposeLabel(
           kind: .asr,
-          text: "ASR · \(asrRoles.map(\.displayName).joined(separator: " / "))"
+          text: "语音识别 · \(asrRoles.map(\.displayName).joined(separator: " / "))"
         )
       )
     }
@@ -80,7 +81,7 @@ public enum ProviderChannelPurpose {
       labels.append(
         ProviderChannelPurposeLabel(
           kind: .llm,
-          text: "LLM · \(llmRoles.map(\.displayName).joined(separator: " / "))"
+          text: "大模型 · \(llmRoles.map(\.displayName).joined(separator: " / "))"
         )
       )
     }
@@ -96,13 +97,27 @@ public struct ProviderSettingsView: View {
   let registry: ProviderRegistry
   @ObservedObject var settingsStore: ProviderSettingsStore
   @ObservedObject var modelAssetManager: LocalModelAssetManager
-  let dictionaryStore: DictionaryStore
   let secretDigest: any StoredSecretDigest
   let nameAlertPreferences: NameAlertPreferencesStore?
+  let displayTimeZone: DisplayTimeZone?
   let appUpdates: AppUpdatesModel?
+  let onDone: (() -> Void)?
 
   @Environment(\.dismiss) private var dismiss
-  @State private var section: SettingsSection = .providers
+  @State private var localSection: SettingsSection = .general
+  /// 工作台持有本次运行的设置分区，有它时读写它;
+  /// 没有时(截图装置等)退回本地状态。
+  private let externalSection: Binding<SettingsSection>?
+  private var section: SettingsSection {
+    get { externalSection?.wrappedValue ?? localSection }
+    nonmutating set {
+      if let externalSection {
+        externalSection.wrappedValue = newValue
+      } else {
+        localSection = newValue
+      }
+    }
+  }
   @State private var channelEditorRequest: ChannelEditorRequest?
 
   /// - Parameter secretDigest: 「这把 key 存了吗、末四位多少」的来源。
@@ -112,43 +127,59 @@ public struct ProviderSettingsView: View {
     registry: ProviderRegistry,
     settingsStore: ProviderSettingsStore,
     modelAssetManager: LocalModelAssetManager,
-    dictionaryStore: DictionaryStore = DictionaryStore(),
     secretDigest: (any StoredSecretDigest)? = nil,
     nameAlertPreferences: NameAlertPreferencesStore? = nil,
-    appUpdates: AppUpdatesModel? = nil
+    displayTimeZone: DisplayTimeZone? = nil,
+    appUpdates: AppUpdatesModel? = nil,
+    initialSection: SettingsSection = .general,
+    section: Binding<SettingsSection>? = nil,
+    /// 壳里的一页用它回上一页;仍以弹窗出现时留空,走 `dismiss`。
+    onDone: (() -> Void)? = nil
   ) {
+    self.onDone = onDone
+    _localSection = State(initialValue: initialSection)
+    externalSection = section
     self.nameAlertPreferences = nameAlertPreferences
+    self.displayTimeZone = displayTimeZone
     self.appUpdates = appUpdates
     self.registry = registry
     self.settingsStore = settingsStore
     self.modelAssetManager = modelAssetManager
-    self.dictionaryStore = dictionaryStore
     self.secretDigest = secretDigest ?? KeychainSecretDigest(settingsStore: settingsStore)
   }
 
   static var buildLabel: String {
     let info = Bundle.main.infoDictionary
-    let version = info?["CFBundleShortVersionString"] as? String ?? "?"
-    let build = info?["CFBundleVersion"] as? String ?? "?"
+    guard let version = info?["CFBundleShortVersionString"] as? String,
+      let build = info?["CFBundleVersion"] as? String
+    else { return "本地构建" }
     return "v\(version) · \(build)"
   }
 
   public var body: some View {
-    VStack(spacing: 0) {
-      sectionBar
-      Divider()
-      switch section {
-      case .providers:
-        providerPane
-      case .general:
-        GeneralSettingsPane(
-          settingsStore: settingsStore, nameAlertPreferences: nameAlertPreferences,
-          appUpdates: appUpdates)
-      case .dictionary:
-        DictionarySettingsView(store: dictionaryStore)
+    // 顶栏只标页名；分段切换与三段表单沿同一居中列。
+    VStack(spacing: .zero) {
+      pageBar
+      sectionTabs
+      Group {
+        switch section {
+        case .providers:
+          providerPane
+        case .general:
+          GeneralSettingsPane(
+            settingsStore: settingsStore, nameAlertPreferences: nameAlertPreferences,
+            appUpdates: appUpdates, displayTimeZone: displayTimeZone)
+        case .nameAlert:
+          if let nameAlertPreferences {
+            NameAlertSettingsPane(preferences: nameAlertPreferences)
+          }
+        }
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .background(Tokens.Color.bg)
+    .background(Tokens.V1.Color.paper)
+    // Esc 回到进来之前那一页——「完成」按钮拿掉后留一个键盘出口(输入框里的 Esc 先由输入框处理)。
+    .onExitCommand { onDone?() }
     .sheet(item: $channelEditorRequest) { request in
       ChannelEditorView(
         request: request,
@@ -156,111 +187,56 @@ public struct ProviderSettingsView: View {
         settingsStore: settingsStore,
         secretDigest: secretDigest
       )
-      .frame(minWidth: 560)
+      .frame(minWidth: Tokens.V1.Size.settingsForm)
     }
   }
 
-  /// 页签沿用会议库详情页那一排的视觉语言(pill + 墨青底),不新造一套。
-  private var sectionBar: some View {
-    HStack(spacing: Tokens.Spacing.xs) {
-      ForEach(SettingsSection.allCases) { candidate in
-        Button {
-          section = candidate
-        } label: {
-          Text(candidate.title)
-            .font(.system(size: Tokens.FontSize.uiEmphasis, weight: section == candidate ? .semibold : .regular))
-            .foregroundStyle(section == candidate ? Tokens.Color.acDeep : Tokens.Color.ink2)
-            .padding(.horizontal, Tokens.Spacing.sm)
-            .padding(.vertical, Tokens.Spacing.xxs)
-            .background(
-              RoundedRectangle(cornerRadius: Tokens.Radius.control)
-                .fill(section == candidate ? Tokens.Color.acSoft : Color.clear)
-            )
-            .overlay(
-              RoundedRectangle(cornerRadius: Tokens.Radius.control)
-                .stroke(section == candidate ? Tokens.Color.acLine : Color.clear, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .hoverRowBackground(cornerRadius: Tokens.Radius.control)
-        .runtimeAccessibilityIdentifier("settings.section.\(candidate.rawValue)")
-      }
-
-      Spacer()
-
-      // 构建标识(2026-07-31):部署验证的唯一凭据——口头核对这一串,不猜版本。
-      Text(Self.buildLabel)
-        .font(.system(size: Tokens.FontSize.secondary, design: .monospaced))
-        .foregroundStyle(Tokens.Color.ink4)
-        .textSelection(.enabled)
-        .accessibilityLabel("构建标识 \(Self.buildLabel)")
-
-      // 所有编辑都是即时写入的(密钥点「保存」入 Keychain,其余随打随存),
-      // 所以「完成」只负责关窗,不承担提交语义。
-      Button("完成") {
-        dismiss()
-      }
-      .buttonStyle(.toolbarPillAccent)
-      .keyboardShortcut("w", modifiers: .command)
-      .accessibilityLabel("完成并关闭设置")
+  private var sectionTabs: some View {
+    GeometryReader { geometry in
+      V1SegmentedPicker(
+        "设置分区", selection: Binding(get: { section }, set: { section = $0 }),
+        options: SettingsSection.allCases.map { candidate in
+          .init(candidate, candidate.title)
+        }, fills: true, segmentHeight: Tokens.V1.Size.controlLg - Tokens.V1.Space.s2xs
+      )
+      .frame(width: Tokens.V1.Size.settingsForm)
+      .runtimeAccessibilityIdentifier("settings.tabs")
+      .runtimeAccessibilityIdentifier("settings.tabs.selected.\(section.rawValue)")
+      .padding(
+        .horizontal,
+        SettingsPageGeometry.inset(for: geometry.size.width, fullWidth: false))
     }
-    .padding(.horizontal, Tokens.Spacing.lg)
-    .padding(.vertical, Tokens.Spacing.sm)
+    .frame(height: Tokens.V1.Size.controlLg)
+    .padding(.vertical, Tokens.V1.Space.md)
+  }
+
+  private var pageBar: some View {
+    WorkspaceTopBar("设置") { EmptyView() }
   }
 
   private var providerPane: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: Tokens.Spacing.xl) {
-        Text("渠道在「渠道管理」里统一维护；四个角色只选择渠道、模型与推理强度，互不同步。密钥只存入 macOS Keychain。")
-          .font(.system(size: Tokens.FontSize.bodyMinimum))
-          .foregroundStyle(Tokens.Color.ink3)
-          .fixedSize(horizontal: false, vertical: true)
-
+    SettingsPage(title: "模型与服务", subtitle: "先配置渠道，再为每个阶段选择模型。") {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
         ChannelManagementCard(
-          registry: registry,
-          settingsStore: settingsStore,
-          secretDigest: secretDigest,
-          onCreate: {
-            channelEditorRequest = ChannelEditorRequest(channel: nil)
-          },
-          onEdit: { channel in
-            channelEditorRequest = ChannelEditorRequest(channel: channel)
-          }
-        )
+          registry: registry, settingsStore: settingsStore, secretDigest: secretDigest,
+          onEdit: { channelEditorRequest = ChannelEditorRequest(channel: $0) },
+          onCreate: { channelEditorRequest = ChannelEditorRequest(channel: nil) })
+
         ChannelRoleCard(
-          role: .liveTranscriber,
-          registry: registry,
-          settingsStore: settingsStore,
-          secretDigest: secretDigest,
-          modelAssetManager: modelAssetManager
-        )
-        LocalModelsSettingsCard(manager: modelAssetManager)
+          role: .liveTranscriber, registry: registry, settingsStore: settingsStore,
+          secretDigest: secretDigest, modelAssetManager: modelAssetManager
+        ) { LocalModelsSettingsRow(manager: modelAssetManager) }
         ChannelRoleCard(
-          role: .liveSummaryLLM,
-          registry: registry,
-          settingsStore: settingsStore,
+          role: .liveSummaryLLM, registry: registry, settingsStore: settingsStore,
+          secretDigest: secretDigest)
+        ChannelRoleCard(
+          role: .batchASR, registry: registry, settingsStore: settingsStore,
           secretDigest: secretDigest
-        )
-        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-          ChannelRoleCard(
-            role: .batchASR,
-            registry: registry,
-            settingsStore: settingsStore,
-            secretDigest: secretDigest
-          )
-          StorageSettingsCard(
-            settingsStore: settingsStore,
-            secretDigest: secretDigest
-          )
-        }
+        ) { StorageSettingsRow(settingsStore: settingsStore, secretDigest: secretDigest) }
         ChannelRoleCard(
-          role: .minutesLLM,
-          registry: registry,
-          settingsStore: settingsStore,
-          secretDigest: secretDigest
-        )
+          role: .minutesLLM, registry: registry, settingsStore: settingsStore,
+          secretDigest: secretDigest)
       }
-      .padding(Tokens.Spacing.lg)
     }
   }
 }
@@ -274,4 +250,3 @@ struct ChannelEditorRequest: Identifiable {
 
   var id: String { channel?.id ?? "new-channel" }
 }
-

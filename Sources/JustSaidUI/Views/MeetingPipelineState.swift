@@ -15,8 +15,10 @@ public struct MeetingPipelineState: Equatable {
     case retryTranscription
     /// 有权威转写、还没有正式纪要:下一步是生成纪要。
     case generateMinutes
-    /// 纪要已在(或纪要失败可重生成):主动作仍是「生成纪要」语义(重生成/重试同一入口)。
+    /// 纪要生成失败:下一步是重试同一入口。
     case regenerateMinutes
+    /// 三步产物齐了但完备度还没人放行:下一步是去确认。
+    case confirmCompleteness
     /// 在跑或无可用音频:不推任何主动作(按钮禁用态由既有链路决定)。
     case none
   }
@@ -44,6 +46,13 @@ public struct MeetingPipelineState: Equatable {
     self.hasFormalMinutes = hasFormalMinutes
   }
 
+  /// 精转那一步的动作名(owner 2026-09-21:「这不是待精转吗?待精转为什么会是重新精转呢?」)。
+  /// 从没精转过(含导入待精转)叫「精转」;失败过、或已有结果还要再跑一次,才叫「重新精转」。
+  /// 和状态胶囊的「待精转 / 精转失败」是同一条分界,按钮与胶囊不再说两种话。
+  public var transcriptionActionTitle: String {
+    transcription == .notStarted ? "精转" : "重新精转"
+  }
+
   public var nextAction: NextAction {
     if transcription == .inProgress || minutes == .inProgress {
       return .none
@@ -57,8 +66,15 @@ public struct MeetingPipelineState: Equatable {
       switch minutes {
       case .notStarted:
         return .generateMinutes
-      case .failed, .completed:
+      case .failed:
         return .regenerateMinutes
+      case .completed:
+        // 已经有纪要了就不该再推「重新生成纪要」——那是重做,不是下一步
+        // (owner 2026-09-20:显性按钮的含义是「这场会还差一件事,点它就做掉」)。
+        // 产物齐了还差放行就推「去确认」;全齐则不推任何主动作,重做入口收进 ⋯。
+        // 只有机器判红、还没人放行时才推「去确认」;green 与 acknowledged 都已了结,
+        // undetermined / nil 是还没算出来,没有可确认的东西。
+        return completeness == .red ? .confirmCompleteness : .none
       case .inProgress:
         return .none
       }

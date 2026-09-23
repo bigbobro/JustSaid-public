@@ -1,105 +1,97 @@
 import AppKit
 import SwiftUI
 
-/// UI 施工规格书（ui-spec.md）V1/V2/V9/V10 与「设计变量」区块的取值原样迁入，
-/// 变量命名对应 `ui-final-v2.html` 的 CSS 自定义属性，便于逐条对照核验。
-/// 任何颜色/圆角/阴影数值改动都必须能在 ui-spec.md 或 ui-final-v2.html 里找到出处。
+/// 旧名字作为迁移入口保留；颜色指向 docs/design-system/tokens.json 对应的 V1。
+/// 旧几何与动效沿用原规格，随区域重写逐批迁移。
 enum Tokens {
   enum Color {
     // 中性色阶
-    static let ink = SwiftUI.Color(light: 0x191d24, dark: 0xf2f2f4)
-    static let ink2 = SwiftUI.Color(light: 0x4a52_61, dark: 0xb9b9c0)
-    static let ink3 = SwiftUI.Color(light: 0x8b93_a3, dark: 0x96969e)
-    static let ink4 = SwiftUI.Color(light: 0xb4bb_c7, dark: 0x7c7c84)
-    static let line = SwiftUI.Color(light: 0xe7ea_ef, dark: 0x3a3a3e)
-    static let line2 = SwiftUI.Color(light: 0xf0f2_f6, dark: 0x323236)
-    static let bg = SwiftUI.Color(light: 0xf4f5_f7, dark: 0x1e1e20)
-    static let card = SwiftUI.Color(light: 0xffffff, dark: 0x2a2a2d)
-    static let pane = SwiftUI.Color(light: 0xfafb_fc, dark: 0x242427)
-    /// 浮起层(2026-08-09 重塑 P1,用户拍板):卡片之上再浮一级的卡片底——
-    /// 一页纸 sectionCard、键帽这类「坐在 card 上的卡」。浅色沿用 pane 的纸感不变;
-    /// 深色按 macOS elevated 惯例**比 card 亮一档**(原 pane 深色 242427 比 card 暗,
-    /// 卡片读成凹槽,走查实拍背书)。下嵌小件(徽章底/可视化部件底)用 cardWash。
-    static let surface2 = SwiftUI.Color(light: 0xfafb_fc, dark: 0x363639)
-    /// surface2 的描边:深色同步亮一档,让浮起读得出边缘。
-    static let surface2Line = SwiftUI.Color(light: 0xe7ea_ef, dark: 0x454549)
+    static let ink = V1.Color.ink
+    static let ink2 = V1.Color.ink2
+    static let ink3 = V1.Color.ink3
+    static let ink4 = V1.Color.ink4
+    static let line = V1.Color.rule
+    static let line2 = V1.Color.paper3
+    static let bg = V1.Color.paper
+    static let card = V1.Color.raised
+    static let pane = V1.Color.paper2
+    /// 卡上浮起层：浅色 paper2，深色 paper3；深色比 raised 亮。
+    static let surface2 = SwiftUI.Color(light: V1.Color.paper2, dark: V1.Color.paper3)
+    /// 浮起层描边与规则线同源。
+    static let surface2Line = V1.Color.rule
 
     // 墨青（强调，V1）
-    static let ac = SwiftUI.Color(light: 0x0f76_6e, dark: 0x5fd0c4)
-    static let acHi = SwiftUI.Color(light: 0x1486_7d, dark: 0x77ddd2)
-    static let acSoft = SwiftUI.Color(light: 0xf0fd_fa, dark: 0x173532)
-    static let acLine = SwiftUI.Color(light: 0xa7f3_e4, dark: 0x356b66)
-    static let acDeep = SwiftUI.Color(light: 0x0b5d_57, dark: 0xa1eee6)
-    /// 高饱和强调实底。与 `acDeep` 的前景语义分离，保证两种外观下白字都有稳定对比度。
-    static let accentFill = SwiftUI.Color(light: 0x0b5d_57, dark: 0x0f766e)
+    static let ac = V1.Color.accent
+    static let acHi = V1.Color.accent
+    static let acSoft = V1.Color.accentSoft
+    static let acLine = V1.Color.accent.opacity(0.45)
+    static let acDeep = V1.Color.accent
+    /// 强调实底；前景 onAccent 随外观取 accentInk。
+    static let accentFill = V1.Color.accent
 
     // 语义（V9）
-    static let me = SwiftUI.Color(light: 0x2563_eb, dark: 0x72a7ff)
-    static let others = SwiftUI.Color(light: 0x5b64_72, dark: 0xb9b9c0)
+    static let me = V1.Color.me
+    static let others = V1.Color.ink2
 
     /// 录制态红：录制指示灯、计时器、录音异常常驻条、会议库「录制中」状态点共用一个语义色。
-    static let rec = SwiftUI.Color(light: 0xdc26_26, dark: 0xff7a70)
+    static let rec = V1.Color.rec
 
-    // 以下八色原先散落在视图层的行内 hex（0xdc2626/0x5c6472/…），数值原样收编，
-    // 只把「出处」统一到这里，守住「改色一处改」的纪律。
-    /// 长正文（转写正文、溯源引文）：比 ink2 更冷一档，长段落读起来不压眼。
-    static let inkBody = SwiftUI.Color(light: 0x5c64_72, dark: 0xc7c7ce)
+    /// 长正文使用次文字色。
+    static let inkBody = V1.Color.ink2
     /// 当前专区正文：比 inkBody 更黑，因为它是全屏最该被瞥见的一段字。
-    static let nowBody = SwiftUI.Color(light: 0x2025_2e, dark: 0xf2f2f4)
-    /// 当前专区径向渐变的中段薄荷白。深色 2026-08-09 P2 压饱和(荧光感,拍板口径)。
-    static let washMint = SwiftUI.Color(light: 0xf8ff_fd, dark: 0x22292b)
-    /// 「标记」按钮渐变的下端薄荷白。深色同上压饱和。
-    static let washMark = SwiftUI.Color(light: 0xe6fb_f7, dark: 0x1e2f2e)
-    /// 可视化部件底/徽章底:浅色比 card 略灰一丝让部件浮出来;
-    /// 深色按 elevated 惯例在 card 与 surface2 之间亮一档(2026-08-09 P1 同批扶正)。
-    static let cardWash = SwiftUI.Color(light: 0xfcfd_fe, dark: 0x343437)
+    static let nowBody = V1.Color.ink
+    /// 旧舞台渐变入口收敛到 paper2。
+    static let washMint = V1.Color.paper2
+    /// 旧标记渐变入口收敛到 accentSoft。
+    static let washMark = V1.Color.accentSoft
+    /// 卡内小件：浅色 paper2，深色 paper3。
+    static let cardWash = SwiftUI.Color(light: V1.Color.paper2, dark: V1.Color.paper3)
     /// 顶部工具栏渐变上端。
-    static let toolbarTop = SwiftUI.Color(light: 0xfdfd_fe, dark: 0x2d2d31)
+    static let toolbarTop = V1.Color.paper
     /// 顶部工具栏渐变下端。
-    static let toolbarBottom = SwiftUI.Color(light: 0xf8f9_fb, dark: 0x252529)
+    static let toolbarBottom = V1.Color.paper
 
-    /// 驾驶舱控制轨(2026-08-19 A+C 混搭):轨底两个外观档恒为墨色、不随深浅外观反转——
-    /// 「左黑轨」是驾驶舱的固定锚点,暗色下反转成浅灰会让它失去「控制台」语义。
-    static let rail = SwiftUI.Color(light: 0x191d_24, dark: 0x191d_24)
-    /// 轨内图标/文字的固定浅墨(取 ink4 浅色档同值):同理不随外观反转,
-    /// 否则暗色下墨轨配深灰字不可读。
+    /// 侧边把手未录制圆点仍消费这组固定色；主图标轨已使用 v1。
     static let railInk = SwiftUI.Color(light: 0xb4bb_c7, dark: 0xb4bb_c7)
-    /// 轨内派生态(2026-08-20 批1 命名,值不变):禁用前景/分隔线/进度轨道/开启态底。
     static let railInkDisabled = railInk.opacity(0.4)
-    static let railInkDivider = railInk.opacity(0.28)
-    static let railInkTrack = railInk.opacity(0.3)
-    static let railInkOnState = railInk.opacity(0.16)
-    /// 轨上按钮开启态前景:暗色不能复用 `amber`(暗色档是软底色),否则会与开启态底重叠。
-    static let railInkActive = SwiftUI.Color(light: 0xfff9_e6, dark: 0xffc9_7a)
+
     /// 悬停描边(2026-08-20 批1 由 5 处 ink4.opacity(0.5) 散写收编)。
     static let hoverStroke = ink4.opacity(0.5)
 
-    // 点名高亮（V10）。深色档 2026-08-09 P2 压饱和:底更灰、字更亮,语义靠文字色承担。
-    static let amber = SwiftUI.Color(light: 0xfff9_e6, dark: 0x383427)
-    static let amberLine = SwiftUI.Color(light: 0xfde6_8a, dark: 0x765622)
-    static let warn = SwiftUI.Color(light: 0xb453_09, dark: 0xffc97a)
-    /// 软判定底(批5 补档):核对台「存疑」等软性警示垫底,比 amber 高亮底再浅一档——
-    /// 解除 amber 一色三职(点名高亮底/警示横幅底/软判定底)。
-    static let warnSoft = SwiftUI.Color(light: 0xfffc_f2, dark: 0x2e2b21)
+    // 旧 amber 默认作为警示软底；点名站点单独使用 V1.callSoft。
+    static let amber = V1.Color.warnSoft
+    static let amberLine = V1.Color.warn.opacity(0.35)
+    static let warn = V1.Color.warn
+    /// 警示软底。
+    static let warnSoft = V1.Color.warnSoft
     /// 唤起橙(2026-08-09 R1''' 用户拍板):Claude 品牌橙 #D97757 系,比 warn 更黄更亮,
     /// 与警示语义解耦——「返回驾驶舱」专用(描边/文字/流动扫光同一个色)。
+    // v1:第 1 批退役
     static let cue = SwiftUI.Color(light: 0xd977_57, dark: 0xec_a48c)
 
     // 大布局标注体系：同一语义在浅/深色下都只从 Tokens 取色。
     // 深色软底 2026-08-09 P2 统一「暗灰+淡色味」配方(拍板数值),告别 3d1f1d 红幕。
+    // v1:第 2 批退役
     static let disagreement = SwiftUI.Color(light: 0xc62828, dark: 0xff9d94)
+    // v1:第 2 批退役
     static let disagreementSoft = SwiftUI.Color(light: 0xfdecec, dark: 0x383028)
+    // v1:第 2 批退役
     static let resolved = SwiftUI.Color(light: 0x1b7a3d, dark: 0x7fd89c)
+    // v1:第 2 批退役
     static let resolvedSoft = SwiftUI.Color(light: 0xe7f4ec, dark: 0x24352b)
+    // v1:第 2 批退役
     static let revision = SwiftUI.Color(light: 0x6d28d9, dark: 0xc4a8f8)
+    // v1:第 2 批退役
     static let revisionSoft = SwiftUI.Color(light: 0xf1eafe, dark: 0x322d40)
 
     /// 骨架屏微光扫过色:暗色下白光会是一道刺目亮带,取比 line2 亮两档的灰。
+    // v1:第 2 批退役
     static let shimmer = SwiftUI.Color(light: 0xffffff, dark: 0x4a4a4e)
-    /// 压饱和底(强调钮/录制红条)的文字色:两态同为白,但出处收在 Tokens、不走裸 .white。
-    static let onAccent = SwiftUI.Color(light: 0xffffff, dark: 0xffffff)
+    /// 强调实底前景；录音失败红条的调用点改用 V1.onRec。
+    static let onAccent = V1.Color.accentInk
 
     /// 话题节点章节色循环（f59e0b / 0ea5e9 / 10b981），只出现在空心圆环上，不进卡片。
+    // v1:第 2 批退役
     static let chapterAccents: [SwiftUI.Color] = [
       SwiftUI.Color(light: 0xf59e_0b, dark: 0xffb54d),
       SwiftUI.Color(light: 0x0ea5_e9, dark: 0x67c5f5),
@@ -119,6 +111,7 @@ enum Tokens {
     /// ②不并排放红/绿这对红绿色盲最难分的组合——环里唯一的绿(10b981)与唯一的红棕
     /// (e11d48)相隔三位,连着两个人撞上这一对的概率被压到最低;③都是中高饱和的深色,
     /// 落在白底上对比度够读。
+    // v1:第 2 批退役
     static let speakerAccents: [SwiftUI.Color] = [
       SwiftUI.Color(light: 0x0891_b2, dark: 0x67c5f5),
       SwiftUI.Color(light: 0xd977_06, dark: 0xffb54d),
@@ -315,20 +308,17 @@ enum Tokens {
     static let windowMinWidth: CGFloat = 1_040
     static let windowMinHeight: CGFloat = 640
     /// 驾驶舱 A+C 混搭确定性布局(2026-08-19 契约,替代 07-31 左栏转写三栏):
-    /// 定宽控制轨 56 + 定高此刻舞台 168 + 弹性整理区(≥520) + 定宽右栏 332 +
+    /// AppShell 图标轨之外：定高此刻舞台 168 + 弹性整理区(≥520) + 定宽右栏 332 +
     /// 定高转写细条 28;转写抽屉(240)是 overlay、不参与 flex,窗口最小宽因此
     /// 收成单一档 920,不再随转写展开两档跳变。
     /// 禁用 HSplitView 不变:它自记忆栏宽、不随窗口重排,三轮实测把右栏顶出窗外/
     /// 内容居中裁边;定宽+弹性在任何窗宽下总和恒等于容器宽,溢出在数学上不可能。
-    static let commandRailWidth: CGFloat = 56
-    /// 驾驶舱唯一的窗口最小宽(轨 56 + 整理区 ≥520 + 右栏 332 + 分隔线量级)。
+    /// 驾驶舱主区最小宽，图标轨在 AppShell 另计。
     /// 旧的 920/1220 两档跳变随左栏转写一起撤销:抽屉是 overlay,展开不吃宽度。
     static let cockpitMinWidth: CGFloat = 920
     static let nowStageHeight: CGFloat = 168
     static let transcriptStripHeight: CGFloat = 28
     static let transcriptDrawerHeight: CGFloat = 240
-    /// 控制轨悬停卡(闲聊/暂停)宽度。
-    static let railHoverCardWidth: CGFloat = 240
     static let dashboardSidebarWidth: CGFloat = 332
     static let nowPaneMinFraction: CGFloat = 0.35
     static let nowPaneIdealFraction: CGFloat = 0.40

@@ -24,17 +24,19 @@ struct SummaryWidgetContainer<Content: View>: View {
       }
       content()
     }
-    .padding(.horizontal, Tokens.Spacing.sm)
-    .padding(.vertical, Tokens.Spacing.xsm)
+    .padding(.top, Tokens.V1.Space.sm)
     // 部件外壳一律铺满所在列:tree/少列 table/flow 降级边表这类**纵向内容**没有
     // 自带 `maxWidth: .infinity` 的横排条目,不钉这一句就缩成内容宽,同一张话题卡里
     // 与 timeline/nums/chain 的右缘对不齐(2026-08-21 走查 P-3,实拍 tree 只有邻卡的三成宽)。
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Tokens.Color.cardWash)
-    .overlay(
-      RoundedRectangle(cornerRadius: Tokens.Radius.widget).stroke(Tokens.Color.line, lineWidth: 1)
-    )
-    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.widget))
+    // 表达块不再自带卡:会议骨架已经是一张卡,里面每个表达再套一张就是卡中卡
+    // (owner 2026-09-20「太乱了」;F2 v3 第 8 条「没有卡中卡」)。块与块之间用细线分隔。
+    // 顺带去掉 clipShape——它会把这一块推到离屏图层,文字次像素抗锯齿被关掉,看着发糊。
+    .overlay(alignment: .top) {
+      Rectangle()
+        .fill(Tokens.V1.Color.rule)
+        .frame(height: Tokens.V1.Size.controlRuleWidth)
+    }
   }
 }
 
@@ -315,7 +317,12 @@ struct TableWidgetView: View {
                 if index == row.cells.count - 1 {
                   HStack(spacing: Tokens.Spacing.xxs) {
                     EvidenceBadge(mark: row.evidence)
-                    TranscriptAnchorButton(anchor: row.anchor, onJump: onJumpToTranscript)
+                    // 末列本身就是「锚点」列时,单元格里已经写着 00:22:09,再追加一颗
+                    // 同一时间的锚点按钮就是同一个时间戳写两遍
+                    // (owner 2026-09-20 实拍:每行 `00:22:09` 下面又一个 `✓ 22:09`)。
+                    if !cellRepeatsAnchor(cell, row.anchor) {
+                      TranscriptAnchorButton(anchor: row.anchor, onJump: onJumpToTranscript)
+                    }
                   }
                 }
               }
@@ -1575,4 +1582,15 @@ struct TranscriptAnchorButton: View {
     guard parts.count == 3, parts.first == "00" else { return timecode }
     return parts.dropFirst().joined(separator: ":")
   }
+}
+
+/// 单元格文本是否已经包含这一行的锚点时间。只比数字,忽略前导 `00:` 与分隔符差异。
+private func cellRepeatsAnchor(_ cell: SummaryRichText, _ anchor: TranscriptAnchor?) -> Bool {
+  guard let anchor else { return false }
+  let digits = { (text: String) in text.filter(\.isNumber) }
+  let cellDigits = digits(cell.runs.map(\.text).joined())
+  guard !cellDigits.isEmpty else { return false }
+  let anchorDigits = digits(anchor.timecode)
+  guard !anchorDigits.isEmpty else { return false }
+  return cellDigits.hasSuffix(anchorDigits) || anchorDigits.hasSuffix(cellDigits)
 }

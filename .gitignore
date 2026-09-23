@@ -48,3 +48,19 @@ private-evaluation/
 
 # 调研截图集(体积大,本地留档不入库)
 .trellis/tasks/**/research/screenshots/
+
+# 截图装置的实时输出目录。验收证据用带日期的快照目录留存
+# (wayfinder/assets/walkthrough-YYYY-MM-DD),实时目录每跑一次就全量重写,不入库。
+wayfinder/assets/walkthrough/
+
+# design-sync(把 docs/design-system/web-kit 同步到 Claude Design):暂存的转换脚本、生成的上传包、
+# 本机状态与分片草稿都不入库;.design-sync/ 里其余文件(config、NOTES、conventions、previews)入库。
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+# 网页组件包的依赖与构建产物(npm run build 重建)。
+docs/design-system/web-kit/node_modules/
+docs/design-system/web-kit/dist/
+docs/design-system/web-kit/src/generated/

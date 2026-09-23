@@ -19,7 +19,7 @@ extension MeetingLibraryModel {
     }
     speakerHighlight = speaker
     speakerHighlightIndex = 0
-    speakerFilter = nil
+    speakerFilters = []
     guard let selectedItem,
       let first = highlightAnchors(for: selectedItem).first
     else { return }
@@ -131,8 +131,9 @@ extension MeetingLibraryModel {
         speakerHighlight = newDisplayName
         speakerHighlightIndex = 0
       }
-      if speakerFilter == oldDisplayName {
-        speakerFilter = newDisplayName
+      if speakerFilters.contains(oldDisplayName) {
+        speakerFilters.remove(oldDisplayName)
+        speakerFilters.insert(newDisplayName)
       }
       speakerNameError = nil
     } catch {

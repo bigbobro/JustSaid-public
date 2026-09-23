@@ -191,11 +191,10 @@ final class GlobalHotkeyManager: ObservableObject {
       }
       let status = register(action, chord)
       if status == noErr {
-        var message = "已生效：\(chord.displayLabel)"
-        if let warning = chord.inAppConflictWarning(for: action) {
-          message += "。\(warning)"
-        }
-        setStatus(action, message, error: false)
+        // 注册成功是常态,不上画面:行里的键帽已经写着这组键,再补一句「已生效:⌥⌘M」是同一件事
+        // 说两遍(owner 2026-09-21 点名过这处「已生效」和键帽、「默认」重复)。
+        // 只有和应用内快捷键冲突的提醒是新信息,才留下。
+        setStatus(action, chord.inAppConflictWarning(for: action), error: false)
         continue
       }
       setStatus(

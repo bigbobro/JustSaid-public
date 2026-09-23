@@ -4,13 +4,17 @@ import SwiftUI
 
 /// 会后详情的默认首屏。结构化 sidecar 可用时忠实呈现六原语；旧会议只显示
 /// 从现有纪要保守提取的要点，不反推结论类型、负责人或转写锚点。
-struct OnePagerView: View {
+struct OnePagerView<Trailing: View>: View {
   let document: MeetingMinutesDocument
   let isLegacyFallback: Bool
   /// 落盘留痕话题，只用于给既有 topicTrail 证明章节起点；不改写一页纸内容。
   let topics: [SummaryTopic]
   let onJumpToTranscript: (TimeInterval) -> Void
   var scrollOffset: Binding<CGFloat>? = nil
+  /// 尾部插槽:正式纪要正文挂在这里。一页纸就是结构化纪要本身
+  /// (`MeetingArtifactProjection.onePager` 直接返回 `structuredMinutes`),
+  /// 两者同一份、同一版本,所以合成一页(owner 2026-09-20)。
+  let trailing: Trailing
 
   @Environment(\.textScale) private var textScale
 
@@ -19,13 +23,15 @@ struct OnePagerView: View {
     isLegacyFallback: Bool,
     topics: [SummaryTopic] = [],
     onJumpToTranscript: @escaping (TimeInterval) -> Void,
-    scrollOffset: Binding<CGFloat>? = nil
+    scrollOffset: Binding<CGFloat>? = nil,
+    @ViewBuilder trailing: () -> Trailing = { EmptyView() }
   ) {
     self.document = document
     self.isLegacyFallback = isLegacyFallback
     self.topics = topics
     self.onJumpToTranscript = onJumpToTranscript
     self.scrollOffset = scrollOffset
+    self.trailing = trailing()
   }
 
   var body: some View {
@@ -61,6 +67,7 @@ struct OnePagerView: View {
         }
         skeletonSection
         actionAndOpenWorkRow
+        trailing
       }
       .padding(Tokens.Spacing.lg)
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -128,14 +135,11 @@ struct OnePagerView: View {
                   .font(.system(size: textScale.size(Tokens.FontSize.body), weight: .semibold))
                   .foregroundStyle(Tokens.Color.ink)
                   .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: Tokens.Spacing.xs) {
-                  EvidenceText(mark: conclusion.content.evidence)
-                  TranscriptAnchorButton(
-                    anchor: conclusion.content.anchor,
-                    onJump: onJumpToTranscript
-                  )
-                }
+                EvidenceText(mark: conclusion.content.evidence)
               }
+              .frame(maxWidth: .infinity, alignment: .leading)
+              TranscriptAnchorButton(anchor: conclusion.content.anchor, onJump: onJumpToTranscript)
+                .frame(width: Tokens.V1.Size.meetingAnchorWidth, alignment: .trailing)
             }
           }
         }
@@ -159,10 +163,12 @@ struct OnePagerView: View {
                         )
                       )
                       .foregroundStyle(Tokens.Color.ink)
+                    Spacer(minLength: Tokens.V1.Space.xs)
                     TranscriptAnchorButton(
                       anchor: decision.anchor,
                       onJump: onJumpToTranscript
                     )
+                .frame(width: Tokens.V1.Size.meetingAnchorWidth, alignment: .trailing)
                   }
                   ForEach(decision.options) { option in
                     HStack(alignment: .top, spacing: Tokens.Spacing.xxs) {
@@ -177,10 +183,12 @@ struct OnePagerView: View {
                       Text(option.proposal)
                         .font(.system(size: textScale.size(Tokens.FontSize.bodyMinimum)))
                         .foregroundStyle(Tokens.Color.ink2)
+                      Spacer(minLength: Tokens.V1.Space.xs)
                       TranscriptAnchorButton(
                         anchor: option.anchor,
                         onJump: onJumpToTranscript
                       )
+                .frame(width: Tokens.V1.Size.meetingAnchorWidth, alignment: .trailing)
                     }
                   }
                   if !decision.rationale.isEmpty {
@@ -193,17 +201,19 @@ struct OnePagerView: View {
               }
             }
           }
-          .padding(Tokens.Spacing.xsm)
+          // 不再是卡中卡:结论带本身已经是一张卡,里面再套一张底色卡就成了双层容器
+          // (owner 2026-09-20「太乱了」;F2 v3 第 8 条明写「没有卡中卡」)。
+          // 改成一条上分隔线加留白,层级靠间距和字重表达,不靠再加一个框。
+          .padding(.top, Tokens.V1.Space.sm)
           .frame(maxWidth: .infinity, alignment: .leading)
-          .background(Tokens.Color.pane)
-          .overlay(
-            RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-              .stroke(Tokens.Color.line2, lineWidth: 1)
-          )
-          .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.widget))
+          .overlay(alignment: .top) {
+            Rectangle()
+              .fill(Tokens.V1.Color.rule)
+              .frame(height: Tokens.V1.Size.controlRuleWidth)
+          }
         }
       }
-      .frame(maxWidth: Tokens.Layout.readingContentWidth, alignment: .leading)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
@@ -301,10 +311,6 @@ struct OnePagerView: View {
                     .font(.system(size: Tokens.FontSize.secondary, weight: .medium))
                     .foregroundStyle(Tokens.Color.ink3)
                   EvidenceText(mark: item.evidence)
-                  TranscriptAnchorButton(
-                    anchor: item.recordedAt,
-                    onJump: onJumpToTranscript
-                  )
                 }
                 if let deadline = item.deadline {
                   Text("时限：\(deadline)")
@@ -329,18 +335,23 @@ struct OnePagerView: View {
                         .foregroundStyle(Tokens.Color.ink3)
                         .fixedSize(horizontal: false, vertical: true)
                     }
+                    Spacer(minLength: Tokens.V1.Space.xs)
                     TranscriptAnchorButton(
                       anchor: update.anchor,
                       onJump: onJumpToTranscript
                     )
+                .frame(width: Tokens.V1.Size.meetingAnchorWidth, alignment: .trailing)
                   }
                 }
               }
+              .frame(maxWidth: .infinity, alignment: .leading)
+              TranscriptAnchorButton(anchor: item.recordedAt, onJump: onJumpToTranscript)
+                .frame(width: Tokens.V1.Size.meetingAnchorWidth, alignment: .trailing)
             }
           }
         }
       }
-      .frame(maxWidth: Tokens.Layout.readingContentWidth, alignment: .leading)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
@@ -360,7 +371,7 @@ struct OnePagerView: View {
           openWorkColumn(kind: .disagreement)
         }
       }
-      .frame(maxWidth: Tokens.Layout.readingContentWidth, alignment: .leading)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
@@ -387,10 +398,12 @@ struct OnePagerView: View {
               .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: Tokens.Spacing.xs) {
               EvidenceText(mark: item.content.evidence)
+              Spacer(minLength: Tokens.V1.Space.xs)
               TranscriptAnchorButton(
                 anchor: item.content.anchor,
                 onJump: onJumpToTranscript
               )
+                .frame(width: Tokens.V1.Size.meetingAnchorWidth, alignment: .trailing)
             }
           }
           .padding(.vertical, Tokens.Spacing.xxs)
@@ -430,8 +443,7 @@ struct OnePagerView: View {
     hero: Bool = false,
     @ViewBuilder content: () -> Content
   ) -> some View {
-    let shadow = hero ? Tokens.Shadow.sh2 : Tokens.Shadow.sh1
-    return VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
+    return VStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
       SectionHeaderRow(
         title: title,
         count: count,
@@ -440,19 +452,19 @@ struct OnePagerView: View {
       )
       content()
     }
-    .padding(Tokens.Spacing.smd)
-    .padding(.leading, hero ? Tokens.Spacing.xxs : 0)
+    .padding(Tokens.V1.Space.md)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Tokens.Color.card)
-    .overlay(alignment: .leading) {
-      if hero {
-        Rectangle()
-          .fill(Tokens.Color.ac)
-          .frame(width: Tokens.Layout.accentEdgeWidth)
-      }
+    // 用 background(_:in:) + strokeBorder,不要 background + clipShape:后者会把这一块
+    // 推到离屏图层渲染,文字的次像素抗锯齿被关掉,看着发糊
+    // (owner 2026-09-20「结论袋里面这个容器内的文字,感觉有点糊」)。
+    .background(
+      hero ? Tokens.V1.Color.raised : Tokens.V1.Color.paper2,
+      in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg))
+    .overlay {
+      RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg)
+        .strokeBorder(hero ? Tokens.V1.Color.controlRule : Tokens.V1.Color.rule,
+          lineWidth: Tokens.V1.Size.controlRuleWidth)
     }
-    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.card))
-    .shadow(color: shadow.color, radius: shadow.radius, y: shadow.y)
     .runtimeAccessibilityIdentifier(identifier)
   }
 }
@@ -719,32 +731,31 @@ private struct OnePagerHoverCopyRow<Content: View>: View {
   }
 
   var body: some View {
-    content
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .overlay(alignment: .topTrailing) {
-        Button(action: copy) {
-          Text(didCopy ? "已复制 ✓" : "复制")
-            .font(.system(size: Tokens.FontSize.secondary, weight: .semibold))
-            .foregroundStyle(didCopy ? Tokens.Color.resolved : Tokens.Color.acDeep)
-            .padding(.horizontal, Tokens.Spacing.xs)
-            .padding(.vertical, Tokens.Spacing.hairline)
-            .background(
-              (didCopy ? Tokens.Color.resolvedSoft : Tokens.Color.cardWash),
-              in: Capsule()
-            )
-        }
-        .buttonStyle(.plain)
-        .help("复制这条")
-        .accessibilityLabel(didCopy ? "已复制" : "复制")
-        .runtimeAccessibilityIdentifier(identifier)
-        .opacity(isHovering || didCopy ? 1 : 0)
-        .allowsHitTesting(isHovering || didCopy)
-        .animation(reduceMotion ? nil : .easeOut(duration: Tokens.Motion.hover), value: isHovering)
-        .animation(reduceMotion ? nil : .easeOut(duration: Tokens.Motion.hover), value: didCopy)
+    // 常驻槽位,不用 overlay。overlay 放在哪都会压住东西:压右上角就盖掉时间戳,
+    // 让开时间戳就压到长文本的末行(owner 2026-09-20 两次实拍)。
+    // 给它一条自己的窄列,内容永远排不到那里,就压不着任何东西;
+    // 不悬停时只是透明,布局不跳。
+    HStack(alignment: .top, spacing: Tokens.V1.Space.xs) {
+      content
+        .frame(maxWidth: .infinity, alignment: .leading)
+      Button(action: copy) {
+        Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+          .font(Tokens.V1.Text.micro.font)
+          .foregroundStyle(didCopy ? Tokens.V1.Color.ok : Tokens.V1.Color.ink3)
       }
-      .onHover { hovering in
-        isHovering = hovering
-      }
+      .buttonStyle(.plain)
+      .help(didCopy ? "已复制" : "复制这条")
+      .accessibilityLabel(didCopy ? "已复制" : "复制")
+      .runtimeAccessibilityIdentifier(identifier)
+      .frame(width: Tokens.V1.Size.control, alignment: .trailing)
+      .opacity(isHovering || didCopy ? 1 : 0)
+      .allowsHitTesting(isHovering || didCopy)
+      .animation(reduceMotion ? nil : .easeOut(duration: Tokens.V1.Motion.fast), value: isHovering)
+      .animation(reduceMotion ? nil : .easeOut(duration: Tokens.V1.Motion.fast), value: didCopy)
+    }
+    .onHover { hovering in
+      isHovering = hovering
+    }
   }
 
   private func copy() {
@@ -826,15 +837,21 @@ private struct AnchoredOnePagerRow: View {
           .font(.system(size: textScale.size(Tokens.FontSize.bodyMinimum)))
           .foregroundStyle(Tokens.Color.ink2)
           .fixedSize(horizontal: false, vertical: true)
-        HStack(spacing: Tokens.Spacing.xs) {
-          EvidenceText(mark: content.evidence)
-          TranscriptAnchorButton(anchor: content.anchor, onJump: onJumpToTranscript)
-        }
+        EvidenceText(mark: content.evidence)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      EvidenceConfirmedTick(mark: content.evidence)
+      TranscriptAnchorButton(anchor: content.anchor, onJump: onJumpToTranscript)
+        .frame(width: Tokens.V1.Size.meetingAnchorWidth, alignment: .trailing)
     }
   }
 }
 
+/// 证据记号。
+///
+/// 「待核」与「已修正」要你动手或者提醒你这句被改过,值得单独一行;
+/// 「已确认」是常态,原来也占一整行,一屏十条结论就多出十行只写着「已确认」的字,
+/// 读起来很碎(owner 2026-09-20)。它缩成句末一枚小勾,颜色照旧。
 private struct EvidenceText: View {
   let mark: SummaryEvidenceMark?
 
@@ -848,10 +865,24 @@ private struct EvidenceText: View {
       Text("已修正")
         .foregroundStyle(Tokens.Color.revision)
     case .confirmed:
-      Text("已确认")
-        .foregroundStyle(Tokens.Color.resolved)
+      EmptyView()
     case nil:
       EmptyView()
+    }
+  }
+}
+
+/// 句末的「已确认」小勾。只在确认态出现,不占行。
+private struct EvidenceConfirmedTick: View {
+  let mark: SummaryEvidenceMark?
+
+  @ViewBuilder
+  var body: some View {
+    if mark == .confirmed {
+      Image(systemName: "checkmark")
+        .font(Tokens.V1.Text.micro.font)
+        .foregroundStyle(Tokens.Color.resolved)
+        .accessibilityLabel("已确认")
     }
   }
 }

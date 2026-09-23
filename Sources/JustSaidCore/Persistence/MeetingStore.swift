@@ -495,6 +495,28 @@ public final class MeetingStore: @unchecked Sendable {
     }
   }
 
+  /// 勾掉或恢复会议页右栏的一条待办(owner 2026-09-22)。只写 `meeting.json`;
+  /// 全部取消写回 nil(旧档无迁移),重复勾或重复取消都幂等。
+  @discardableResult
+  public func setActionItemCompleted(
+    _ key: String,
+    completed: Bool,
+    at paths: MeetingPaths
+  ) throws -> MeetingMetadata {
+    try mutateMetadata(at: paths) {
+      let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { return }
+      var keys = $0.completedActionItems ?? []
+      if completed {
+        guard !keys.contains(trimmed) else { return }
+        keys.append(trimmed)
+      } else {
+        keys.removeAll { $0 == trimmed }
+      }
+      $0.completedActionItems = keys.isEmpty ? nil : keys
+    }
+  }
+
   /// 单段说话人更正(N2)。`name` 为空即撤销这一段的覆盖,回落到全局映射。
   /// 与全局改名一样只写 `meeting.json`,`transcript.md` 一个字节都不碰。
   public func setSpeakerOverride(

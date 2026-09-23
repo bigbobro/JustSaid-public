@@ -1,27 +1,20 @@
 import JustSaidCore
 import SwiftUI
 
-/// 会中悬浮内容(Dock 展开内容与悬浮小窗共用),已确认纵向卡片 C:顶部是拖动短线与右上角
-/// 独占的关闭区;有未确认点名时顶部换成差异色名字区(名字与「知道了」分列,右侧让出关闭区),
-/// 整圈亮边并有一段慢速高光绕行。下方依次是麦克风暂停小条、「当前正在聊 · 覆盖至」、
-/// 最新 1–2 条总结(固定三行高度,动态更新不改面板几何)与底栏(标记重点 / 载体切换 / 回主窗)。
-/// 关闭只关悬浮显示,不暂停提醒。
+/// 把手展开与悬浮小窗共用五态内容卡。关闭只关显示,确认只针对渲染时的点名。
 public struct CompactOverlayView: View {
   @ObservedObject var model: CompactOverlayViewModel
   @Environment(\.textScale) private var textScale
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.presenceDecorationActive) private var isActive
 
-  public init(model: CompactOverlayViewModel) {
-    self.model = model
-  }
+  public init(model: CompactOverlayViewModel) { self.model = model }
 
-  /// 右上角关闭区宽度:名字区右侧留出,「知道了」不贴着 ×。
-  static let closeZoneWidth = Tokens.Spacing.xxl + Tokens.Spacing.smd
-  /// 无点名时顶部拖动/关闭条高度,与 × 的命中区(含上边距)一致,下方内容不压 ×。
-  static let chromeHeight = Tokens.Spacing.xxl + Tokens.Spacing.xsm
-
+  static let closeZoneWidth = Tokens.V1.Size.overlayCloseZone
   private var isPending: Bool { model.pendingEvent != nil }
-
+  private var hasTopBand: Bool {
+    isPending || model.isMicrophonePaused || model.actionConfirmation != nil
+  }
   private var transition: Animation {
     .easeInOut(
       duration: reduceMotion ? Tokens.Motion.presenceReducedFade : Tokens.Motion.presenceTransition)
@@ -29,248 +22,229 @@ public struct CompactOverlayView: View {
 
   public var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      if let event = model.pendingEvent {
-        NameAlertNameZone(event: event, onAcknowledge: model.onAcknowledge)
-          .padding(.leading, Tokens.Spacing.lg)
-          .padding(.trailing, Self.closeZoneWidth)
-          .padding(.top, Tokens.Spacing.lg)
-          .padding(.bottom, Tokens.Spacing.md)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background(Tokens.Color.acSoft)
-          .overlay(alignment: .bottom) {
-            Rectangle().fill(Tokens.Color.line).frame(height: 1)
-          }
-          .transition(.opacity)
-          .runtimeAccessibilityIdentifier("compact.name-alert")
-      } else {
-        Color.clear.frame(height: Self.chromeHeight)
-      }
-
-      // 麦克风暂停小条(08-14 mic-only-pause):显隐收在视图内部(红线 6)。
-      if model.isMicrophonePaused {
-        microphonePausedStrip
-          .padding(.horizontal, Tokens.Spacing.md)
-          .padding(.top, isPending ? Tokens.Spacing.smd : 0)
-          .transition(.opacity)
-      }
-
-      VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
-        header
-        summaryContent
-        footer
-      }
-      .padding(.horizontal, Tokens.Spacing.lg)
-      .padding(.top, isPending || model.isMicrophonePaused ? Tokens.Spacing.md : 0)
-      .padding(.bottom, Tokens.Spacing.smd)
-    }
-    .frame(width: Tokens.Layout.compactOverlayWidth, alignment: .topLeading)
-    // 面板高度在过渡中或被按住冻结时可能小于理想高度:卡片底与轮廓跟随面板边界,内容贴顶;
-    // 让出的高度只从总结区收,名字区、关闭、知道了与底栏按钮保持完整可见。
-    .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
-    .background(Tokens.Color.card)
-    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.compactPanel))
-    .overlay { PresenceCardRim(isPending: isPending) }
-    .overlay(alignment: .top) {
       if model.carrier == .window {
-        // 小窗可拖动的提示短线;拖动本身由面板根上的 WindowDragGesture 处理。
         Capsule()
-          .fill(Tokens.Color.ink3.opacity(0.35))
-          .frame(width: Tokens.Spacing.xxl, height: 3)
-          .padding(.top, Tokens.Spacing.xs)
+          .fill(Tokens.V1.Color.ink4)
+          .frame(width: Tokens.V1.Size.controlSm, height: Tokens.V1.Size.overlayGripHeight)
+          .frame(maxWidth: .infinity)
+          .padding(.top, Tokens.V1.Space.xs)
+          .padding(.bottom, hasTopBand ? Tokens.V1.Space.xs : 0)
           .allowsHitTesting(false)
           .accessibilityHidden(true)
+          .runtimeAccessibilityIdentifier("compact.grip")
       }
+      if let event = model.pendingEvent {
+        NameAlertNameZone(event: event, onAcknowledge: model.onAcknowledge)
+          .padding(.leading, Tokens.V1.Space.md)
+          .padding(.trailing, Self.closeZoneWidth)
+          .padding(.vertical, Tokens.V1.Space.sm)
+          .background(Tokens.V1.Color.callSoft)
+          .transition(.opacity)
+          .runtimeAccessibilityIdentifier("compact.name-alert")
+      }
+      // 暂停是常驻状态,即使点名出现也保留恢复入口。
+      if model.isMicrophonePaused { microphonePausedStrip.transition(.opacity) }
+      if let text = model.actionConfirmation { receiptStrip(text).transition(.opacity) }
+      header
+      summaryContent
+      footer
     }
+    .frame(width: Tokens.V1.Size.overlayWidth, alignment: .topLeading)
+    // 按住时面板几何冻结:先压摘要,不足时再裁非交互头部,操作始终留在窗内。
+    .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+    .background(Tokens.V1.Color.raised)
+    .clipShape(RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg))
+    .overlay { PresenceCardRim(isPending: isPending) }
     .overlay(alignment: .topTrailing) { closeButton }
     .animation(transition, value: model.pendingEvent?.id)
     .animation(transition, value: model.isMicrophonePaused)
+    .animation(transition, value: model.actionConfirmation)
     .accessibilityElement(children: .contain)
   }
 
-  /// 关闭独占右上角:不覆盖名字、「知道了」、时间与按钮。
   private var closeButton: some View {
     Button(action: model.onClose) {
       Image(systemName: "xmark")
-        .font(.system(size: Tokens.FontSize.ui, weight: .bold))
-        .frame(width: Tokens.Spacing.xxl, height: Tokens.Spacing.xxl)
-        .contentShape(Rectangle())
+        .font(.system(size: Tokens.V1.Text.micro.size, weight: .semibold))
     }
-    .buttonStyle(IconHoverButtonStyle(base: Tokens.Color.ink3, hover: Tokens.Color.ink))
+    .buttonStyle(.v1Icon.height(Tokens.V1.Size.controlSm))
     .accessibilityLabel("关闭悬浮显示")
     .help("关闭悬浮显示；不改变点名提醒设置，录音与总结继续")
     .runtimeAccessibilityIdentifier("compact.close")
-    .padding(.top, Tokens.Spacing.xs)
-    .padding(.trailing, Tokens.Spacing.xs)
+    .padding(.top, Tokens.V1.Space.s2xs)
+    .padding(.trailing, Tokens.V1.Space.s2xs)
   }
 
   private var header: some View {
-    HStack(spacing: Tokens.Spacing.xs) {
-      PulsingDot(color: Tokens.Color.rec, size: 6, isPulsing: false)
-      Text("当前正在聊")
-        .font(.system(size: Tokens.FontSize.ui, weight: .bold))
-        .foregroundStyle(Tokens.Color.ac)
-      Spacer(minLength: Tokens.Spacing.xs)
-      Text("覆盖至 \(model.coveredUntilLabel)")
-        .font(.system(size: Tokens.FontSize.caption, design: .monospaced))
-        .foregroundStyle(Tokens.Color.ink3)
+    HStack(spacing: Tokens.V1.Space.xs) {
+      Circle()
+        .fill(model.lines.isEmpty ? Tokens.V1.Color.accent : Tokens.V1.Color.rec)
+        .frame(width: Tokens.V1.Space.xs, height: Tokens.V1.Space.xs)
+        .accessibilityHidden(true)
+      Text(model.lines.isEmpty ? "正在听…" : (model.topicTitle.map { "当前正在聊 · \($0)" } ?? "当前正在聊"))
+        .font(Tokens.V1.Text.micro.font)
+        .foregroundStyle(Tokens.V1.Color.ink2)
+      Spacer(minLength: Tokens.V1.Space.xs)
+      Group {
+        if model.lines.isEmpty {
+          TimelineView(.animation(minimumInterval: 1, paused: !isActive)) { context in
+            Text(
+              ElapsedTime.shortLabel(
+                model.startedAt.map { context.date.timeIntervalSince($0) } ?? 0))
+          }
+        } else {
+          Text("覆盖至 \(model.coveredUntilLabel)")
+        }
+      }
+      .font(Tokens.V1.Text.meta.font)
+      .monospacedDigit()
+      .foregroundStyle(Tokens.V1.Color.ink3)
     }
     .lineLimit(1)
-    .fixedSize(horizontal: false, vertical: true)
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .frame(
+      minHeight: model.isContentGeometryHeld ? 0 : Tokens.V1.Size.controlLg,
+      idealHeight: Tokens.V1.Size.controlLg, maxHeight: Tokens.V1.Size.controlLg
+    )
+    .clipped()
+    .layoutPriority(-1)
     .runtimeAccessibilityIdentifier("compact.header")
+    .padding(.leading, Tokens.V1.Space.md)
+    .padding(.trailing, Self.closeZoneWidth)
   }
 
-  private var bodyFont: Font {
-    .system(size: textScale.size(Tokens.FontSize.body))
-  }
+  private var bodyFont: Font { .system(size: textScale.size(Tokens.V1.Text.body.size)) }
 
-  /// 总结区固定三行高(随正文字号):一条时最多三行,两条时 2+1 行,超出以省略号收尾。
   private var summaryContent: some View {
-    ZStack(alignment: .topLeading) {
-      Text(verbatim: "\n\n")
-        .font(bodyFont)
-        .hidden()
-        .accessibilityHidden(true)
+    Group {
       if model.lines.isEmpty {
-        Text("正在听…")
+        Text("第一段大约半分钟后成形。")
           .font(bodyFont)
-          .foregroundStyle(Tokens.Color.ink4)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
           .runtimeAccessibilityIdentifier("compact.content.text")
       } else {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: Tokens.V1.Space.s2xs) {
           ForEach(Array(model.lines.enumerated()), id: \.element.id) { index, line in
-            RichText(line.text)
-              .font(bodyFont)
-              .foregroundStyle(Tokens.Color.ink)
-              .lineLimit(model.lines.count == 1 ? 3 : (index == 0 ? 2 : 1))
-              .truncationMode(.tail)
-              .runtimeAccessibilityIdentifier("compact.content.text")
+            HStack(alignment: .firstTextBaseline, spacing: Tokens.V1.Space.xs) {
+              Text("•").foregroundStyle(Tokens.V1.Color.ink4).accessibilityHidden(true)
+              RichText(line.text)
+                .foregroundStyle(Tokens.V1.Color.ink2)
+                .lineLimit(model.lines.count == 1 ? 3 : (index == 0 ? 2 : 1))
+                .truncationMode(.tail)
+                .runtimeAccessibilityIdentifier("compact.content.text")
+            }
+            .font(bodyFont)
           }
         }
       }
     }
-    .frame(maxWidth: .infinity, minHeight: 0, alignment: .topLeading)
+    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .frame(
+      minHeight: model.isContentGeometryHeld
+        ? 0 : textScale.size(Tokens.V1.Size.overlaySummaryMinHeight),
+      idealHeight: textScale.size(Tokens.V1.Size.overlaySummaryMinHeight),
+      maxHeight: textScale.size(Tokens.V1.Size.overlaySummaryMinHeight), alignment: .topLeading
+    )
     .clipped()
-    .layoutPriority(-1)
+    .layoutPriority(-2)
+    .padding(.horizontal, Tokens.V1.Space.md)
     .runtimeAccessibilityIdentifier("compact.content")
   }
 
   private var footer: some View {
-    VStack(spacing: Tokens.Spacing.xs) {
-      Rectangle().fill(Tokens.Color.line).frame(height: 1)
-      HStack(spacing: Tokens.Spacing.xs) {
-        Button(action: model.onMark) {
-          HStack(spacing: Tokens.Spacing.xxs) {
-            Image(systemName: model.markConfirmation == nil ? "flag.fill" : "checkmark")
-              .accessibilityHidden(true)
-            if model.markConfirmation == nil {
-              Text("标记重点")
-            } else {
-              Text("已标记")
-            }
-          }
-          .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .bold))
-          .foregroundStyle(Tokens.Color.acDeep)
-        }
-        .buttonStyle(.compactPillAccent)
-        .fixedSize()
-        .runtimeAccessibilityIdentifier("compact.mark")
-
-        if let text = model.actionConfirmation {
-          Text(text)
-            .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-            .foregroundStyle(Tokens.Color.acDeep)
-            .lineLimit(1)
-            .padding(.horizontal, Tokens.Spacing.sm)
-            .padding(.vertical, Tokens.Spacing.xxs)
-            .background(
-              Tokens.Color.acSoft,
-              in: RoundedRectangle(cornerRadius: Tokens.Radius.control)
-            )
-            .overlay(
-              RoundedRectangle(cornerRadius: Tokens.Radius.control)
-                .stroke(Tokens.Color.acLine, lineWidth: 1)
-            )
-            .runtimeAccessibilityIdentifier("compact.action-confirmation")
-            .allowsHitTesting(false)
-        }
-
-        Spacer(minLength: Tokens.Spacing.xs)
-
-        carrierButton
-
-        Button(action: model.onReturnToMain) {
-          HStack(spacing: Tokens.Spacing.xxs) {
-            Text("回主窗")
-            Image(systemName: "arrow.up.right")
-              .accessibilityHidden(true)
-          }
-          .font(.system(size: Tokens.FontSize.ui))
-          .foregroundStyle(Tokens.Color.ink2)
-        }
-        .buttonStyle(.compactPill)
-        .fixedSize()
-        .runtimeAccessibilityIdentifier("compact.return-main")
+    HStack(spacing: Tokens.V1.Space.s2xs) {
+      Button(action: model.onMark) {
+        Label(
+          model.markConfirmation == nil ? "标记重点" : "已标记",
+          systemImage: model.markConfirmation == nil ? "flag" : "checkmark")
       }
+      .buttonStyle(
+        (model.markConfirmation == nil ? V1ButtonStyle.v1Outline : V1ButtonStyle.v1Quiet)
+          .height(Tokens.V1.Size.controlSm).labelFont(Tokens.V1.Text.meta.font)
+      )
+      .background(
+        model.markConfirmation == nil ? Color.clear : Tokens.V1.Color.paper3,
+        in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.sm)
+      )
+      .runtimeAccessibilityIdentifier("compact.mark")
+      Spacer(minLength: 0)
+      carrierButton
+      Button(action: model.onReturnToMain) {
+        HStack(spacing: Tokens.V1.Space.s2xs) {
+          Text("回主窗")
+          Image(systemName: "arrow.up.right.square").accessibilityHidden(true)
+        }
+      }
+      .buttonStyle(.v1Quiet.height(Tokens.V1.Size.controlSm).labelFont(Tokens.V1.Text.meta.font))
+      .runtimeAccessibilityIdentifier("compact.return-main")
     }
     .fixedSize(horizontal: false, vertical: true)
+    .padding(.leading, Tokens.V1.Space.md)
+    .padding(.trailing, Tokens.V1.Space.xs)
+    .padding(.vertical, Tokens.V1.Space.xs)
+    .padding(.top, Tokens.V1.Space.xs)
+    .overlay(alignment: .top) {
+      Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
+        .padding(.top, Tokens.V1.Space.xs)
+    }
+    .runtimeAccessibilityIdentifier("compact.footer")
   }
 
-  /// Dock 内容里是「保持展开」(切小窗),小窗里是「收起到侧边」(切 Dock)。
-  @ViewBuilder
-  private var carrierButton: some View {
+  @ViewBuilder private var carrierButton: some View {
     switch model.carrier {
     case .dock:
-      Button(action: model.onKeepOpen) {
-        Image(systemName: "pin")
-          .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
-          .frame(width: 20, height: 20)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(IconHoverButtonStyle(base: Tokens.Color.ink3, hover: Tokens.Color.ink))
-      .accessibilityLabel("保持展开，切换为悬浮小窗")
-      .help("保持展开（切换为悬浮小窗）")
-      .runtimeAccessibilityIdentifier("compact.keep-open")
+      Button(action: model.onKeepOpen) { Label("保持展开", systemImage: "pin") }
+        .buttonStyle(.v1Quiet.height(Tokens.V1.Size.controlSm).labelFont(Tokens.V1.Text.meta.font))
+        .help("保持展开（切换为悬浮小窗）")
+        .runtimeAccessibilityIdentifier("compact.keep-open")
     case .window:
-      Button(action: model.onCollapseToSide) {
-        Image(systemName: "sidebar.right")
-          .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
-          .frame(width: 20, height: 20)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(IconHoverButtonStyle(base: Tokens.Color.ink3, hover: Tokens.Color.ink))
-      .accessibilityLabel("收起到侧边，切换为侧边吸附")
-      .help("收起到侧边（切换为侧边吸附）")
-      .runtimeAccessibilityIdentifier("compact.collapse-to-side")
+      Button(action: model.onCollapseToSide) { Label("收起到侧边", systemImage: "sidebar.right") }
+        .buttonStyle(.v1Quiet.height(Tokens.V1.Size.controlSm).labelFont(Tokens.V1.Text.meta.font))
+        .help("收起到侧边（切换为侧边吸附）")
+        .runtimeAccessibilityIdentifier("compact.collapse-to-side")
     }
   }
 
-  /// 麦克风暂停小条(08-14 mic-only-pause):暂停是进行中的隐私状态,悬浮窗必须
-  /// 常驻可见并给一键恢复。与主窗 `MicrophonePauseBanner` 同文案口径
-  /// (「麦克风已暂停」+「恢复麦克风」),图标同为 mic.slash.fill;
-  /// amber 底 + warn 字与主条同一视觉语言。
   private var microphonePausedStrip: some View {
-    HStack(spacing: Tokens.Spacing.xs) {
-      Image(systemName: "mic.slash.fill")
-        .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
-        .accessibilityHidden(true)
-      Text("麦克风已暂停")
-        .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-      Spacer(minLength: Tokens.Spacing.xs)
-      Button(action: model.onResumeMicrophone) {
-        Text("恢复麦克风")
-          .font(.system(size: Tokens.FontSize.ui, weight: .bold))
-          .foregroundStyle(Tokens.Color.acDeep)
+    HStack(spacing: Tokens.V1.Space.sm) {
+      Image(systemName: "pause").foregroundStyle(Tokens.V1.Color.warn).accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
+        Text("本侧不再收音，对方/系统声仍在录")
+          .font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink2)
+        Text("麦克风已暂停")
+          .font(Tokens.V1.Text.strong.font).foregroundStyle(Tokens.V1.Color.warn)
       }
-      .buttonStyle(.compactPillAccent)
-      .accessibilityLabel("恢复麦克风，本侧重新开始收音")
-      .runtimeAccessibilityIdentifier("compact.mic-paused.resume")
+      .frame(maxWidth: .infinity, alignment: .leading)
+      Button(action: model.onResumeMicrophone) { Label("恢复麦克风", systemImage: "mic") }
+        .buttonStyle(
+          .v1Outline.height(Tokens.V1.Size.controlSm).labelFont(Tokens.V1.Text.meta.font)
+        )
+        .fixedSize()
+        .accessibilityLabel("恢复麦克风，本侧重新开始收音")
+        .runtimeAccessibilityIdentifier("compact.mic-paused.resume")
     }
-    .foregroundStyle(Tokens.Color.warn)
-    .padding(.horizontal, Tokens.Spacing.sm)
-    .padding(.vertical, Tokens.Spacing.xxs)
-    .background(Tokens.Color.amber, in: RoundedRectangle(cornerRadius: Tokens.Radius.control))
+    .padding(.leading, Tokens.V1.Space.md)
+    .padding(.trailing, Self.closeZoneWidth)
+    .padding(.vertical, Tokens.V1.Space.sm)
+    .background(Tokens.V1.Color.warnSoft)
     .fixedSize(horizontal: false, vertical: true)
     .runtimeAccessibilityIdentifier("compact.mic-paused")
+  }
+
+  private func receiptStrip(_ text: String) -> some View {
+    HStack(spacing: Tokens.V1.Space.sm) {
+      Image(systemName: "text.bubble").accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
+        Text("热键回执").font(Tokens.V1.Text.meta.font)
+        Text(text).font(Tokens.V1.Text.strong.font).foregroundStyle(Tokens.V1.Color.ink)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .foregroundStyle(Tokens.V1.Color.ink2)
+    .padding(.leading, Tokens.V1.Space.md)
+    .padding(.trailing, Self.closeZoneWidth)
+    .padding(.vertical, Tokens.V1.Space.sm)
+    .background(Tokens.V1.Color.paper2)
+    .runtimeAccessibilityIdentifier("compact.action-confirmation")
   }
 }

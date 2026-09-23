@@ -13,6 +13,8 @@ public final class CompactOverlayViewModel: ObservableObject {
   }
 
   @Published var lines: [SummaryNowLine] = []
+  @Published var topicTitle: String?
+  @Published var startedAt: Date?
   @Published var coveredUntilLabel = "--:--"
   /// 麦克风暂停态(08-14 mic-only-pause):由应用级呈现控制器从
   /// `RecordingSession.isMicrophonePaused` 同步,暂停小条的显隐收在视图内部。
@@ -21,6 +23,8 @@ public final class CompactOverlayViewModel: ObservableObject {
   /// 正在展示的未确认点名;「知道了」绑定渲染时的事件 id。
   @Published public var pendingEvent: NameAlertEvent?
   @Published var carrier: Carrier = .window
+  /// 只在鼠标按住、面板几何冻结时允许摘要与非交互头部受压收缩。
+  @Published var isContentGeometryHeld = false
 
   var onMark: () -> Void = {}
   var onReturnToMain: () -> Void = {}
@@ -33,7 +37,7 @@ public final class CompactOverlayViewModel: ObservableObject {
   var onCollapseToSide: () -> Void = {}
   /// 热键标记成功且悬浮窗在场时的短暂回执;不抢焦点。
   @Published var markConfirmation: String?
-  /// 闲聊/暂停全局热键的开/关回执;叠在窗顶,不改窗高。
+  /// 闲聊/暂停全局热键的开/关回执;显示于顶部中性带,沿用面板高度过渡。
   @Published public var actionConfirmation: String?
   private var markFlashTask: Task<Void, Never>?
   private var actionFlashTask: Task<Void, Never>?
@@ -63,6 +67,7 @@ public final class CompactOverlayViewModel: ObservableObject {
   /// 总结 feed 的任何发布都会走到这里;内容没变不重新发布,避免悬浮面板无谓重排。
   public func update(from state: SummaryNowState) {
     let nextLines = Array(state.lines.suffix(2))
+    if topicTitle != state.context?.topicTitle { topicTitle = state.context?.topicTitle }
     if lines != nextLines {
       lines = nextLines
     }

@@ -23,6 +23,15 @@ enum ElapsedTime {
     return String(format: "%d:%02d", hours, minutes)
   }
 
+  /// 会议时长:一律写成分钟数加「m」——「31m」「90m」,不足 1 分钟记「1m」
+  /// (owner 2026-09-21:不写「几小时几分钟」,也不写「分钟」,用 m 就好)。
+  /// 带单位,不会和旁边的开始时间「14:33」混:原来的 `0:31` 就是因为长得像时间点被拿掉的
+  /// (owner 2026-09-20)。会议库列表与会议页头部共用,同一场会两处写法一致。
+  static func minutesLabel(_ seconds: TimeInterval) -> String {
+    let minutes = max(1, Int(seconds.rounded(.down)) / 60)
+    return "\(minutes)m"
+  }
+
   /// 落盘格式：固定 `HH:MM:SS`，与 `NotesWriter`/`LiveTranscriptWriter` 的时间戳文案一致。
   static func fullLabel(_ seconds: TimeInterval) -> String {
     let total = max(0, Int(seconds.rounded(.down)))

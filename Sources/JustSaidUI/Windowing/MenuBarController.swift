@@ -5,10 +5,10 @@ import SwiftUI
 
 /// 菜单栏常驻入口(拍板 T11):
 /// - 左键点击 = 回到/唤起主窗口(录制中亦然);
-/// - 右键 / Control 点击 = 菜单:开始会议录音(录制中变为「标记重点」+「结束会议」)、
+/// - 右键 / Control 点击 = 菜单:开始一场会议(录制中变为「标记重点」+「结束会议」)、
 ///   查看历史会议、退出;
 /// - 未在录制时可直接从菜单栏开录,不必先打开主窗;
-/// - 图标为单色模板图(纯黑 + 透明),由系统按浅/深色自动反转;录制中叠加一枚小红点表示状态。
+/// - 图标为单色模板图(纯黑 + 透明),由系统按浅/深色自动反转;录制中叠加一枚同色实心点表示状态。
 ///
 /// 2026-07-29 实测后去掉了「查看笔记」:笔记是会中在右栏写的东西,菜单栏直接甩一个
 /// .md 文件出来既不是产品形态、也不该作为独立入口;它现在是会议详情页的一个页签。
@@ -95,9 +95,22 @@ public final class MenuBarController: NSObject {
   }
 
   /// 声波 + 结论线的单色剪影(与应用图标同一形状语言);录制中在右上叠一枚实心点。
-  private static func makeTemplateImage(recording: Bool, marked: Bool) -> NSImage {
+  static func makeTemplateImage(recording: Bool, marked: Bool) -> NSImage {
     let size = NSSize(width: 20, height: 18)
     let image = NSImage(size: size, flipped: false) { _ in
+      NSColor.black.setFill()
+      if marked {
+        let check = NSBezierPath()
+        check.lineWidth = 2.4
+        check.lineCapStyle = .round
+        check.lineJoinStyle = .round
+        check.move(to: NSPoint(x: 3, y: 9))
+        check.line(to: NSPoint(x: 8, y: 4))
+        check.line(to: NSPoint(x: 17, y: 15))
+        NSColor.black.setStroke()
+        check.stroke()
+        return true
+      }
       let bars: [(CGFloat, CGFloat, CGFloat)] = [
         (1.5, 5.5, 5.0),
         (5.0, 3.5, 9.0),
@@ -118,18 +131,8 @@ public final class MenuBarController: NSObject {
         xRadius: 1.0,
         yRadius: 1.0
       ).fill()
-      if marked {
-        let check = NSBezierPath()
-        check.lineWidth = 1.8
-        check.lineCapStyle = .round
-        check.lineJoinStyle = .round
-        check.move(to: NSPoint(x: 12.5, y: 15.0))
-        check.line(to: NSPoint(x: 14.6, y: 13.0))
-        check.line(to: NSPoint(x: 18.6, y: 17.2))
-        NSColor.black.setStroke()
-        check.stroke()
-      } else if recording {
-        NSBezierPath(ovalIn: NSRect(x: 15.0, y: 14.0, width: 4.5, height: 4.5)).fill()
+      if recording {
+        NSBezierPath(ovalIn: NSRect(x: 15.0, y: 13.0, width: 4.5, height: 4.5)).fill()
       }
       return true
     }
@@ -152,6 +155,12 @@ public final class MenuBarController: NSObject {
   }
 
   private func presentMenu() {
+    statusItem?.menu = makeMenu()
+    statusItem?.button?.performClick(nil)
+    statusItem?.menu = nil
+  }
+
+  func makeMenu() -> NSMenu {
     let menu = NSMenu()
 
     if isRecording {
@@ -164,6 +173,7 @@ public final class MenuBarController: NSObject {
       )
       mark.target = self
       menu.addItem(mark)
+      menu.addItem(.separator())
 
       let end = NSMenuItem(
         title: "结束会议",
@@ -174,7 +184,7 @@ public final class MenuBarController: NSObject {
       menu.addItem(end)
     } else {
       let start = NSMenuItem(
-        title: "开始会议录音",
+        title: "开始一场会议",
         action: #selector(startMeeting),
         keyEquivalent: ""
       )
@@ -192,15 +202,11 @@ public final class MenuBarController: NSObject {
     history.target = self
     menu.addItem(history)
 
-    menu.addItem(.separator())
-
-    let quit = NSMenuItem(title: "退出 JustSaid", action: #selector(quit), keyEquivalent: "q")
+    let quit = NSMenuItem(title: "退出 JustSaid", action: #selector(quit), keyEquivalent: "")
     quit.target = self
     menu.addItem(quit)
 
-    statusItem?.menu = menu
-    statusItem?.button?.performClick(nil)
-    statusItem?.menu = nil
+    return menu
   }
 
   // MARK: - 菜单动作

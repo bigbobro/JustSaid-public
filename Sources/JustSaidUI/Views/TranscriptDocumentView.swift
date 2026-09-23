@@ -9,7 +9,9 @@ import SwiftUI
 /// `transcript.md` 始终保持权威原文。
 public struct TranscriptDocumentView: View {
   let rows: [TranscriptDisplayRow]
-  let speakerFilter: String?
+  /// 空集 = 不筛。原来是 `String?`,只能盯一个人;实际读会是「发言人 1 和 3 聊得多,
+  /// 把 2 关掉」,一次只能看一个人等于每看一句都要切一次(owner 2026-09-20)。
+  let speakerFilters: Set<String>
   let searchQuery: String
   let speakers: [String]
   let onSelectSpeaker: (String) -> Void
@@ -20,10 +22,13 @@ public struct TranscriptDocumentView: View {
   var onExcludeLine: ((TranscriptSpeechLine) -> Void)? = nil
   var onRemoveExclusion: ((UUID) -> Void)? = nil
   var onSetSpeakerExcluded: ((String, Bool) -> Void)? = nil
+  var onRequestNaming: ((String) -> Void)? = nil
+  var onToggleSpeakerHighlight: ((String) -> Void)? = nil
   var highlightedSpeaker: String? = nil
   var selection: Binding<TranscriptLineSelection?>? = nil
   var onExcludeRange: ((TranscriptSpeechLine, TranscriptSpeechLine) -> Void)? = nil
   var scrollOffset: Binding<CGFloat>? = nil
+  var onViewportAnchor: ((TimeInterval?) -> Void)? = nil
   @Binding var jumpRequest: TranscriptJumpRequest?
 
   @Environment(\.textScale) private var textScale
@@ -31,7 +36,8 @@ public struct TranscriptDocumentView: View {
 
   public init(
     rows: [TranscriptDisplayRow],
-    speakerFilter: String?,
+    speakerFilter: String? = nil,
+    speakerFilters: Set<String>? = nil,
     searchQuery: String = "",
     speakers: [String],
     onSelectSpeaker: @escaping (String) -> Void,
@@ -42,14 +48,19 @@ public struct TranscriptDocumentView: View {
     onExcludeLine: ((TranscriptSpeechLine) -> Void)? = nil,
     onRemoveExclusion: ((UUID) -> Void)? = nil,
     onSetSpeakerExcluded: ((String, Bool) -> Void)? = nil,
+    onRequestNaming: ((String) -> Void)? = nil,
+    onToggleSpeakerHighlight: ((String) -> Void)? = nil,
     highlightedSpeaker: String? = nil,
     selection: Binding<TranscriptLineSelection?>? = nil,
     onExcludeRange: ((TranscriptSpeechLine, TranscriptSpeechLine) -> Void)? = nil,
     scrollOffset: Binding<CGFloat>? = nil,
+    onViewportAnchor: ((TimeInterval?) -> Void)? = nil,
     jumpRequest: Binding<TranscriptJumpRequest?> = .constant(nil)
   ) {
     self.rows = rows
-    self.speakerFilter = speakerFilter
+    // 单人入口保留:验证程序与旧调用点照原样传 `speakerFilter:`。
+    self.speakerFilters = speakerFilters ?? Set([speakerFilter].compactMap { $0 })
+    self.onViewportAnchor = onViewportAnchor
     self.searchQuery = searchQuery
     self.speakers = speakers
     self.onSelectSpeaker = onSelectSpeaker
@@ -60,6 +71,8 @@ public struct TranscriptDocumentView: View {
     self.onExcludeLine = onExcludeLine
     self.onRemoveExclusion = onRemoveExclusion
     self.onSetSpeakerExcluded = onSetSpeakerExcluded
+    self.onRequestNaming = onRequestNaming
+    self.onToggleSpeakerHighlight = onToggleSpeakerHighlight
     self.highlightedSpeaker = highlightedSpeaker
     self.selection = selection
     self.onExcludeRange = onExcludeRange
@@ -68,7 +81,7 @@ public struct TranscriptDocumentView: View {
   }
 
   public var body: some View {
-    let visibleRows = Self.filtering(rows, to: speakerFilter, matching: searchQuery)
+    let visibleRows = Self.filtering(rows, to: speakerFilters, matching: searchQuery)
     let selectedIndexes = selectedLineIndexes
     ZStack(alignment: .bottom) {
       if visibleRows.isEmpty, !normalizedSearchQuery.isEmpty {
@@ -82,7 +95,7 @@ public struct TranscriptDocumentView: View {
         TranscriptTextView(
           rows: visibleRows,
           speakers: speakers,
-          isSpeakerFiltered: speakerFilter != nil,
+          isSpeakerFiltered: !speakerFilters.isEmpty,
           bodyFontSize: textScale.size(Tokens.FontSize.body),
           excludedRanges: excludedRanges,
           excludedSpeakers: Set(excludedSpeakers),
@@ -103,7 +116,10 @@ public struct TranscriptDocumentView: View {
           // 结算的是整个选区,不是光标底下那一段(issue #25)。
           onExcludeSelection: onExcludeRange == nil ? nil : applySelection,
           onRemoveExclusion: onRemoveExclusion,
-          onSetSpeakerExcluded: onSetSpeakerExcluded
+          onSetSpeakerExcluded: onSetSpeakerExcluded,
+          onRequestNaming: onRequestNaming,
+          onToggleSpeakerHighlight: onToggleSpeakerHighlight,
+          onViewportAnchor: onViewportAnchor
         )
       }
       TranscriptSelectionBar(
@@ -184,12 +200,20 @@ public struct TranscriptDocumentView: View {
     to speaker: String?,
     matching query: String
   ) -> [TranscriptDisplayRow] {
+    filtering(rows, to: Set([speaker].compactMap { $0 }), matching: query)
+  }
+
+  public static func filtering(
+    _ rows: [TranscriptDisplayRow],
+    to speakers: Set<String>,
+    matching query: String
+  ) -> [TranscriptDisplayRow] {
     let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    let hasSpeakerFilter = speaker?.isEmpty == false
-    guard hasSpeakerFilter || !normalizedQuery.isEmpty else { return rows }
+    let selected = speakers.filter { !$0.isEmpty }
+    guard !selected.isEmpty || !normalizedQuery.isEmpty else { return rows }
     return rows.filter { row in
       guard case .speech(let line) = row else { return false }
-      let matchesSpeaker = !hasSpeakerFilter || line.speaker == speaker
+      let matchesSpeaker = selected.isEmpty || selected.contains(line.speaker)
       let matchesSearch =
         normalizedQuery.isEmpty
         || line.text.localizedCaseInsensitiveContains(normalizedQuery)
@@ -259,7 +283,10 @@ struct TranscriptSelectionBar: View {
   var body: some View {
     if let count {
       HStack(spacing: Tokens.Spacing.xs) {
-        Button("标为闲聊(\(count) 段)", action: onApply)
+        // 三个词说的是同一条排除记录:标为闲聊 / 不进纪要(排除) / 已选入闲聊段
+        // (Fable 评审 2026-09-20)。这一页统一成「不进纪要」——闲聊是原因,
+        // 用户要看的是效果。会中那颗 ⌥⌘X「闲聊」不动:在那里它是你正处的模式。
+        Button("不进纪要（\(count) 段）", action: onApply)
           .buttonStyle(.textAction)
           .fontWeight(.semibold)
           .help("这一整段写成一条排除记录，不进纪要；在排除行上右键可一次撤销整段")
@@ -297,13 +324,13 @@ public enum SpeakerAccents {
       .firstIndex(of: speaker)
   }
 
+  /// 彩虹说话人色退役(批2 早就在 `Tokens.Color.speakerAccents` 上标了「v1:第 2 批退役」,
+  /// 只是没执行)。六个人六种高饱和色,既没有图例解释,又和上面筛选行里的灰字对不上,
+  /// 一屏读下来全是彩字(owner 2026-09-20 走查完整转写)。
+  /// 现在只区分「我」和其他人:我用 `color-me`,其余走正文墨色,靠字重分辨。
   public static func color(for speaker: String, in speakers: [String]) -> Color {
-    guard let index = accentIndex(for: speaker, in: speakers) else {
-      return speaker == TranscriptSpeakerNaming.selfSpeakerLabel
-        ? Tokens.Color.me
-        : Tokens.Color.others
-    }
-    let ring = Tokens.Color.speakerAccents
-    return ring.isEmpty ? Tokens.Color.others : ring[index % ring.count]
+    speaker == TranscriptSpeakerNaming.selfSpeakerLabel
+      ? Tokens.V1.Color.me
+      : Tokens.V1.Color.ink2
   }
 }

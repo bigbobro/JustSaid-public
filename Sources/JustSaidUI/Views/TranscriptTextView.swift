@@ -124,6 +124,10 @@ private struct TranscriptTextActions {
   var onExcludeSelection: (() -> Void)?
   var onRemoveExclusion: ((UUID) -> Void)?
   var onSetSpeakerExcluded: ((String, Bool) -> Void)?
+  /// 点正文里的说话人名字 → 打开右栏认名面板并聚焦这一位。
+  var onRequestNaming: ((String) -> Void)?
+  /// 跟读:高亮此人发言并逐处跳转。
+  var onToggleSpeakerHighlight: ((String) -> Void)?
   var beginProgrammaticScroll: () -> Void = {}
 }
 
@@ -162,6 +166,10 @@ struct TranscriptTextView: NSViewRepresentable {
   let onExcludeSelection: (() -> Void)?
   let onRemoveExclusion: ((UUID) -> Void)?
   let onSetSpeakerExcluded: ((String, Bool) -> Void)?
+  var onRequestNaming: ((String) -> Void)?
+  var onToggleSpeakerHighlight: ((String) -> Void)?
+  /// 视口最上面那一句的时间,换筛选时用来落回原处。
+  var onViewportAnchor: ((TimeInterval?) -> Void)?
 
   func makeCoordinator() -> Coordinator {
     Coordinator()
@@ -208,6 +216,7 @@ struct TranscriptTextView: NSViewRepresentable {
     guard let textView = scrollView.documentView as? InteractiveTranscriptTextView else { return }
     let coordinator = context.coordinator
     coordinator.updateScrollBinding(scrollOffset)
+    textView.onViewportAnchor = onViewportAnchor
     textView.actions = TranscriptTextActions(
       onSelectSpeaker: onSelectSpeaker,
       onSelectTimestamp: onSelectTimestamp,
@@ -218,6 +227,8 @@ struct TranscriptTextView: NSViewRepresentable {
       onExcludeSelection: onExcludeSelection,
       onRemoveExclusion: onRemoveExclusion,
       onSetSpeakerExcluded: onSetSpeakerExcluded,
+      onRequestNaming: onRequestNaming,
+      onToggleSpeakerHighlight: onToggleSpeakerHighlight,
       beginProgrammaticScroll: { [weak coordinator] in
         coordinator?.beginProgrammaticScroll()
       }
@@ -670,6 +681,11 @@ private final class InteractiveTranscriptTextView: NSTextView {
   private var menuActions: [() -> Void] = []
   private var markerViews: [NSView] = []
   private var visibleDecorations: [VisibleTranscriptDecoration] = []
+  /// 视口最上面那一句的时间。筛选发言人会把可见行整组换掉,原来的滚动偏移在新内容里
+  /// 指向别处,于是画面直接弹走,人不知道自己刚才看到哪了(owner 2026-09-20)。
+  /// 记住这个时间,换完内容再落回同一处。
+  var onViewportAnchor: ((TimeInterval?) -> Void)?
+  private var lastReportedAnchor: TimeInterval??
   private var markerRefreshPending = false
   private var viewportRefreshPending = false
   private var viewportRefreshInstallChromePending = false
@@ -732,8 +748,11 @@ private final class InteractiveTranscriptTextView: NSTextView {
   override func setFrameSize(_ newSize: NSSize) {
     super.setFrameSize(newSize)
     let horizontalInset = Tokens.Spacing.lg
+    // 转写正文按设计系统的阅读列宽 1040 断行,不再用遗留的 780。
+    // 780 是一页纸/纪要那些卡片里的行长,转写是整栏铺开的连续文本,同一个数字套两种容器,
+    // 结果就是窗口开到 1200 正文还在 780 折,右边空一大片(owner 2026-09-20)。
     let contentWidth = min(
-      Tokens.Layout.readingContentWidth,
+      Tokens.V1.Size.reading,
       max(0, newSize.width - horizontalInset * 2)
     )
     let inset = NSSize(width: horizontalInset, height: Tokens.Spacing.md)
@@ -800,7 +819,10 @@ private final class InteractiveTranscriptTextView: NSTextView {
   ) -> NSAttributedString {
     let bodyFont = NSFont.systemFont(ofSize: bodyFontSize)
     let bodyStyle = NSMutableParagraphStyle()
-    bodyStyle.paragraphSpacing = Tokens.Spacing.xxs
+    // 条与条之间给真正的留白。原来只有 4 点,一屏挤三十多条,说话人行和正文行贴在
+    // 一起,扫读时分不出边界(owner 2026-09-20 走查完整转写)。
+    bodyStyle.paragraphSpacing = Tokens.V1.Space.sm
+    bodyStyle.lineSpacing = Tokens.V1.Space.s3xs
     let attributedString = NSMutableAttributedString(
       string: document.string,
       attributes: [
@@ -917,6 +939,16 @@ private final class InteractiveTranscriptTextView: NSTextView {
   }
 
   override func mouseDown(with event: NSEvent) {
+    let point = convert(event.locationInWindow, from: nil)
+    if let onRemoveExclusion = actions.onRemoveExclusion,
+      let hit = badgeRects.first(where: { $0.value.contains(point) }),
+      let rendered = visibleDecorations.first(where: { $0.rendered.line.index == hit.key })?.rendered,
+      let seconds = rendered.seconds,
+      let covering = ExclusionUI.coveringRange(at: seconds, in: styleSnapshot.excludedRanges)
+    {
+      onRemoveExclusion(covering.id)
+      return
+    }
     let characterIndex = characterIndex(at: event)
     if let range = speechRange(at: characterIndex) {
       if selectionEnabled, NSLocationInRange(characterIndex, range.timestampRange) {
@@ -934,7 +966,14 @@ private final class InteractiveTranscriptTextView: NSTextView {
         // simple click still selects the speaker once the native gesture has completed.
         super.mouseDown(with: event)
         if selectedRange().length == 0 {
-          actions.onSelectSpeaker(range.line.speaker)
+          // 名字就是这个人的入口。原来单击直接「只看此人」——一个没有任何提示的
+          // 隐藏行为,还占掉了最自然的手势(owner 2026-09-20)。现在弹这个人的菜单,
+          // 「只看」是其中一项;⌥点保留为快捷路径,菜单里印着这个快捷键。
+          if event.modifierFlags.contains(.option) {
+            actions.onSelectSpeaker(range.line.speaker)
+          } else {
+            popUpSpeakerMenu(for: range.line, at: event)
+          }
         }
         return
       }
@@ -1044,7 +1083,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
       ) { onExcludeSelection() }
       menu.addItem(.separator())
     } else if let onExcludeLine = actions.onExcludeLine {
-      addAction("这段话不进纪要（排除）", to: menu) { onExcludeLine(line) }
+      addAction("这段不进纪要", to: menu) { onExcludeLine(line) }
       menu.addItem(.separator())
     }
 
@@ -1069,12 +1108,66 @@ private final class InteractiveTranscriptTextView: NSTextView {
     return menu
   }
 
+  /// 说话人菜单。按作用域分两区:上半管这个人(全部 N 段),下半管这一段。
+  /// 不分区会把「这段说错人了」误操作成「全体改名」(Fable 评审 2026-09-20)。
+  private func popUpSpeakerMenu(for line: TranscriptSpeechLine, at event: NSEvent) {
+    let speaker = line.speaker
+    let total = documentSnapshot?.rows.reduce(into: 0) { count, row in
+      if case .speech(let other) = row, other.speaker == speaker { count += 1 }
+    } ?? 0
+    menuActions.removeAll(keepingCapacity: true)
+    let menu = NSMenu()
+    addInformation("「\(speaker)」· 全部 \(total) 段", to: menu)
+    if let onRequestNaming = actions.onRequestNaming {
+      addAction("给「\(speaker)」填真名…", to: menu) { onRequestNaming(line.originalSpeaker) }
+    }
+    if let onToggleSpeakerHighlight = actions.onToggleSpeakerHighlight {
+      addAction("跟读「\(speaker)」的发言", to: menu) { onToggleSpeakerHighlight(speaker) }
+    }
+    addAction("只看「\(speaker)」的发言　⌥点", to: menu) { [actions] in
+      actions.onSelectSpeaker(speaker)
+    }
+    if let onSetSpeakerExcluded = actions.onSetSpeakerExcluded {
+      let excluded = styleSnapshot.excludedSpeakers.contains(line.originalSpeaker)
+      addAction(excluded ? "恢复「\(speaker)」的纪要参与" : "「\(speaker)」不参会", to: menu) {
+        onSetSpeakerExcluded(line.originalSpeaker, !excluded)
+      }
+    }
+    menu.addItem(.separator())
+    addInformation("这一段", to: menu)
+    if let snapshot = documentSnapshot {
+      for candidate in snapshot.speakers where candidate != speaker {
+        addAction("其实是「\(candidate)」说的", to: menu) { [actions] in
+          actions.onOverride(line, candidate)
+        }
+      }
+    }
+    addAction("其实是别人说的…", to: menu) { [actions] in actions.onRequestNewName(line) }
+    if line.speaker != line.originalSpeaker {
+      addAction("撤销这段的更正（回到「\(line.originalSpeaker)」）", to: menu) { [actions] in
+        actions.onOverride(line, nil)
+      }
+    }
+    menu.popUp(positioning: nil, at: convert(event.locationInWindow, from: nil), in: self)
+  }
+
+  /// 「不进纪要」标签的命中区,draw 时记下。
+  private var badgeRects: [Int: NSRect] = [:]
+
   override func resetCursorRects() {
     super.resetCursorRects()
     for decoration in visibleDecorations {
       if let speakerRect = decoration.speakerRect {
         addCursorRect(speakerRect, cursor: .pointingHand)
       }
+      // 时间戳本来就是「选中这一段」的手势(Shift 可扩选),但看不出能点。
+      // 给一个手型光标,不另加把手——少一个常驻元素。
+      if let timestampRect = decoration.timestampRect, selectionEnabled {
+        addCursorRect(timestampRect, cursor: .pointingHand)
+      }
+    }
+    for rect in badgeRects.values {
+      addCursorRect(rect, cursor: .pointingHand)
     }
   }
 
@@ -1093,9 +1186,9 @@ private final class InteractiveTranscriptTextView: NSTextView {
     for decoration in decorations {
       let range = decoration.rendered
       if snapshot.highlightedSpeaker == range.line.speaker {
-        NSColor(
-          SpeakerAccents.color(for: range.line.speaker, in: documentSnapshot?.speakers ?? [])
-        ).setFill()
+        // 跟读标记:这道边表示「你正在跟读这个人」,不是这个人的专属色,
+        // 所以用强调色。彩虹说话人色退役后,这里会画成 ink2 的灰杠,读不出含义。
+        NSColor(Tokens.V1.Color.accent).setFill()
         NSRect(
           x: decoration.paragraphRect.minX - Tokens.Spacing.xs,
           y: decoration.paragraphRect.minY,
@@ -1106,14 +1199,37 @@ private final class InteractiveTranscriptTextView: NSTextView {
       if isExcluded(range, snapshot: snapshot),
         let timestampRect = decoration.timestampRect
       {
+        // 左边一道竖杠:扫一眼就知道这一段被划出去了。原来只有一层很浅的底色和一枚
+        // 45% 透明的小字,滚过去根本看不出哪段进了哪段没进(owner 2026-09-20)。
+        // 与跟读那道边区分靠颜色:跟读是强调色(你正在做的事),排除是灰(它被拿掉了)。
+        NSColor(Tokens.V1.Color.ink4).setFill()
+        NSRect(
+          x: decoration.paragraphRect.minX - Tokens.Spacing.xs,
+          y: decoration.paragraphRect.minY,
+          width: Tokens.Layout.accentEdgeWidth,
+          height: decoration.paragraphRect.height
+        ).fill()
+
+        // 标签画成一枚实心胶囊,不再是半透明的字。它同时是撤销入口,点一下就恢复,
+        // 半透明的东西看着像装饰,没人会去点。
         let attributes: [NSAttributedString.Key: Any] = [
           .font: NSFont.systemFont(ofSize: Tokens.FontSize.micro, weight: .semibold),
-          .foregroundColor: NSColor(Tokens.Color.ink4).withAlphaComponent(0.45),
+          .foregroundColor: NSColor(Tokens.V1.Color.ink2),
         ]
-        NSString(string: "不进纪要").draw(
-          at: NSPoint(x: timestampRect.maxX + Tokens.Spacing.xxs, y: timestampRect.minY),
-          withAttributes: attributes
+        let label = NSString(string: "不进纪要")
+        let textSize = label.size(withAttributes: attributes)
+        let padX = Tokens.Spacing.xxs
+        let padY: CGFloat = 1
+        let pill = NSRect(
+          x: timestampRect.maxX + Tokens.Spacing.xxs,
+          y: timestampRect.minY - padY,
+          width: textSize.width + padX * 2,
+          height: textSize.height + padY * 2
         )
+        NSColor(Tokens.V1.Color.paper3).setFill()
+        NSBezierPath(roundedRect: pill, xRadius: pill.height / 2, yRadius: pill.height / 2).fill()
+        label.draw(at: NSPoint(x: pill.minX + padX, y: timestampRect.minY), withAttributes: attributes)
+        badgeRects[range.line.index] = pill.insetBy(dx: -2, dy: -2)
       }
     }
   }
@@ -1357,8 +1473,18 @@ private final class InteractiveTranscriptTextView: NSTextView {
     }
     updateExcludedForeground(for: visibleRanges)
     refreshAccessibilityChrome()
+    reportViewportAnchor()
     window?.invalidateCursorRects(for: self)
     needsDisplay = true
+  }
+
+  private func reportViewportAnchor() {
+    guard let onViewportAnchor else { return }
+    let anchor = visibleDecorations.first?.rendered.seconds
+    // 视口刷新很频繁;只有最上面那一句真的换了才回传,免得每帧都推一次状态。
+    guard lastReportedAnchor != .some(anchor) else { return }
+    lastReportedAnchor = .some(anchor)
+    onViewportAnchor(anchor)
   }
 
   private func installVisibleChromeAttributes(
@@ -1429,7 +1555,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
     var states: [String] = []
     if isExcluded(range, snapshot: styleSnapshot) { states.append("不进纪要") }
     if styleSnapshot.highlightedSpeaker == range.line.speaker { states.append("正在高亮通读") }
-    if styleSnapshot.selectedLineIndexes.contains(range.line.index) { states.append("已选入闲聊段") }
+    if styleSnapshot.selectedLineIndexes.contains(range.line.index) { states.append("已选中，将不进纪要") }
     if jumpLineIndex == range.line.index { states.append("当前跳转位置") }
     return states.isEmpty ? nil : states.joined(separator: "，")
   }

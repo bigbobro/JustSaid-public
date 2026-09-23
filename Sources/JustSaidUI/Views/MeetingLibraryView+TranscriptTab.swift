@@ -11,68 +11,6 @@ extension MeetingLibraryView {
   /// 因为我方转写通篇只有「发言人 N」。填一次真名,这场会的转写与后续重生成的纪要都认得人。
   /// 转写还没跑出来时整行不出现——没有发言人可命名。
   @ViewBuilder
-  func speakerNamingRow(_ item: MeetingLibraryItem) -> some View {
-    let labels = model.speakerLabels(for: item)
-    if !labels.isEmpty {
-      VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: Tokens.Spacing.sm) {
-            Text("说话人")
-              .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-              .foregroundStyle(Tokens.Color.ink3)
-            ForEach(labels, id: \.self) { label in
-              // 高亮/只看的建桶口径 = 生效后的显示名(真名优先,回退原始标签),
-              // 与 displaySpeakers 主映射一致;单段 override 不按它建桶。
-              let displayName = {
-                let name = model.speakerName(label, for: item)
-                return name.isEmpty ? label : name
-              }()
-              SpeakerNameField(
-                label: label,
-                name: model.speakerName(label, for: item),
-                isHighlighted: model.speakerHighlight == displayName,
-                isExcluded: item.excludedSpeakers.contains(label),
-                channelHint: SpeakerChannelHint.presentation(for: item.channelStats?[label]),
-                onToggleHighlight: { model.toggleSpeakerHighlight(displayName) },
-                onToggleExcluded: {
-                  model.setSpeakerExcluded(
-                    label,
-                    excluded: !item.excludedSpeakers.contains(label),
-                    of: item
-                  )
-                },
-                onFilter: { model.toggleSpeakerFilter(displayName) }
-              ) { newName in
-                model.setSpeakerName(newName, for: label, of: item)
-              }
-              .id("\(item.id):\(item.transcriptFingerprint ?? "")")
-            }
-          }
-          .padding(.horizontal, Tokens.Spacing.lg)
-        }
-        Group {
-          if let error = model.speakerNameError {
-            Text(error)
-              .foregroundStyle(Tokens.Color.warn)
-          } else {
-            Text("填了真名，这一页的转写立刻换成真名，之后重新生成的纪要也会用它；transcript.md 原文不动。")
-              .foregroundStyle(Tokens.Color.ink4)
-          }
-        }
-        .font(.system(size: Tokens.FontSize.secondary))
-        .padding(.horizontal, Tokens.Spacing.lg)
-      }
-      .padding(.vertical, Tokens.Spacing.sm)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Tokens.Color.pane)
-      .overlay(alignment: .bottom) { Divider() }
-    }
-  }
-
-  /// 搜索/只看/排除三通道的组合状态 + 「新名字…」就地输入。
-  ///
-  /// 呈现变窄或变灰都必须可见地说明原因；三通道都未激活时不占版面。
-  @ViewBuilder
   func transcriptFilterRow(_ item: MeetingLibraryItem) -> some View {
     // 出错信息也挂在这一行:命名行只在「有非我说话人」时才出现,而右键更正对每一段都开放
     // (包括「我」的段落)。只靠命名行报错,通篇都是「我」的会议就会静默失败——
@@ -80,17 +18,17 @@ extension MeetingLibraryView {
     let overrideError = model.speakerNameError
     let normalizedQuery = normalizedTranscriptSearchQuery
     let transcriptRows = model.transcriptRows(for: item)
-    let filteredCount = TranscriptDocumentView.filteredSpeechCount(
-      in: transcriptRows,
-      speaker: model.speakerFilter,
-      query: normalizedQuery
-    )
+    let filteredCount = TranscriptDocumentView.filtering(
+      transcriptRows, to: model.speakerFilters, matching: normalizedQuery
+    ).reduce(into: 0) { count, row in
+      if case .speech = row { count += 1 }
+    }
     let excludedRangeCount = item.excludedRanges.count
     let excludedSpeakerCount = item.excludedSpeakers.count
     let hasExclusions = excludedRangeCount > 0 || excludedSpeakerCount > 0
     let hasFilterCombination =
       !normalizedQuery.isEmpty
-      || model.speakerFilter != nil
+      || !model.speakerFilters.isEmpty
       || hasExclusions
     if isTranscriptSearchPresented || hasFilterCombination
       || model.speakerHighlight != nil
@@ -158,9 +96,9 @@ extension MeetingLibraryView {
                 identifier: "transcript.filter-summary.search"
               )
             }
-            if let filter = model.speakerFilter {
+            if !model.speakerFilters.isEmpty {
               TranscriptFilterStatePill(
-                text: "只看：\(filter)",
+                text: "只看：\(model.speakerFilters.sorted().joined(separator: "、"))",
                 identifier: "transcript.filter-summary.speaker"
               )
             }
@@ -189,10 +127,19 @@ extension MeetingLibraryView {
             .foregroundStyle(Tokens.Color.warn)
             .fixedSize(horizontal: false, vertical: true)
         }
-        if let filter = model.speakerFilter {
+        if !model.speakerFilters.isEmpty {
+          // 一人一枚,各自可摘。多选之后「清除」必须分得清是摘谁——
+          // 只给一颗总的清除,选了三个人想去掉一个就只能全清重来。
           HStack(spacing: Tokens.Spacing.xs) {
-            SpeakerFilterChip(filter: filter) {
-              model.speakerFilter = nil
+            ForEach(model.speakerFilters.sorted(), id: \.self) { filter in
+              SpeakerFilterChip(filter: filter) {
+                model.toggleSpeakerFilter(filter)
+              }
+            }
+            if model.speakerFilters.count > 1 {
+              Button("全部看回来") { model.clearSpeakerFilters() }
+                .buttonStyle(.textAction)
+                .font(.system(size: Tokens.FontSize.secondary))
             }
             Text("其余发言暂时藏起来了，原文没有改动。")
               .font(.system(size: Tokens.FontSize.secondary))
@@ -226,8 +173,6 @@ extension MeetingLibraryView {
       .padding(.horizontal, Tokens.Spacing.lg)
       .padding(.vertical, Tokens.Spacing.sm)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Tokens.Color.pane)
-      .overlay(alignment: .bottom) { Divider() }
     }
   }
 }

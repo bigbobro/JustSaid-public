@@ -35,39 +35,37 @@ public struct MicrophonePauseBanner: View {
 
   public var body: some View {
     if isPaused {
-      HStack(spacing: Tokens.Spacing.xsm) {
-        Image(systemName: "mic.slash.fill")
-        Text("麦克风已暂停：本侧不再收音，对方/系统声仍在录")
+      NoticeShell(
+        level: .warn,
+        systemImage: "mic.slash.fill",
+        text: "麦克风已暂停：本侧不再收音，对方/系统声仍在录"
+      ) {
+        // 计时与「别忘了恢复」原来挤在正文后面读不断句(2026-09-20 截图装置看出来的),
+        // 挪到动作这一侧,与按钮同列。
         TimelineView(.periodic(from: pausedAt ?? .now, by: 1)) { context in
           let elapsed = context.date.timeIntervalSince(pausedAt ?? context.date)
-          HStack(spacing: Tokens.Spacing.xxs) {
-            Text("已暂停 \(ElapsedTime.shortLabel(elapsed))")
-              .font(.system(size: Tokens.FontSize.bodyMinimum, weight: .semibold, design: .monospaced))
-              .runtimeAccessibilityIdentifier("banner.mic-paused.elapsed")
+          HStack(spacing: Tokens.V1.Space.xs) {
             if elapsed >= Self.reminderThreshold {
               // 超时轻提醒:只把语气升一档,防「忘了恢复丢半场发言」。
               Text("别忘了恢复")
+                .font(Tokens.V1.Text.meta.font)
+                .foregroundStyle(Tokens.V1.Color.warn)
                 .fontWeight(.semibold)
                 .runtimeAccessibilityIdentifier("banner.mic-paused.reminder")
             }
+            Text(ElapsedTime.shortLabel(elapsed))
+              .font(Tokens.V1.Text.timecode.font)
+              .foregroundStyle(Tokens.V1.Color.ink3)
+              .runtimeAccessibilityIdentifier("banner.mic-paused.elapsed")
           }
         }
-        Spacer()
         Button("恢复麦克风", action: onResume)
           .buttonStyle(.textAction)
           .fontWeight(.semibold)
+          .foregroundStyle(Tokens.V1.Color.warn)
           .accessibilityLabel("恢复麦克风，本侧重新开始收音")
           .runtimeAccessibilityIdentifier("banner.mic-paused.resume")
       }
-      .font(.system(size: Tokens.FontSize.uiEmphasis))
-      .foregroundStyle(Tokens.Color.warn)
-      .padding(.horizontal, Tokens.Spacing.md)
-      .padding(.vertical, Tokens.Spacing.xs)
-      .background(Tokens.Color.amber)
-      .overlay(alignment: .bottom) {
-        Rectangle().fill(Tokens.Color.amberLine).frame(height: 1)
-      }
-      .accessibilityElement(children: .contain)
       .runtimeAccessibilityIdentifier("banner.mic-paused")
     }
   }

@@ -81,34 +81,23 @@ public struct LanguageMismatchBanner: View {
   }
 
   public var body: some View {
-    HStack(spacing: Tokens.Spacing.xsm) {
-      Image(systemName: "waveform.badge.exclamationmark")
-        .accessibilityHidden(true)
-      Text(
-        "速记听到的更像\(Self.shortName(detected))，本场语言选的是\(Self.shortName(selected))"
-      )
-
-      Spacer()
-
+    HintBanner(
+      systemImage: "waveform.badge.exclamationmark",
+      text: "速记听到的更像\(Self.shortName(detected))，本场语言选的是\(Self.shortName(selected))"
+    ) {
+      // 中性底上 `.textAction` 不自带颜色(原来靠父级的警示色染),不显式上色就看不出可点。
       Button("改选\(Self.shortName(detected))", action: onSwitch)
         .buttonStyle(.textAction)
         .fontWeight(.semibold)
+        .foregroundStyle(Tokens.V1.Color.accent)
         .help("更新语言选择，下一场开录生效；本场速记引擎不变，云端精转会按实际语言自动判定")
         .runtimeAccessibilityIdentifier("language-mismatch.switch")
 
       Button("本场忽略", action: onIgnore)
         .buttonStyle(.textAction)
+        .foregroundStyle(Tokens.V1.Color.ink3)
         .runtimeAccessibilityIdentifier("language-mismatch.ignore")
     }
-    .font(.system(size: Tokens.FontSize.ui))
-    .foregroundStyle(Tokens.Color.warn)
-    .padding(.horizontal, Tokens.Spacing.md)
-    .padding(.vertical, Tokens.Spacing.xs)
-    .background(Tokens.Color.amber)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(Tokens.Color.amberLine).frame(height: 1)
-    }
-    .accessibilityElement(children: .contain)
     .runtimeAccessibilityIdentifier("banner.language-mismatch")
   }
 }
@@ -139,36 +128,30 @@ public struct LowRecognitionBanner: View {
     language == .english ? "英语" : "中文"
   }
 
+  /// 这条**不跟语言错配一起降中性**。文案自己写着「可能选错了,或者麦克风没有进声」——
+  /// 后半句是采集问题:`legHealthBanner` 只管帧停摆,静音但有帧的数据在它眼里是 healthy,
+  /// 所以低产出是「麦克风没进声」这个场景的唯一信号。一条横幅背着两种严重度,
+  /// 按最重的那种归级(Fable 评审 2026-09-20)。
+  /// 真正的修是按电平拆成两条,那要电平历史,是功能,不在本批。
   public var body: some View {
-    HStack(spacing: Tokens.Spacing.xsm) {
-      Image(systemName: "waveform.badge.exclamationmark")
-        .accessibilityHidden(true)
-      Text(
-        "速记几乎没有识别到内容——本场语言选的是\(Self.shortName(selected))，"
-          + "可能选错了，或者麦克风没有进声"
-      )
-
-      Spacer()
-
+    NoticeShell(
+      level: .warn,
+      systemImage: "waveform.badge.exclamationmark",
+      text: "速记几乎没有识别到内容——本场语言选的是\(Self.shortName(selected))，"
+        + "可能选错了，或者麦克风没有进声"
+    ) {
       Button("下一场改为\(Self.shortName(other))", action: onSwitch)
         .buttonStyle(.textAction)
         .fontWeight(.semibold)
+        .foregroundStyle(Tokens.V1.Color.warn)
         .help("更新语言选择，下一场开录生效；本场速记引擎不变，云端精转会按实际语言自动判定")
         .runtimeAccessibilityIdentifier("low-recognition.switch")
 
       Button("本场忽略", action: onIgnore)
         .buttonStyle(.textAction)
+        .foregroundStyle(Tokens.V1.Color.ink3)
         .runtimeAccessibilityIdentifier("low-recognition.ignore")
     }
-    .font(.system(size: Tokens.FontSize.ui))
-    .foregroundStyle(Tokens.Color.warn)
-    .padding(.horizontal, Tokens.Spacing.md)
-    .padding(.vertical, Tokens.Spacing.xs)
-    .background(Tokens.Color.amber)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(Tokens.Color.amberLine).frame(height: 1)
-    }
-    .accessibilityElement(children: .contain)
     .runtimeAccessibilityIdentifier("banner.low-recognition")
   }
 }

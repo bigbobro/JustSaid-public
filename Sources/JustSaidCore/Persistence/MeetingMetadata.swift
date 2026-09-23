@@ -455,6 +455,10 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
   public var client: String?
   /// 项目标签,规格同 `client`。
   public var project: String?
+  /// 会议页右栏「我要做什么」里勾掉的待办(owner 2026-09-22)。元素是 `SummaryActionItem.completionKey`:
+  /// 纪要重新生成后同一句话仍是勾掉的,措辞变了就回到没勾。nil = 没勾过;全部取消写回 nil,
+  /// 旧档案缺字段解码为 nil,无迁移。只存在 meeting.json,纪要文件一个字节都不碰。
+  public var completedActionItems: [String]?
 
   public init(
     id: UUID = UUID(),
@@ -491,7 +495,8 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     importedRecording: Bool? = nil,
     importedAudioFormat: String? = nil,
     client: String? = nil,
-    project: String? = nil
+    project: String? = nil,
+    completedActionItems: [String]? = nil
   ) {
     self.id = id
     self.title = title
@@ -528,6 +533,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     self.importedAudioFormat = importedAudioFormat
     self.client = client
     self.project = project
+    self.completedActionItems = completedActionItems
   }
 
   /// 本场最后一次实际提交的精转模型。设置快照只代表开会时的配置，不能替代用量事实；
@@ -565,8 +571,10 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
   /// - `postMeetingSubmittedAt` 非空 = 确证已提交 → false;
   /// - 阶段史为 nil = 旧档(request_id 落盘晚于 submit 的年代)→ 必须当已提交 → false;
   /// - 阶段史只含提交前阶段(processingStarted/composing/uploading/submitting,
-  ///   以及本地回声副本的 echoReductionInputComposed/echoReductionFallback,忽略 failed)
-  ///   才判从未提交。**不能只看「有史 + 无 submittedAt」**:续查(resume)
+  ///   以及 1.2.1 本地回声副本留下的 echoReductionInputComposed/echoReductionFallback,忽略 failed)
+  ///   才判从未提交。那两个阶段名现在不再写入,只为旧档判定保留:删掉它们,1.2.1 在合成窗口里
+  ///   中断的会议会被当成已提交,只去续查一个火山从没收到过的任务。
+  ///   **不能只看「有史 + 无 submittedAt」**:续查(resume)
   ///   会写入 vendorQueued/resultReceived 等阶段却从不写 submittedAt,那种史意味着
   ///   任务确实在火山侧存在过,误判成未提交会自动重新 submit——重复计费。
   public var hasNeverSubmittedPostMeetingJob: Bool {
@@ -578,6 +586,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     }
     let preSubmitStages: Set<String> = [
       "processingStarted", "composing", "uploading", "submitting",
+      // 1.2.1 遗留:不再写入,只为旧档判定保留。
       "echoReductionInputComposed", "echoReductionFallback",
     ]
     return history.map(\.stage)

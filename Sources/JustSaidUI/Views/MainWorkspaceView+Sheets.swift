@@ -7,18 +7,9 @@ extension MainWorkspaceView {
 
   func applyWorkspaceSheets<Content: View>(_ content: Content) -> some View {
     content
-      .sheet(isPresented: $isShowingSettings) {
-        ProviderSettingsView(
-          registry: registry,
-          settingsStore: providerSettings,
-          modelAssetManager: modelAssetManager,
-          nameAlertPreferences: appCoordinator.nameAlertPreferences,
-          appUpdates: appCoordinator.appUpdates
-        )
-        // 词典页会随词表变长，写死高度就意味着长词表被裁掉；
-        // 给下限与理想值、放开上限，让内容说了算。
-        .frame(minWidth: 760, minHeight: 620, idealHeight: 680, maxHeight: .infinity)
-      }
+      // 设置的弹窗 2026-09-20 退役:它现在是壳里的一页(WorkspaceMode.settings)。
+      // owner:「点击设置之后,不应该再弹出一个框来做配置,而是直接在原本的应用里
+      // 进入设置页面。」F2 的 settings-models.html 左边就是图标轨,说明它在壳里。
       // 废弃是不可逆的，删掉的是真录音。必须明说删什么、且默认按钮不是「废弃」。
       .confirmationDialog(
         "废弃这场会议？",

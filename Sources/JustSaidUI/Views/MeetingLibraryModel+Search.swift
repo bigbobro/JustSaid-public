@@ -161,17 +161,33 @@ extension MeetingLibraryModel {
     to value: String,
     of item: MeetingLibraryItem
   ) {
+    guard let current = meetings.first(where: { $0.id == item.id }) else { return }
+    updateTags(
+      client: kind == .client ? value : current.client ?? "",
+      project: kind == .project ? value : current.project ?? "", of: current)
+  }
+
+  func selectTag(
+    _ kind: MeetingTagKind, value: String, of item: MeetingLibraryItem,
+    directory: ClientProjectDirectory
+  ) {
+    guard let current = meetings.first(where: { $0.id == item.id }) else { return }
+    let pair =
+      kind == .client
+      ? directory.selectingClient(value, project: current.project ?? "")
+      : directory.selectingProject(value, client: current.client ?? "")
+    updateTags(client: pair.client, project: pair.project, of: current)
+    if tagError == nil { directory.remember(client: pair.client, project: pair.project) }
+  }
+
+  private func updateTags(client: String, project: String, of item: MeetingLibraryItem) {
     guard let index = meetings.firstIndex(where: { $0.id == item.id }) else { return }
     do {
-      let metadata: MeetingMetadata
-      switch kind {
-      case .client:
-        metadata = try meetingStore.updateTags(client: value, at: item.paths)
-      case .project:
-        metadata = try meetingStore.updateTags(project: value, at: item.paths)
-      }
+      let metadata = try meetingStore.updateTags(client: client, project: project, at: item.paths)
       meetings[index].client = metadata.client
       meetings[index].project = metadata.project
+      tagDirectory.replaceMeetings(meetings)
+      onSnapshotApplied?(meetings)
       tagError = nil
     } catch {
       tagError = "标签没能保存：\(error.localizedDescription)"
@@ -338,12 +354,32 @@ extension MeetingLibraryModel {
   /// 点说话人名字:同一个人再点一次就取消筛选。
   /// 与高亮互斥:进「只看」时把高亮清掉(语义统一——正文里点名字也是这条路径,
   /// 高亮随之退出是设计,不是副作用)。
+  /// 把一个人加进/移出「只看」。多选:看 1 和 3 就点两次,不用来回切。
+  ///
+  /// 换筛选会把可见行整组换掉,滚动偏移在新内容里指向别处,画面直接弹走
+  /// (owner 2026-09-20「根本不知道看到哪里去了」)。所以换之前记下视口最上面
+  /// 那一句的时间,换完发一次跳转落回同一处——那一句被筛掉了就落到最近的一句。
   public func toggleSpeakerFilter(_ speaker: String) {
-    let next = speakerFilter == speaker ? nil : speaker
-    speakerFilter = next
-    if next != nil {
+    let anchor = transcriptViewportSeconds
+    if speakerFilters.contains(speaker) {
+      speakerFilters.remove(speaker)
+    } else {
+      speakerFilters.insert(speaker)
       speakerHighlight = nil
       speakerHighlightIndex = 0
+    }
+    if let anchor {
+      transcriptJumpRequest = TranscriptJumpRequest(seconds: anchor)
+    }
+  }
+
+  /// 全部看回来,同样落回原处。
+  public func clearSpeakerFilters() {
+    guard !speakerFilters.isEmpty else { return }
+    let anchor = transcriptViewportSeconds
+    speakerFilters = []
+    if let anchor {
+      transcriptJumpRequest = TranscriptJumpRequest(seconds: anchor)
     }
   }
 }

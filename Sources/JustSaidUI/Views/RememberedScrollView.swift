@@ -1,3 +1,4 @@
+import AppKit
 import JustSaidCore
 import SwiftUI
 
@@ -73,45 +74,183 @@ extension View {
   }
 }
 
-/// 列表的滚动行锚点只在手势（含惯性）结束后回写应用状态。
-/// 本地位置仍即时更新;外部的键盘导航和锚点修正仍可立即驱动滚动。
-struct RememberedListScrollPositionModifier: ViewModifier {
-  @Binding private var retainedID: String?
-  @State private var position: String?
+/// A section anchor carries the following meeting identity; plain meeting IDs keep their old meaning.
+enum LibraryListAnchor {
+  static let sectionPrefix = "@section:"
+  static func meetingID(_ anchor: String) -> String {
+    anchor.hasPrefix(sectionPrefix) ? String(anchor.dropFirst(sectionPrefix.count)) : anchor
+  }
+}
 
-  init(_ retainedID: Binding<String?>) {
+/// List 不消费 ScrollView 的 scrollPosition / onScrollPhaseChange。
+/// 用它实际的 NSTableView 行位置保留锚点，只在手势结束或卸载时回写。
+struct RememberedListScrollPositionModifier: ViewModifier {
+  @Binding var retainedID: String?
+  let rowIDs: [String?]
+
+  init(_ retainedID: Binding<String?>, rowIDs: [String?]) {
     _retainedID = retainedID
+    self.rowIDs = rowIDs
   }
 
   func body(content: Content) -> some View {
-    content
-      .scrollPosition(id: $position, anchor: .top)
-      .task {
-        // 等行目标挂载后再发送恢复请求,避免初始布局吞掉锚点。
-        await Task.yield()
-        guard !Task.isCancelled else { return }
-        position = retainedID
-      }
-      .onChange(of: retainedID) { _, id in
-        if position != id {
-          position = id
+    content.background(
+      ListScrollAnchorBridge(retainedID: $retainedID, rowIDs: rowIDs)
+        .allowsHitTesting(false)
+    )
+  }
+}
+
+private struct ListScrollAnchorBridge: NSViewRepresentable {
+  @Binding var retainedID: String?
+  let rowIDs: [String?]
+
+  func makeNSView(context: Context) -> ListScrollAnchorView {
+    let view = ListScrollAnchorView()
+    view.setAccessibilityElement(false)
+    return view
+  }
+
+  func updateNSView(_ view: ListScrollAnchorView, context: Context) {
+    view.configure(rowIDs: rowIDs, retainedID: $retainedID)
+  }
+
+  static func dismantleNSView(_ view: ListScrollAnchorView, coordinator: ()) {
+    view.detach()
+  }
+}
+
+@MainActor
+private final class ListScrollAnchorView: NSView {
+  private weak var table: NSTableView?
+  private weak var scroll: NSScrollView?
+  private var rowIDs: [String?] = []
+  private var retainedID: Binding<String?>?
+  private var requestedID: String?
+  private var latestID: String?
+  private var hasTrackedPosition = false
+  private var needsRestore = true
+  private var isLiveScrolling = false
+  private var idleCommit: DispatchWorkItem?
+
+  func configure(rowIDs: [String?], retainedID: Binding<String?>) {
+    if self.rowIDs != rowIDs || requestedID != retainedID.wrappedValue {
+      needsRestore = true
+    }
+    self.rowIDs = rowIDs
+    self.retainedID = retainedID
+    requestedID = retainedID.wrappedValue
+    DispatchQueue.main.async { [weak self] in self?.attachAndRestore() }
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    if window != nil {
+      DispatchQueue.main.async { [weak self] in self?.attachAndRestore() }
+    }
+  }
+
+  private func attachAndRestore() {
+    guard window != nil else { return }
+    if table == nil {
+      func findTable(in view: NSView) -> NSTableView? {
+        if let table = view as? NSTableView { return table }
+        for child in view.subviews {
+          if let table = findTable(in: child) { return table }
         }
+        return nil
       }
-      .onScrollPhaseChange { _, phase in
-        if phase == .idle {
-          commitPosition()
+      var ancestor = superview
+      while let view = ancestor {
+        if let found = findTable(in: view), let scroll = found.enclosingScrollView {
+          table = found
+          self.scroll = scroll
+          let center = NotificationCenter.default
+          scroll.contentView.postsBoundsChangedNotifications = true
+          center.addObserver(
+            self, selector: #selector(boundsChanged),
+            name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+          center.addObserver(
+            self, selector: #selector(scrollStarted),
+            name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+          center.addObserver(
+            self, selector: #selector(scrollEnded),
+            name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+          break
         }
+        ancestor = view.superview
       }
-      .onDisappear {
-        commitPosition()
-      }
+    }
+    guard needsRestore, let table, let scroll, table.numberOfRows == rowIDs.count else { return }
+    needsRestore = false
+    if let requestedID,
+      let meetingRow = rowIDs.firstIndex(where: { $0 == LibraryListAnchor.meetingID(requestedID) })
+    {
+      let row =
+        requestedID.hasPrefix(LibraryListAnchor.sectionPrefix)
+        ? rowIDs[...meetingRow].lastIndex(where: { $0 == nil }) ?? meetingRow : meetingRow
+      let rect = table.rect(ofRow: row)
+      let top = table.convert(rect.origin, to: scroll.documentView)
+      scroll.contentView.scroll(to: NSPoint(x: 0, y: top.y))
+      scroll.reflectScrolledClipView(scroll.contentView)
+    }
+    trackPosition()
+  }
+
+  @objc private func boundsChanged() {
+    guard !needsRestore else { return }
+    trackPosition()
+    // 非触控板路径（滚动条、程序性滚动）没有 live-scroll 阶段，静止后同样提交。
+    if !isLiveScrolling {
+      idleCommit?.cancel()
+      let work = DispatchWorkItem { [weak self] in self?.commitPosition() }
+      idleCommit = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+  }
+
+  @objc private func scrollStarted() {
+    isLiveScrolling = true
+    idleCommit?.cancel()
+  }
+
+  @objc private func scrollEnded() {
+    isLiveScrolling = false
+    idleCommit?.cancel()
+    trackPosition()
+    commitPosition()
+  }
+
+  private func trackPosition() {
+    guard let table, let scroll, table.numberOfRows == rowIDs.count else { return }
+    let visible = table.convert(scroll.contentView.bounds, from: scroll.contentView)
+    let row = table.row(at: NSPoint(x: visible.midX, y: visible.minY + 1))
+    guard row >= 0, row < rowIDs.count else { return }
+    hasTrackedPosition = true
+    // Top means no restoration scroll on the next mount, so the first section title stays visible.
+    if scroll.contentView.bounds.minY <= 0 {
+      latestID = nil
+    } else if let id = rowIDs[row] {
+      latestID = id
+    } else {
+      latestID = rowIDs[row...].compactMap { $0 }.first.map { LibraryListAnchor.sectionPrefix + $0 }
+    }
   }
 
   private func commitPosition() {
-    // 拆卸滚动容器会清空 binding,这个 nil 不是用户滚到了新位置。
-    guard let position else { return }
-    if retainedID != position {
-      retainedID = position
-    }
+    guard !isLiveScrolling, !needsRestore, hasTrackedPosition, let retainedID,
+      retainedID.wrappedValue != latestID
+    else { return }
+    requestedID = latestID
+    retainedID.wrappedValue = latestID
+  }
+
+  func detach() {
+    isLiveScrolling = false
+    idleCommit?.cancel()
+    commitPosition()
+    NotificationCenter.default.removeObserver(self)
+    table = nil
+    scroll = nil
   }
 }

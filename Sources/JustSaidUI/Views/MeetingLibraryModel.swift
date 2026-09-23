@@ -42,7 +42,9 @@ public enum MeetingDetailTab: String, CaseIterable, Identifiable, Hashable, Send
 
   public var title: String {
     switch self {
-    case .onePage: return "一页纸"
+    // 「一页纸」和「纪要」在用户心里分不清。真实区别是给谁看:这一页是给自己的
+    // 工作台(能勾待办、能跳原文),纪要是给别人的文档(能导出、能发)。
+    case .onePage: return "这场会"
     case .minutes: return "纪要"
     case .transcript: return "完整转写"
     case .inMeeting: return "会中记录"
@@ -50,12 +52,16 @@ public enum MeetingDetailTab: String, CaseIterable, Identifiable, Hashable, Send
   }
 
   /// ⌘1-⌘4 与界面页签顺序同一套,不另开编号。
+  /// 界面上只剩三个页签:纪要合进「这场会」,不再单独成签。
+  /// `.minutes` 作为文档口径保留(复制当前页全文、导出、G3 恢复的旧值都还走它)。
+  public static let visibleCases: [MeetingDetailTab] = [.onePage, .transcript, .inMeeting]
+
   public var keyboardEquivalent: KeyEquivalent {
     switch self {
     case .onePage: "1"
-    case .minutes: "2"
-    case .transcript: "3"
-    case .inMeeting: "4"
+    case .transcript: "2"
+    case .inMeeting: "3"
+    case .minutes: "4"
     }
   }
 
@@ -157,6 +163,8 @@ public struct MeetingLibraryItem: Identifiable, Sendable {
   /// 目录路径:会议目录名唯一,比 metadata.id 更稳(旧会议可能没写 id 就崩过)。
   /// public 仅因 Identifiable 要求;其余成员保持 internal,探针只拿实例回传。
   public let id: String
+  /// `meeting.json` 里的会议 UUID。待办来源按它找会,不按目录路径。
+  let meetingID: UUID
   let paths: MeetingPaths
   var title: String
   let startedAt: Date
@@ -226,6 +234,9 @@ public struct MeetingLibraryItem: Identifiable, Sendable {
   var client: String?
   /// 项目标签,规格同 `client`。
   var project: String?
+  /// 右栏勾掉的待办(`SummaryActionItem.completionKey`)。勾选后就地更新,不整表 reload,
+  /// 理由与 `speakerNames` 同;有默认值,只有列表读盘处需要填。
+  var completedActionItems: [String] = []
   /// 完整性(08-19 N1;08-21 ack 单改合成裁决):reload 时读 completeness.json 与
   /// completeness-ack.json 预载,不在行视图做 IO。nil = 无报告。
   /// var:放行/撤销走就地更新(与 `speakerNames` 同理:点个放行不该赔上页签与滚动位置)。
@@ -251,20 +262,13 @@ public struct MeetingLibraryItem: Identifiable, Sendable {
   }
 
   var startedLabel: String {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "zh_CN")
-    formatter.dateFormat = "yyyy年M月d日 HH:mm"
-    return formatter.string(from: startedAt)
+    return ChineseDateText.fullDayAndTime(startedAt)
   }
 
   /// 会议库列表紧凑档(P4,用户拍板 08-会议库列表密度-v1):同年只留「月-日 时:分」,
   /// 跨年补回全年——扫列表时一眼分出远近。
   var compactStartedLabel: String {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "zh_CN")
-    let sameYear = Calendar.current.isDate(startedAt, equalTo: Date(), toGranularity: .year)
-    formatter.dateFormat = sameYear ? "MM-dd HH:mm" : "yyyy-MM-dd HH:mm"
-    return formatter.string(from: startedAt)
+    return ChineseDateText.compactDayAndTime(startedAt)
   }
 
   var durationLabel: String {
@@ -276,15 +280,17 @@ public struct MeetingLibraryItem: Identifiable, Sendable {
     return status == .interrupted ? "约 \(label)" : label
   }
 
-  /// 紧凑时长(P4):`h:mm`。「进行中/时长未知/约(打断)」三档语义照 `durationLabel`。
+  /// 紧凑时长:分钟数加 m(「31m」)。「进行中/时长未知」两档照 `durationLabel`,不带「约」。
   ///
   /// **忘了关停的一场会不能按会话跨度报时长**(#50):采集在半路停摆、会话却一直挂到
   /// 人想起来才点结束时,`endedAt - startedAt` 是 9:23,而盘上母带只有 1:21——库里
   /// 这行数字于是把「录了 9 小时」写进了用户脑子里。所以 completeness 一旦判定有效
-  /// 母带覆盖短欠,这里改报**实际录到的时长**并标「录到」。判据不重算,直接认报告
-  /// 自己记下的「有效母带覆盖短欠」红因(见 `shortCoveredSeconds`),两处因此不会
-  /// 各说各话:这个标记出现时,完整性卡片里必然有对应的缺口说明。此时数字来自
-  /// 音频文件本身、不是推算,所以不叠加打断态的「约」。
+  /// 母带覆盖短欠,这里改报**实际录到的时长**。判据不重算,直接认报告自己记下的
+  /// 「有效母带覆盖短欠」红因(见 `shortCoveredSeconds`),两处因此不会各说各话:
+  /// 这时完整性卡片里必然有对应的缺口说明。
+  ///
+  /// 只写数字加 m,不加「录到」「约」这类前缀(owner 2026-09-21 看到「录到 81m」:
+  /// 「怎么还有这种?」)。这一列要能竖着扫;缺口与打断在完整性和「部分录音」里说。
   ///
   /// 成员里唯一的 public:这行文案本身就是 #50 的症状,得能被验证直读断言。
   /// SwiftUI 的 `Text` 在 headless 布局里不落成可访问元素(行还套了
@@ -294,10 +300,9 @@ public struct MeetingLibraryItem: Identifiable, Sendable {
       return status == .recording ? "进行中" : "时长未知"
     }
     if let shortCoveredSeconds {
-      return "录到 \(ElapsedTime.hourMinuteLabel(TimeInterval(shortCoveredSeconds)))"
+      return ElapsedTime.minutesLabel(TimeInterval(shortCoveredSeconds))
     }
-    let label = ElapsedTime.hourMinuteLabel(endedAt.timeIntervalSince(startedAt))
-    return status == .interrupted ? "约 \(label)" : label
+    return ElapsedTime.minutesLabel(endedAt.timeIntervalSince(startedAt))
   }
 
   var languageLabel: String {
@@ -444,9 +449,13 @@ public enum VerifyWorkbenchEntrySwitch {
 @MainActor
 public final class MeetingLibraryModel: ObservableObject {
   @Published var meetings: [MeetingLibraryItem] = []
+  /// 每次扫盘结果落定后回调,由持有者存起来,下次重建 model 时当 `initialMeetings` 传回。
+  let tagDirectory = ClientProjectDirectory()
+  public var onSnapshotApplied: (([MeetingLibraryItem]) -> Void)?
   @Published public private(set) var isReloading = false
   /// 异步 artifact cache 安装后的轻量发布源；正文值本身仍只存在 `artifactCache`。
-  @Published private var artifactLoadRevision = 0
+  @Published public var filterSelection = LibraryFilterSelection()
+  @Published var artifactLoadRevision = 0
   @Published public internal(set) var isExporting = false
   @Published public internal(set) var exportProgressText: String?
   @Published var selectedID: String? {
@@ -471,13 +480,27 @@ public final class MeetingLibraryModel: ObservableObject {
   /// 纪要版本历史当前选中的文件名;nil = 显示最新/盘上 minutes.md。
   @Published var minutesRevisionID: String?
   @Published var minutesVariant: MinutesVariant = .chinese
+  /// 「这场会」页内的两种看法。一页纸就是结构化纪要本身
+  /// (`MeetingArtifactProjection.onePager` 直接返回 `structuredMinutes`),两者同一份、
+  /// 同一版本,所以不再是两个页签,而是同一页的两种呈现(owner 2026-09-20)。
+  @Published var showsFormalMinutes = false
   /// 说话人改名写盘失败时的原因,直接挂在命名行上——静默失败等于骗用户名字存上了。
   @Published var speakerNameError: String?
   /// 排除/撤销写盘失败的原因(08-14),挂在转写页筛选行;同 speakerNameError 的纪律。
   @Published var exclusionError: String?
-  /// 只看某个说话人(N4);nil = 看全部。按**生效后的显示名**筛。
-  /// public:探针要断言它与 speakerHighlight 互斥。
-  @Published public var speakerFilter: String?
+  /// 只看这些说话人(N4);空集 = 看全部。按**生效后的显示名**筛。
+  /// 2026-09-20 从单人改成多人:真实读法是「1 和 3 聊得多,把 2 关掉」,
+  /// 一次只能盯一个人等于每看一句都要切一次(owner)。
+  @Published public var speakerFilters: Set<String> = []
+  /// 单人入口,兼容既有读写点与探针。读:恰好选中一人时给名字,否则 nil。
+  /// 写:替换整组。要判断「有没有在筛」请用 `speakerFilters.isEmpty`,不要用它 != nil。
+  public var speakerFilter: String? {
+    get { speakerFilters.count == 1 ? speakerFilters.first : nil }
+    set { speakerFilters = newValue.map { [$0] } ?? [] }
+  }
+  /// 换筛选之前视口最上面那一句的时间,换完落回同一处。
+  /// 不用 @Published:它每次滚动都在变,发布出去会让整页跟着重算。
+  public var transcriptViewportSeconds: TimeInterval?
   /// 高亮通读模式(08-14 chip 交互单):按**生效后的显示名**命中着色,全文保留可见。
   /// 与 `speakerFilter` 互斥——两者都是「盯住一个人」的隐蔽状态,同存会让人
   /// 分不清自己此刻在哪个模式里;互斥在两个 toggle 方法里结算,别处不许直接写。
@@ -525,12 +548,21 @@ public final class MeetingLibraryModel: ObservableObject {
   /// 标签写盘失败的原因,挂在详情头标签行旁——静默失败等于骗用户标签存上了
   /// (与 `titleError` 同一纪律)。
   @Published var tagError: String?
+  /// 右栏待办勾选写盘失败的原因,挂在「我要做什么」下面;同 `tagError` 的纪律:
+  /// 勾上了却没存住,重开就没了,等于骗人。
+  @Published var actionItemError: String?
   /// 完整性放行/撤销写盘失败的原因,挂在完备度卡上;同 `tagError` 的纪律。
   @Published var completenessAckError: String?
   /// 「按客户分组」(08-17 R-b):纯呈现开关,默认关(满库列表零变化)。与选中/页签
   /// 同级的用户上下文(G3):状态由 AppCoordinator 持有存活 remount,这里只是工作副本。
   /// public:视图开关直接绑定,探针驱动分组断言。
-  @Published public var groupsByClient = false
+  /// 分组维度。原来是布尔(按天/按客户二选一),owner 2026-09-20 要求补「不分」与「按项目」。
+  @Published public var grouping: LibraryGrouping = .day
+  /// 旧接口:仍有调用方与断言按布尔读写,映射到新枚举,语义不变。
+  public var groupsByClient: Bool {
+    get { grouping == .client }
+    set { grouping = newValue ? .client : .day }
+  }
   /// 指挥台滤镜(批3-C):呈现态,G3 模式随 AppCoordinator 存活 remount。
   @Published public var queueFilter: LibraryQueueFilter = .all {
     didSet { queueSnapshotCache = nil }
@@ -542,6 +574,7 @@ public final class MeetingLibraryModel: ObservableObject {
     (counts: [LibraryQueueFilter: Int], filtered: [MeetingLibraryItem])?
   /// public:探针断言「进高亮/上一处下一处」发出的跳转秒数。
   @Published public var transcriptJumpRequest: TranscriptJumpRequest?
+  @Published public private(set) var sourceJumpFailure: String?
   /// 最近一次跨页签 ⏱ 跳转的回程;同页跳转不写。换场时清掉。
   @Published public var returnTrail: LibraryReturnTrail?
   @Published var exportNotice: String?
@@ -594,6 +627,11 @@ public final class MeetingLibraryModel: ObservableObject {
   private var awaitsImportNavigation = false
   private var importSelectionAnchor: String?
   private var pendingFocus: URL?
+  /// 待办来源回跳。必须在 `select` 清掉跳转请求之后再消费。
+  private var pendingTranscriptJump: (directoryPath: String, seconds: TimeInterval)?
+  var deletedMeetingLedger: TodoDeletedMeetingLedger?
+  /// 会话恢复的页签,只在第一次选中时顶掉「默认落签」,用完即清。
+  private var pendingRestoredTab: MeetingDetailTab?
   /// 每场会议只读一次磁盘;`reload()` 会整体丢弃缓存,因为会后精转会改写 transcript.md / minutes.md。
   var artifactCache: [String: MeetingDetailSnapshot] = [:]
   private var failedArtifactLoads: Set<String> = []
@@ -626,24 +664,50 @@ public final class MeetingLibraryModel: ObservableObject {
     dictionaryStore: DictionaryStore = DictionaryStore(),
     snapshotLoader: MeetingLibrarySnapshotLoader = .live,
     artifactLoader: MeetingArtifactSnapshotLoader = .live,
-    exportService: MeetingLibraryExportService = .live
+    exportService: MeetingLibraryExportService = .live,
+    initialMeetings: [MeetingLibraryItem] = [],
+    transcriptJumpSeconds: TimeInterval? = nil,
+    deletedMeetingLedger: TodoDeletedMeetingLedger? = nil
   ) {
+    // 上一次扫盘的结果先画出来,首次 reload() 扫完再换(见 AppCoordinator.libraryItemsCache)。
+    meetings = initialMeetings
     self.meetingStore = meetingStore
     self.snapshotLoader = snapshotLoader
     self.artifactLoader = artifactLoader
     self.exportService = exportService
     self.dictionaryStore = dictionaryStore
     selectedID = restoredSelectedID
-    tab = restoredTab
+    // 旧状态里存着 .minutes 的,迁到「这场会」并直接停在正式纪要那一侧,
+    // 不把人扔回结构视图。
+    let restoresSameMeeting =
+      restoredSelectedID != nil
+      && (focus == nil || focus?.standardizedFileURL.path == restoredSelectedID)
+    if restoresSameMeeting, restoredTab == .minutes {
+      tab = .onePage
+      showsFormalMinutes = true
+    } else {
+      tab = restoredTab
+    }
+    // 记住它:`select(_:)` 里会按会议事实算一个「默认落签」,把这里恢复的值盖掉。
+    // 那条规则是给**新打开一场会**用的;会话恢复时用户上次停在哪一签,就该回到哪一签
+    // (2026-09-20:退出时停在完整转写,重开落回「这场会」)。只认第一次选中。
+    pendingRestoredTab = restoresSameMeeting ? restoredTab : nil
     // init 阶段不触发 didSet:恢复的 query 由首次 reload() 统一起扫。
     librarySearchQuery = restoredSearchQuery
-    groupsByClient = restoredGroupByClient
+    grouping = restoredGroupByClient ? .client : .day
     queueFilter = restoredQueueFilter
     self.destinationHistory = destinationHistory
     recentExportDestinations = destinationHistory.destinations()
     self.diagnosticsDestinationHistory = diagnosticsDestinationHistory
     recentDiagnosticsDestinations = diagnosticsDestinationHistory.destinations()
     self.pendingFocus = focus
+    if let transcriptJumpSeconds, let focus {
+      pendingTranscriptJump = (
+        directoryPath: focus.standardizedFileURL.path,
+        seconds: transcriptJumpSeconds
+      )
+    }
+    self.deletedMeetingLedger = deletedMeetingLedger
     self.recordingSession = recordingSession
     // 生产里由 `AppCoordinator` 注入同一个实例;不传时自建一个,让纯布局探针
     // 与截图工具无需改动即可编译。
@@ -804,6 +868,10 @@ public final class MeetingLibraryModel: ObservableObject {
     artifactCache[item.id] == nil && artifactLoadTasks[item.id] != nil
   }
 
+  public func hasFailedArtifacts(for item: MeetingLibraryItem) -> Bool {
+    failedArtifactLoads.contains(item.id)
+  }
+
   public func hasLoadedArtifacts(for item: MeetingLibraryItem) -> Bool {
     artifactCache[item.id] != nil
   }
@@ -830,6 +898,7 @@ public final class MeetingLibraryModel: ObservableObject {
       self.transcriptPresentationCache.removeValue(forKey: itemID)
       self.artifactLoadTasks[itemID] = nil
       self.artifactLoadRevision &+= 1
+      self.applyPendingSourceJump()
     }
   }
 
@@ -837,6 +906,8 @@ public final class MeetingLibraryModel: ObservableObject {
     guard reloadGeneration == generation else { return }
     invalidateArtifactLoads()
     meetings = items
+    tagDirectory.replaceMeetings(items)
+    onSnapshotApplied?(items)
     // 后台化 reload 后 SwiftUI body 会在 loading 态用空表先把快照缓存写成全零;
     // reload() 起点的那次 reset 救不了它。不清掉这次毒化,指挥台会一直按零计数
     // 把滤镜回落 .all、lane 行收空——正好打在本函数下方「滤镜激活不得选中被
@@ -855,6 +926,8 @@ public final class MeetingLibraryModel: ObservableObject {
     } else if let selectedItem {
       scheduleArtifactLoad(for: selectedItem)
     }
+    // 来源跳转必须等正文快照就绪；空正文消费请求会让冷启动停在转写顶部。
+    applyPendingSourceJump()
 
     // 搜索跟随当前 generation 的完整快照重扫，绝不复活旧结果。
     scheduleLibrarySearch(debounce: false)
@@ -864,7 +937,7 @@ public final class MeetingLibraryModel: ObservableObject {
     queueSnapshotCache = nil
     liveRequestIDSuffixCache = [:]
     cachedRosterForms = nil
-    speakerFilter = nil
+    speakerFilters = []
     speakerHighlight = nil
     speakerHighlightIndex = 0
     pendingSpeakerOverride = nil
@@ -971,6 +1044,9 @@ public final class MeetingLibraryModel: ObservableObject {
     } catch {
       deletionError = "删除失败：\(error.localizedDescription)"
     }
+    if deletionError == nil {
+      try? deletedMeetingLedger?.record(item.meetingID)
+    }
     if didDeleteSelectedItem, let adjacentSelectionID {
       pendingFocus = URL(fileURLWithPath: adjacentSelectionID)
     }
@@ -993,8 +1069,16 @@ public final class MeetingLibraryModel: ObservableObject {
   /// 全部从这一份出发——可视顺序与遍历顺序**必须**同源(守卫断言看护),
   /// 否则过滤中删除会选中一场被隐藏的会。
   public var queueFilteredMeetings: [MeetingLibraryItem] {
-    effectiveQueueFilter == .all ? meetings : queueSnapshot().filtered
+    let items = effectiveQueueFilter == .all ? meetings : queueSnapshot().filtered
+    return items.filter { item in
+      (filterSelection.clients.isEmpty || filterSelection.clients.contains(item.client ?? "未标注"))
+        && (filterSelection.projects.isEmpty
+          || filterSelection.projects.contains(item.project ?? "未标注"))
+        && (filterSelection.source == nil || item.isImportedRecording == filterSelection.source)
+        && filterSelection.contains(date: item.startedAt)
+    }
   }
+
 
   /// 一次全库扫描同时算出各 lane 计数与当前滤镜命中集合;缓存到下一个失效点。
   private func queueSnapshot() -> (
@@ -1018,12 +1102,22 @@ public final class MeetingLibraryModel: ObservableObject {
   /// 「按客户分组」的分段投影(08-17 R-b):段序 = 客户在时间倒序列表里的首现序
   /// (最近谈过的客户在前),无标签段固定殿后;段内保持时间倒序(与满库现状一致)。
   /// 纯呈现,每次从同一份列表事实(滤镜后)现算,不另存第二份列表。
-  public var clientSections: [MeetingClientSection] {
+  public var clientSections: [MeetingClientSection] { sections(by: grouping) }
+
+  /// 按给定维度分段。客户与项目走同一条路径,只是取值不同;
+  /// 没有该维度取值的会议归到末尾的「未标注」段。
+  public func sections(by grouping: LibraryGrouping) -> [MeetingClientSection] {
+    let key: (MeetingLibraryItem) -> String? = {
+      switch grouping {
+      case .project: return { $0.project }
+      default: return { $0.client }
+      }
+    }()
     var sections: [(client: String, items: [MeetingLibraryItem])] = []
     var indexByClient: [String: Int] = [:]
     var untagged: [MeetingLibraryItem] = []
     for item in queueFilteredMeetings {
-      guard let client = item.client else {
+      guard let client = key(item) else {
         untagged.append(item)
         continue
       }
@@ -1035,7 +1129,7 @@ public final class MeetingLibraryModel: ObservableObject {
       }
     }
     var projected = sections.map {
-      MeetingClientSection(id: "client:\($0.client)", client: $0.client, items: $0.items)
+      MeetingClientSection(id: "\(grouping.rawValue):\($0.client)", client: $0.client, items: $0.items)
     }
     if !untagged.isEmpty {
       projected.append(MeetingClientSection(id: "untagged", client: nil, items: untagged))
@@ -1046,7 +1140,7 @@ public final class MeetingLibraryModel: ObservableObject {
   /// 列表的**可视顺序**:分组开着时跨段连续(方向键遍历用它,B5 契约),
   /// 关着时就是满库时间倒序——现状零变化。
   public var visibleOrderedMeetings: [MeetingLibraryItem] {
-    groupsByClient ? clientSections.flatMap(\.items) : queueFilteredMeetings
+    grouping.isSectioned ? clientSections.flatMap(\.items) : queueFilteredMeetings
   }
 
   public func selectAdjacent(offset: Int) {
@@ -1067,6 +1161,10 @@ public final class MeetingLibraryModel: ObservableObject {
 
   public func select(_ id: String?) {
     selectedID = id
+    if pendingTranscriptJump?.directoryPath != id {
+      pendingTranscriptJump = nil
+      sourceJumpFailure = nil
+    }
     snapshotID = nil
     minutesRevisionID = nil
     minutesVariant = .chinese
@@ -1077,7 +1175,7 @@ public final class MeetingLibraryModel: ObservableObject {
     titleError = nil
     tagError = nil
     completenessAckError = nil
-    speakerFilter = nil
+    speakerFilters = []
     speakerHighlight = nil
     speakerHighlightIndex = 0
     pendingSpeakerOverride = nil
@@ -1089,7 +1187,13 @@ public final class MeetingLibraryModel: ObservableObject {
     exportError = nil
     guard let item = meetings.first(where: { $0.id == id }) else { return }
     // 默认落签只依赖 reload 已经预读的轻量文件事实；完整正文继续在后台加载。
-    tab = preferredLandingTab(for: item)
+    // 会话恢复的页签优先:它是用户上次停的地方,不该被「这场会该落在哪一签」盖掉。
+    if let restored = pendingRestoredTab {
+      pendingRestoredTab = nil
+      tab = restored == .minutes ? .onePage : restored
+    } else {
+      tab = preferredLandingTab(for: item)
+    }
     if item.hasEnglishMinutes, !item.hasChineseMinutes {
       minutesVariant = .english
     } else {
@@ -1152,6 +1256,53 @@ public final class MeetingLibraryModel: ObservableObject {
   /// 这场会的转写里出现过的说话人标签,顺序即出场顺序;永远读**原始**转写。
   func speakerLabels(for item: MeetingLibraryItem) -> [String] {
     transcriptPresentation(for: item).speakerLabels
+  }
+
+  /// 认名面板一行要的东西。
+  ///
+  /// 曾经带一条 `sample`(该人最长的一句原话),出发点是「不回正文就能认出是谁」。
+  /// owner 2026-09-20 走查否掉:认人肯定要回原文看上下文,面板里铺九段引文只是把
+  /// 建议挤没了。只留 `longestLineSeconds` 当跳转锚点——段数可点,落到他说得最长那一处。
+  struct SpeakerRosterEntry: Identifiable {
+    let label: String
+    let name: String
+    let segmentCount: Int
+    let longestLineSeconds: TimeInterval?
+    var id: String { label }
+    var isUnnamed: Bool { name.isEmpty }
+  }
+
+  func speakerRoster(for item: MeetingLibraryItem) -> [SpeakerRosterEntry] {
+    let presentation = transcriptPresentation(for: item)
+    var counts: [String: Int] = [:]
+    var longest: [String: TranscriptSpeechLine] = [:]
+    for row in presentation.rows {
+      guard case .speech(let line) = row,
+        line.originalSpeaker != TranscriptSpeakerNaming.selfSpeakerLabel
+      else { continue }
+      counts[line.originalSpeaker, default: 0] += 1
+      let length = line.text.trimmingCharacters(in: .whitespacesAndNewlines).count
+      let best = longest[line.originalSpeaker]?.text
+        .trimmingCharacters(in: .whitespacesAndNewlines).count ?? 0
+      if length > best { longest[line.originalSpeaker] = line }
+    }
+    return presentation.speakerLabels.map { label in
+      SpeakerRosterEntry(
+        label: label,
+        name: speakerName(label, for: item),
+        segmentCount: counts[label] ?? 0,
+        longestLineSeconds: longest[label].flatMap {
+          TranscriptAnchor(timecode: $0.timestamp).seconds
+        }
+      )
+    }
+  }
+
+  /// 认名这件事还剩多少活:没填名的人 + 待采纳的建议。归零就该消失,不再占工具行。
+  /// 原来这个数只算建议,六个人一个没填也显示「认名」不带数字(Fable 评审指出)。
+  func namingTodoCount(for item: MeetingLibraryItem) -> Int {
+    speakerRoster(for: item).count(where: \.isUnnamed)
+      + namingSuggestionRows(for: item).pendingPrefillCount
   }
 
   func speakerName(_ label: String, for item: MeetingLibraryItem) -> String {
@@ -1356,11 +1507,36 @@ public final class MeetingLibraryModel: ObservableObject {
     }
   }
 
+  private func applyPendingSourceJump() {
+    guard let jump = pendingTranscriptJump, selectedID == jump.directoryPath,
+      let selectedItem
+    else { return }
+    if failedArtifactLoads.contains(selectedItem.id) {
+      sourceJumpFailure = "未能读取来源转写，请重新定位"
+      return
+    }
+    guard artifactCache[selectedItem.id] != nil else { return }
+    guard !transcriptPresentation(for: selectedItem).rows.isEmpty else {
+      sourceJumpFailure = "来源转写暂不可用，请重新定位"
+      return
+    }
+    pendingTranscriptJump = nil
+    sourceJumpFailure = nil
+    jumpToTranscript(jump.seconds)
+  }
+
+  public func retrySourceJump() {
+    guard pendingTranscriptJump != nil else { return }
+    sourceJumpFailure = nil
+    reload()
+  }
+
   public func jumpToTranscript(_ seconds: TimeInterval) {
     if tab != .transcript {
       returnTrail = LibraryReturnTrail(sourceTab: tab)
     }
-    speakerFilter = nil
+    // 跳过去是为了读上下文,所以把筛选全放开——只看一个人的视图里没有上下文。
+    speakerFilters = []
     pendingSpeakerOverride = nil
     tab = .transcript
     transcriptJumpRequest = TranscriptJumpRequest(seconds: seconds)
@@ -1475,4 +1651,41 @@ public final class MeetingLibraryModel: ObservableObject {
     awaitsImportNavigation = postMeetingTasks.startImport(request, providers: providers)
   }
 
+}
+
+/// Pure library presentation, retained across workspace remounts; never written to meeting data.
+/// 会议库的分组维度。
+public enum LibraryGrouping: String, CaseIterable, Sendable {
+  case none, day, client, project
+
+  public var title: String {
+    switch self {
+    case .none: return "不分"
+    case .day: return "按天"
+    case .client: return "按客户"
+    case .project: return "按项目"
+    }
+  }
+
+  /// 是否按某个标签分段(按天走日期分组,另有一条路径)。
+  public var isSectioned: Bool { self == .client || self == .project }
+}
+
+public struct LibraryFilterSelection: Equatable, Sendable {
+  public var clients: Set<String> = []
+  public var projects: Set<String> = []
+  public var source: Bool?
+  public var period = "全部"
+  public init() {}
+
+  func contains(date: Date, now: Date = Date(), calendar: Calendar = .current) -> Bool {
+    let component: Calendar.Component
+    switch period {
+    case "今天": component = .day
+    case "本周": component = .weekOfYear
+    case "本月": component = .month
+    default: return true
+    }
+    return calendar.dateInterval(of: component, for: now)?.contains(date) ?? false
+  }
 }

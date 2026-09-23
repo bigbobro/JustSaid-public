@@ -4,7 +4,7 @@ import SwiftUI
 extension SummaryRichText {
   /// 把结构化的富文本片段（design.md 类型化 JSON 的文本载体）转成可直接交给 `Text` 渲染的
   /// `AttributedString`：`.strong` 走 `inlinePresentationIntent`（跟随环境字体加粗），
-  /// `.callout` 叠加点名高亮的琥珀底色（V10，全屏唯一暖色）。
+  /// `.callout` 叠加设计系统 v1 的点名软底。
   func attributedString(calloutForeground: Color = Tokens.Color.warn) -> AttributedString {
     var result = AttributedString()
     for run in runs {
@@ -16,7 +16,7 @@ extension SummaryRichText {
         piece.inlinePresentationIntent = .stronglyEmphasized
       case .callout:
         piece.inlinePresentationIntent = .stronglyEmphasized
-        piece.backgroundColor = Tokens.Color.amber
+        piece.backgroundColor = Tokens.V1.Color.callSoft
         piece.foregroundColor = calloutForeground
       }
       result += piece

@@ -12,6 +12,8 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   @ObservedObject var summaryFeed: Feed
   @ObservedObject var appCoordinator: AppCoordinator
   @ObservedObject var modelAssetManager: LocalModelAssetManager
+  /// 设置全页交互验证沿用内存凭证摘要；生产默认仍走 Keychain。
+  private let secretDigest: (any StoredSecretDigest)?
 
   @StateObject private var notesController = NotesController()
 
@@ -25,16 +27,21 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   // 已有用户 key 里已存 "en"/"zh",不受默认值变化影响。
   @AppStorage("justsaid.meeting.language") private var languageRaw: String = MeetingLanguage.auto
     .rawValue
-  @State var isShowingSettings = false
+  @StateObject private var dictionaryPane: DictionaryPaneModel
   @State var isConfirmingDiscard = false
   @State var isShowingChapterDirectory = false
   @State var isShowingLibraryOverflow = false
   @State var meetingTitleDraft = ""
+  /// 开会前在首页入口卡上填的客户 / 项目(owner 2026-09-21 批的首页参考稿:开会前就知道
+  /// 这场是谁的,原来只能进会议库事后补)。开会成功后写进这场的 meeting.json,随即清空。
+  @State var meetingClientDraft = ""
+  @State var meetingProjectDraft = ""
+  /// 废弃进行中:先回首页、后台再删,这段时间首页不能再把这一场画成「正在记录」。
+  @State var isDiscardingMeeting = false
   @State var meetingTitle = "会议"
   @State var scrollRequest: UUID?
   @State private var transcriptPresentation: LiveTranscriptPresentationState
 
-  @FocusState var isMeetingTitleFocused: Bool
   @AppStorage(TextScale.defaultsKey) private var textScaleRawValue = TextScale.standard.rawValue
   /// 本会话内用户是否手动选过语言:手选优先于「跟上一场走」的自动预填。
   @State var hasManuallyPickedLanguage = false
@@ -52,6 +59,9 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   @State var exclusionRanges: [ExcludedRange] = []
   /// 排除写入失败的内联提示;走与降级细带同一视觉语言,不打断录音。
   @State var exclusionError: String?
+  /// 「还有 N 条提示」展开了没有。刻意**不**在新提示进来时自动展开——
+  /// 自动展开等于替用户决定他现在该被打断(设计系统「做成什么感觉」第 2 条)。
+  @State var isShowingAllNotices = false
   /// 散会兜底(契约硬要求):有未封口区间时,「结束会议」先弹明示选择。
   @State var isConfirmingChatClose = false
 
@@ -63,6 +73,9 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
 
   /// 顶栏「会议库 · N 场」;由 MeetingLibraryView reload 回写。
   @State var libraryMeetingCount = 0
+  @State var libraryFilterAction: (() -> Void)?
+  /// 筛选面板当前是否展开,供顶栏那颗开关显示按下态。
+  @State var libraryFilterPanelShown = true
   @State var libraryImportAction: (() -> Void)?
   @State var libraryReloadAction: (() -> Void)?
   @State var preparationSessionActive = false
@@ -75,7 +88,9 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     recordingSession: RecordingSession,
     summaryFeed: Feed,
     appCoordinator: AppCoordinator,
-    modelAssetManager: LocalModelAssetManager
+    modelAssetManager: LocalModelAssetManager,
+    dictionaryStore: DictionaryStore = DictionaryStore(),
+    secretDigest: (any StoredSecretDigest)? = nil
   ) {
     self.registry = registry
     self.providerSettings = providerSettings
@@ -83,6 +98,11 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     self.summaryFeed = summaryFeed
     self.appCoordinator = appCoordinator
     self.modelAssetManager = modelAssetManager
+    self.secretDigest = secretDigest
+    _dictionaryPane = StateObject(wrappedValue: DictionaryPaneModel(
+      store: dictionaryStore, meetingStore: appCoordinator.meetingStore,
+      harvestIgnoreStore: HarvestIgnoreStore(fileURL: dictionaryStore.fileURL
+        .deletingLastPathComponent().appendingPathComponent("dictionary-harvest-ignored.json"))))
     _transcriptPresentation = State(
       initialValue: LiveTranscriptPresentationState(
         isExpanded: UserDefaults.standard.bool(forKey: "justsaid.transcriptExpanded")
@@ -172,50 +192,96 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   }
 
   public var body: some View {
+    // 启动时若本机时区与正在用的不一致,问一次。不自作主张改——出差落地看见
+    // 整个会议库的时间集体挪位是坏体验(owner 2026-09-21)。
     applyWorkspaceSheets(workspaceRoot)
+      .timeZoneDriftPrompt(appCoordinator.displayTimeZone)
+  }
+
+  /// 设置是壳里的一页,不是弹窗(F2 设计:它的左边就是图标轨)。
+  /// owner 2026-09-20:「点击设置之后,不应该再弹出一个框来做配置,
+  /// 而是直接在原本的应用里进入设置页面。」
+  /// 单独拎成一个属性:塞进 workspaceRoot 的 switch 里会把那个表达式撑到
+  /// 类型检查器放弃(实测 error: unable to type-check in reasonable time)。
+  private var settingsPage: some View {
+    ProviderSettingsView(
+      registry: registry,
+      settingsStore: providerSettings,
+      modelAssetManager: modelAssetManager,
+      secretDigest: secretDigest,
+      // 这里原来传 nil,于是「点名提醒」分区在真实 app 里是一页空白
+      // (截图装置注入了所以看不出来)。coordinator 本来就持有这份偏好。
+      nameAlertPreferences: appCoordinator.nameAlertPreferences,
+      displayTimeZone: appCoordinator.displayTimeZone,
+      appUpdates: appCoordinator.appUpdates,
+      initialSection: appCoordinator.settingsSection,
+      section: $appCoordinator.settingsSection,
+      onDone: { appCoordinator.leaveSettings() }
+    )
   }
 
   var workspaceRoot: some View {
-    // 驾驶舱 chrome ≠ 会议库 chrome(2026-08-19 R7):驾驶舱是「深色控制轨 + 瘦顶栏」,
-    // 会议库仍用它原来的那条顶栏(含录制中「← 返回驾驶舱」cue 橙入口)。
-    // 深色轨只属于驾驶舱,不铺进库;⌘L 只换内容与 chrome,不碰 `RecordingSession`。
-    Group {
-      if isPreparationVisible, let capabilityID = visiblePreparationCapabilityID {
-        ModelPreparationView(
-          manager: modelAssetManager,
-          capabilityID: capabilityID,
-          onDownload: {
-            HangSentinel.shared.note("models:preparation:download")
-            Task { await modelAssetManager.prepare(capabilityID: capabilityID) }
-          },
-          onCancel: {
-            modelAssetManager.cancelActivePreparation()
-          },
-          onRetry: {
-            HangSentinel.shared.note("models:preparation:retry")
-            Task { await modelAssetManager.prepare(capabilityID: capabilityID) }
-          },
-          onOpenLibrary: {
-            preparationSessionActive = false
-            preparationDismissed = true
-            appCoordinator.openLibrary()
-          },
-          onOpenSettings: {
-            isShowingSettings = true
-          },
-          onStartMeeting: {
-            startMeeting()
-          }
-        )
-      } else {
-        switch appCoordinator.workspaceMode {
-        case .cockpit:
-          cockpit
-        case .library:
-          library
+    // 主导航和录制控件共用唯一图标轨，切页不改变录制生命周期。
+    AppShellView {
+      AppRailView(
+        coordinator: appCoordinator,
+        session: recordingSession,
+        harvestCount: dictionaryPane.harvestItems.count,
+        onDictionary: {
+          HangSentinel.shared.note("workspace:dictionary")
+          appCoordinator.showDictionary()
+        },
+        onSettings: {
+          appCoordinator.showSettings()
         }
+      ) {
+        cockpitControls
+      }
+    } content: {
+      GeometryReader { geometry in
+        ZStack {
+          cockpit
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .opacity(appCoordinator.workspaceMode == .cockpit ? 1 : 0)
+            .allowsHitTesting(appCoordinator.workspaceMode == .cockpit)
+            .accessibilityHidden(appCoordinator.workspaceMode != .cockpit)
+          Group {
+            switch appCoordinator.workspaceMode {
+            case .home:
+              HomeView(coordinator: appCoordinator, session: recordingSession,
+                title: $meetingTitleDraft, client: $meetingClientDraft,
+                project: $meetingProjectDraft, language: languageSelection,
+                modelManager: modelAssetManager, preparationVisible: isPreparationVisible,
+                capabilityID: visiblePreparationCapabilityID,
+                discarding: isDiscardingMeeting, onStart: startMeeting) {
+                  recordingFailureBanner
+                  MicrophoneInputRouteBanner(status: recordingSession.microphoneInputStatus)
+                }
+            case .cockpit:
+              Color.clear.allowsHitTesting(false)
+            case .library:
+              library
+            case .settings:
+              settingsPage
+            case .dictionary:
+              DictionaryPageView(
+                store: dictionaryPane.store, meetingStore: appCoordinator.meetingStore,
+                harvestIgnoreStore: dictionaryPane.harvestIgnoreStore,
+                onHarvestCountChange: { dictionaryPane.reload() },
+                onDone: { appCoordinator.leaveDictionary() })
+            case .todos:
+              TodoDestinationView(
+                coordinator: appCoordinator,
+                recordingSession: recordingSession,
+                dictionaryStore: dictionaryPane.store
+              )
+            }
+          }
+        }
+        .frame(width: geometry.size.width, height: geometry.size.height)
       }
     }
+    .onChange(of: appCoordinator.workspaceMode) { _, _ in dictionaryPane.reload() }
     .environment(\.textScale, textScale)
     .background(
       WindowAccessor { window in
@@ -223,7 +289,7 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
         appCoordinator.registerMainWindow(window)
         // 单一最小宽(2026-08-19 契约):转写抽屉走 overlay 不参与 flex,
         // 展开不再抬最小宽——旧的 920/1220 两档跳变随左栏转写一起撤销。
-        appCoordinator.enforceMainWindowMinSize(width: Tokens.Layout.cockpitMinWidth)
+        appCoordinator.enforceMainWindowMinSize(width: Tokens.Layout.cockpitMinWidth + Tokens.V1.Size.railWidth)
       }
     )
     .onChange(of: transcriptPresentation.isExpanded) { _, expanded in
@@ -252,11 +318,6 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     .onChange(of: recordingSession.startedAt) { _, startedAt in
       guard let startedAt else { return }
       notesController.bindRecordingStart(startedAt)
-    }
-    .onChange(of: recordingSession.currentTitle) { _, title in
-      if let title, !isMeetingTitleFocused {
-        meetingTitle = title
-      }
     }
     .onChange(of: recordingSession.liveSegments) { _, segments in
       // 总结 ingest 由应用级呈现宿主持有(主窗关闭时也不断),这里只做显示过滤与提示。
@@ -324,7 +385,8 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       // 此处注册后异步补发(补发在 onAppear 整段跑完之后,状态已装载)。
       appCoordinator.registerRequestMarkHandler { notesController.beginMark() }
       appCoordinator.registerRequestToggleChatHandler { toggleChatExclusion() }
-      if recordingSession.phase == .recording || recordingSession.phase == .stopping {
+      if (recordingSession.phase == .recording || recordingSession.phase == .stopping)
+        && !appCoordinator.hasPendingLibraryCommand {
         // 只选驾驶舱内容;窗口唤起属于外部入口,挂载时唤起会把关闭后仍被持有的旧主窗前置。
         appCoordinator.selectCockpit()
       }
@@ -366,11 +428,12 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       appCoordinator.registerRequestEndMeetingHandler(nil)
       appCoordinator.registerRequestMarkHandler(nil)
       appCoordinator.registerRequestToggleChatHandler(nil)
+      appCoordinator.registerLibraryCommandHandlers(importRecording: nil, rescan: nil)
     }
     .onChange(of: appCoordinator.pendingSettingsRequest) { _, pending in
       // 菜单 ⌘,/「设置…」(批4):路由到主窗唯一的设置 sheet。
       guard pending else { return }
-      isShowingSettings = true
+      appCoordinator.showSettings()
       appCoordinator.pendingSettingsRequest = false
     }
     .onChange(of: appCoordinator.pendingChapterDirectoryRequest) { _, pending in
@@ -382,12 +445,12 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     .onAppear {
       // 无主窗按 ⌘,:菜单命令 openWindow 重开主窗,新视图挂载后在这里消费挂起请求
       //(onChange initial 不触发,漏了这步就是「窗开了、设置不弹」)。
-      // 真机实测:首帧内直接置 isShowingSettings 会被 SwiftUI 静默丢弃(窗口尚未就绪),
+      // 真机实测:首帧内直接切模式会被 SwiftUI 静默丢弃(窗口尚未就绪),
       // 推迟一拍再弹。
       if appCoordinator.pendingSettingsRequest {
         appCoordinator.pendingSettingsRequest = false
         DispatchQueue.main.async {
-          isShowingSettings = true
+          appCoordinator.showSettings()
         }
       }
       if appCoordinator.pendingChapterDirectoryRequest {
@@ -407,11 +470,6 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   /// 从会议窗口回来第一眼必须是「当前正在聊」,然后才是整理区。
   private var cockpit: some View {
     HStack(spacing: 0) {
-      // 轨要压过主列(原型 `.rail { z-index: 8 }`):闲聊/暂停的悬停卡画在轨的 overlay 里、
-      // 从 56pt 外沿探进主列的地盘。HStack 里后画的兄弟默认盖住先画的,轨是第 0 个子节点,
-      // 不在**这一层**抬 zIndex 的话卡片会被主列吃掉——轨内部再怎么排都救不回来。
-      cockpitRail
-        .zIndex(1)
       VStack(spacing: 0) {
         cockpitToolbar
         Divider()
@@ -452,44 +510,42 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    // 布局契约:轨 56 + 整理区 ≥520 + 右栏 332 → 单一最小宽 920。
+    // 主区保留原最小宽，图标轨由 AppShellView 单独占位。
     // 转写抽屉是 overlay,展开不再把最小宽抬到 1220。
     .frame(minWidth: Tokens.Layout.cockpitMinWidth)
   }
 
-  private var cockpitRail: some View {
-    CockpitRailView(
+  private var cockpitControls: some View {
+    CockpitRailControls(
       recordingSession: recordingSession,
-      openChatRangeStart: openChatRange?.start,
-      microphonePausedAt: microphonePausedAt,
-      transcriptPresentation: $transcriptPresentation,
+      transcriptPresentation: Binding(
+        get: { transcriptPresentation },
+        set: {
+          transcriptPresentation = $0
+          appCoordinator.showCockpit()
+        }),
       isShowingChapterDirectory: $isShowingChapterDirectory,
       chapterTopics: summaryFeed.topics,
       chapterNowCoveredLabel: summaryFeed.now.coveredUntilLabel,
       onSelectChapter: {
         transcriptPresentation.close()
+        appCoordinator.showCockpit()
         scrollRequest = $0
       },
-      onToggleChat: { toggleChatExclusion() },
-      onCloseChat: { closeChatExclusion() },
-      onToggleMicrophonePause: {
-        if recordingSession.isMicrophonePaused {
-          recordingSession.resumeMicrophone()
-        } else {
-          recordingSession.pauseMicrophone()
-        }
-      },
-      onResumeMicrophone: { recordingSession.resumeMicrophone() },
-      onOpenLibrary: { appCoordinator.toggleWorkspaceMode() },
-      onOpenSettings: { isShowingSettings = true }
+      onReturnToMeeting: { appCoordinator.showCockpit() },
+      isSelected: appCoordinator.workspaceMode == .cockpit,
+      onOpenSettings: { appCoordinator.showSettings(section: .nameAlert) },
+      nameAlertPreferences: appCoordinator.nameAlertPreferences,
+      nameAlertSession: appCoordinator.meetingPresence?.nameAlerts
     )
   }
 
-  /// 会议库 chrome:顶栏归位后 5/4 件;深色控制轨不铺进来。
+  /// 会议库内容沿用自己的顶栏，主图标轨由外层壳共享。
   private var library: some View {
     VStack(spacing: 0) {
-      libraryToolbar
-      Divider()
+      if appCoordinator.openedMeetingDirectory == nil {
+        libraryToolbar
+      }
       recordingFailureBanner
       systemBanners
       if let nameAlerts = appCoordinator.meetingPresence?.nameAlerts {
@@ -511,12 +567,22 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
         globalSearchQuery: $appCoordinator.libraryGlobalSearchQuery,
         groupByClient: $appCoordinator.libraryGroupByClient,
         queueFilter: $appCoordinator.libraryQueueFilter,
-        onStartRecording: { startMeeting() },
+        filters: $appCoordinator.libraryFilterSelection,
+        onFilterActionReady: { libraryFilterAction = $0 },
+        onFilterPanelVisibilityChange: { libraryFilterPanelShown = $0 },
+        onMeetingPageChange: { appCoordinator.openedMeetingDirectory = $0 },
         onMeetingsCountChange: { libraryMeetingCount = $0 },
         onChromeActionsReady: { importRecording, reload in
           libraryImportAction = importRecording
           libraryReloadAction = reload
-        }
+          appCoordinator.registerLibraryCommandHandlers(importRecording: importRecording, rescan: reload)
+        },
+        // 上次扫盘的列表先画出来,后台照常重扫(见 AppCoordinator.libraryItemsCache)。
+        initialMeetings: appCoordinator.libraryItemsCache,
+        onSnapshot: { [appCoordinator] items in appCoordinator.libraryItemsCache = items },
+        deletedMeetingLedger: appCoordinator.deletedMeetings,
+        todoPage: appCoordinator.todoPage,
+        onShowTodos: { appCoordinator.showTodos() }
       )
       .id(appCoordinator.libraryRefreshGeneration)
     }
@@ -585,21 +651,35 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     case .ready, .systemManaged:
       HangSentinel.shared.note("meeting-start:allowed")
       preparationSessionActive = false
+      let client = meetingClientDraft
+      let project = meetingProjectDraft
       Task {
         await recordingSession.start(title: title, language: language, providers: providers)
+        guard recordingSession.phase == .recording else { return }
+        applyStartTags(client: client, project: project)
+        // 草稿只服务「下一场」:开会成功就清空。原来从不清空,于是下一场会默认带着上一场的
+        // 名字,废弃一场之后首页输入框里还留着那场的名字(2026-09-21 实机验收 build 860 发现)。
+        // 录制中驾驶舱顶栏改名走的是另一个值(meetingTitle),清这里不会动到正在录的这场。
+        // 开会失败(权限、设备)时不清,人不用再打一遍。
+        meetingTitleDraft = ""
+        meetingClientDraft = ""
+        meetingProjectDraft = ""
       }
     case .waitForLocalCheck:
       preparationDismissed = false
       preparationSessionActive = true
+      appCoordinator.showHome()
     case .showPreparation(let capabilityID):
       HangSentinel.shared.note("meeting-start:blocked-preparation")
       preparationCapabilityID = capabilityID
       preparationDismissed = false
       preparationSessionActive = true
+      appCoordinator.showHome()
     case .configurationFailed:
       HangSentinel.shared.note("meeting-start:blocked-config")
       preparationDismissed = false
       preparationSessionActive = true
+      appCoordinator.showHome()
     }
   }
 
@@ -608,14 +688,24 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     transcriptPresentation.show(at: elapsed)
   }
 
-  func commitCurrentMeetingTitle() {
-    let trimmed = meetingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-    let desired = trimmed.isEmpty ? "会议" : trimmed
-    guard desired != recordingSession.currentTitle else { return }
-    if recordingSession.renameCurrentMeeting(to: desired) {
-      meetingTitle = desired
-    } else {
-      meetingTitle = recordingSession.currentTitle ?? desired
+  /// 把开会前填的客户 / 项目写进刚建好的这一场。走 `MeetingStore.updateTags`:
+  /// 它在进程级的元数据锁里读改写 meeting.json,录制会话自己写状态与暂停区间也走同一把锁
+  /// (`mutateMetadata`),所以开会后补写不会和它互相覆盖。
+  /// 写失败不拦开会——标签事后能在会议库里补——但要留痕,不能悄悄丢。
+  private func applyStartTags(client: String, project: String) {
+    let trimmedClient = client.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedProject = project.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedClient.isEmpty || !trimmedProject.isEmpty,
+      let directory = recordingSession.currentMeetingDirectory
+    else { return }
+    do {
+      try appCoordinator.meetingStore.updateTags(
+        client: trimmedClient.isEmpty ? nil : trimmedClient,
+        project: trimmedProject.isEmpty ? nil : trimmedProject,
+        at: MeetingPaths(directory: directory))
+      HangSentinel.shared.note("meeting-start:tags-saved")
+    } catch {
+      HangSentinel.shared.note("meeting-start:tags-failed \(error.localizedDescription)")
     }
   }
 
@@ -623,10 +713,20 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   /// 撤掉排队中的会后处理),再停采集并删目录——反过来会有在飞的慢通道把 summary-history
   /// 重新写回刚删掉的目录。
   func discardMeeting() {
+    // 废弃完要离开驾驶室(owner 2026-09-21:「废弃完了之后页面还留在这里很奇怪」)。
+    // 去**首页**不是会议库:这场会连同录音已经删掉,会议库里根本没有它,
+    // 把人送过去是让他找一场不存在的会。和 `endMeeting()` 正好成一对——
+    // 结束有东西可看,去库里并聚焦那场;废弃没东西可看,回首页从头开始。
+    // 而且轨上那几格(`CockpitRailControls`)本来就 `if isSessionActive`,
+    // 废弃之后整条控件消失,留在驾驶室就是一间空屋子。
+    // 同步先走,再让删除在后台跑:人不该盯着删完才走。
+    isDiscardingMeeting = true
+    appCoordinator.showHome()
     summaryFeed.abandon()
     Task {
       await recordingSession.discardCurrentMeeting()
       notesController.attachWriter(directory: nil)
+      isDiscardingMeeting = false
     }
   }
 

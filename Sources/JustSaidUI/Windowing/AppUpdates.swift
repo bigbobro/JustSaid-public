@@ -199,24 +199,30 @@ struct AppUpdateSettingsCard: View {
   @ObservedObject var model: AppUpdatesModel
 
   var body: some View {
-    RoleCardShell(title: "应用更新", subtitle: "从公开正式版获取新版本") {
-      Toggle(
-        "自动检查更新",
-        isOn: Binding(
-          get: { model.automaticallyChecksForUpdates },
-          set: { model.setAutomaticallyChecksForUpdates($0) }
+    SettingsFormGroup(
+      "应用更新", hint: "从公开正式版获取新版本。"
+    ) {
+      // 一行装下:开关是「以后自动查」,按钮是「现在就查」,同一件事的两个时态。
+      // 原来拆两行,第二行的标签只能叫「现在」——这一页其余标签都在命名一个真东西
+      // (界面/字号/当前时区/保留/回声消除),只有它什么都没命名,是为了填满标签列
+      // 硬造出来的。需要造标签才能成行,通常说明它不该单独成行(owner 2026-09-21:
+      // 「以美观优先」)。
+      SettingsFormRow("自动检查", isFirst: true) {
+        Toggle(
+          "自动检查更新",
+          isOn: Binding(
+            get: { model.automaticallyChecksForUpdates },
+            set: { model.setAutomaticallyChecksForUpdates($0) }
+          )
         )
-      )
-      .toggleStyle(.switch)
-      .runtimeAccessibilityIdentifier("settings.app-updates.automatic-checks")
-
-      Text("发现新版后仍由你决定是否安装。检查只请求更新清单和安装包，不发送会议内容或系统信息。")
-        .font(.system(size: Tokens.FontSize.ui))
-        .foregroundStyle(Tokens.Color.ink3)
-        .fixedSize(horizontal: false, vertical: true)
-
-      Button("检查更新…") { model.checkForUpdates() }
-        .runtimeAccessibilityIdentifier("settings.app-updates.check")
+        .toggleStyle(.v1Switch)
+        .labelsHidden()
+        .runtimeAccessibilityIdentifier("settings.app-updates.automatic-checks")
+        Button("检查更新…") { model.checkForUpdates() }
+          .buttonStyle(.v1Outline)
+          .help("发现新版后仍由你决定是否安装。检查只请求更新清单和安装包，不发送会议内容或系统信息。")
+          .runtimeAccessibilityIdentifier("settings.app-updates.check")
+      }
     }
     .runtimeAccessibilityIdentifier("settings.app-updates")
   }

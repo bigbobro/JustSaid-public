@@ -23,19 +23,166 @@ private struct RuntimeAccessibilityMarker: NSViewRepresentable {
   }
 }
 
+/// 探针标记只在验证进程里挂。
+///
+/// 这个标记在每个被标记的元素背后塞一个真的 `NSView`——验证工具遍历 NSView 树读
+/// `view.identifier` 找元素,靠的就是它。但在发布的 App 里它是纯负担:会议库一行有
+/// 十来个标记,可视区十几行,于是每一帧滚动都要布局上百个桥接过来的 AppKit 视图。
+/// owner 2026-09-20 报的「滚动阻滞感」就是它:采样里没有任何热点,开销弥散在
+/// `PlatformViewRepresentableAdaptor` 与 NSView 布局的几百个小函数里;把行内容换成
+/// 一行纯文字(零标记)立刻就顺,而逐个摘掉菜单、浮层、tooltip 都只好一点点。
+///
+/// SwiftUI 自己的 `accessibilityIdentifier` 一直保留,无障碍与系统工具不受影响。
+/// 需要在 App 里开探针时设 `JUSTSAID_UI_PROBES=1`。
+private let runtimeAccessibilityProbesEnabled: Bool = {
+  if let value = ProcessInfo.processInfo.environment["JUSTSAID_UI_PROBES"] {
+    return value != "0"
+  }
+  // 验证目标是独立可执行文件,没有 App 的 bundle id,默认开。
+  return Bundle.main.bundleIdentifier != "com.justsaid.app"
+}()
+
 extension View {
+  @ViewBuilder
   func runtimeAccessibilityIdentifier(_ identifier: String) -> some View {
-    accessibilityIdentifier(identifier)
-      .background(
-        RuntimeAccessibilityMarker(identifier: identifier)
-          .allowsHitTesting(false)
-      )
+    if runtimeAccessibilityProbesEnabled {
+      accessibilityIdentifier(identifier)
+        .background(
+          RuntimeAccessibilityMarker(identifier: identifier)
+            .allowsHitTesting(false)
+        )
+    } else {
+      accessibilityIdentifier(identifier)
+    }
+  }
+}
+
+/// 提示条的统一外壳。四级共用一个形状,只换底色与图标色(设计系统「提示」一节那张表)。
+///
+/// 2026-09-20 从截图装置里看出来必须有它:同一个警示级,闲聊中有⚠、麦克风暂停有麦克风图标,
+/// 而走 `DegradedBanner` 的五条(采集路、麦克风回落、速记引擎、排除写入、部分录音)
+/// **一个图标都没有**;信息级用的是绿底绿勾,不是分级表里的 paper-2 + accent;
+/// 而且每条都通栏铺满、彼此不留缝,堆三条就是一块砖。
+///
+/// 形状对齐设计系统的 `.ntc`:圆角块、左右留白、条与条之间有缝——它们是并列的几件事,
+/// 不是一段连续的色带。
+public enum NoticeLevel: Sendable {
+  case interrupt
+  case warn
+  case info
+  case hint
+
+  var background: SwiftUI.Color {
+    switch self {
+    case .interrupt: return Tokens.V1.Color.rec
+    case .warn: return Tokens.V1.Color.warnSoft
+    case .info, .hint: return Tokens.V1.Color.paper2
+    }
+  }
+
+  var iconColor: SwiftUI.Color {
+    switch self {
+    case .interrupt: return Tokens.V1.Color.onRec
+    case .warn: return Tokens.V1.Color.warn
+    case .info: return Tokens.V1.Color.accent
+    case .hint: return Tokens.V1.Color.ink3
+    }
+  }
+
+  var textColor: SwiftUI.Color {
+    self == .interrupt ? Tokens.V1.Color.onRec : Tokens.V1.Color.ink
+  }
+
+  /// 打断级整宽压在顶栏之下,不留圆角也不留边距——它不是并列的一件事,是拦路的。
+  var isFullBleed: Bool { self == .interrupt }
+}
+
+public struct NoticeShell<Trailing: View>: View {
+  let level: NoticeLevel
+  let systemImage: String
+  let text: String
+  let detail: String?
+  @ViewBuilder var trailing: () -> Trailing
+
+  public init(
+    level: NoticeLevel,
+    systemImage: String,
+    text: String,
+    detail: String? = nil,
+    @ViewBuilder trailing: @escaping () -> Trailing
+  ) {
+    self.level = level
+    self.systemImage = systemImage
+    self.text = text
+    self.detail = detail
+    self.trailing = trailing
+  }
+
+  public var body: some View {
+    HStack(spacing: Tokens.V1.Space.sm) {
+      Image(systemName: systemImage)
+        .font(.system(size: Tokens.V1.Text.body.size))
+        .foregroundStyle(level.iconColor)
+        .accessibilityHidden(true)
+      Text(text)
+        .foregroundStyle(level.textColor)
+        .fixedSize(horizontal: false, vertical: true)
+      if let detail {
+        Text(detail)
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(level.textColor.opacity(0.7))
+          .fixedSize()
+      }
+      Spacer(minLength: Tokens.V1.Space.xs)
+      trailing()
+    }
+    .font(Tokens.V1.Text.body.font)
+    .padding(.horizontal, level.isFullBleed ? Tokens.V1.Space.lg : Tokens.V1.Space.sm)
+    .padding(.vertical, Tokens.V1.Space.xs)
+    .frame(minHeight: Tokens.V1.Size.control + Tokens.V1.Space.xs)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      level.background,
+      in: RoundedRectangle(cornerRadius: level.isFullBleed ? 0 : Tokens.V1.Radius.md))
+    .accessibilityElement(children: .contain)
+  }
+}
+
+/// 中性级提示条的外壳(设计系统 README 第 75 行)。
+///
+/// 和警示级(`DegradedBanner`)的区别只有一件事:**它不喊。**
+/// `color-paper-2` 底 + `color-ink-3` 图标,不用警示色。
+///
+/// 为什么值得单独一层:语言错配这类提示「只提示、不自动改」,而且一场会里几乎必然
+/// 出现一次。它要是和「采集路停摆」「排除写入失败」同色,人很快就学会忽略黄条——
+/// 真正会丢内容的那几条跟着一起被稀释(README「状态说实话」与「不喊」)。
+/// 2026-09-20 之前这两条一直画成警示色,是代码没跟上自己的设计系统。
+public struct HintBanner<Trailing: View>: View {
+  let systemImage: String
+  let text: String
+  @ViewBuilder var trailing: () -> Trailing
+
+  /// public 是为了截图装置能把十三种提示摆在一起给 owner 看 —— 不这样他就得自己去
+  /// 制造「录制中且检测到语言错配」这种状态才能验分级对不对。
+  public init(
+    systemImage: String,
+    text: String,
+    @ViewBuilder trailing: @escaping () -> Trailing
+  ) {
+    self.systemImage = systemImage
+    self.text = text
+    self.trailing = trailing
+  }
+
+  public var body: some View {
+    NoticeShell(level: .hint, systemImage: systemImage, text: text, trailing: trailing)
+      .runtimeAccessibilityIdentifier("notice.hint")
   }
 }
 
 /// 降级提示细带（ui-spec §6）：墨黄底 + 可选“重试”，已有内容全部保留不清空。
 /// 总结不可用（云端失败）与速记引擎异常共用同一视觉语言，只是挂载位置不同。
-struct DegradedBanner: View {
+public struct DegradedBanner: View {
   let text: String
   var retryAction: (() -> Void)?
   /// 「重试」的运行时探针标识。只有真的画出按钮时才挂,验证据此断言
@@ -44,27 +191,33 @@ struct DegradedBanner: View {
   /// 没有可点的重试、但确实有一轮正在飞时显示的只读说明（如「重试中…」）。
   var trailingNote: String?
 
-  var body: some View {
-    HStack {
-      Text(text)
-        .fixedSize(horizontal: false, vertical: true)
-      Spacer()
+  /// 同 HintBanner:public 是给截图装置用的。
+  public init(
+    text: String,
+    retryAction: (() -> Void)? = nil,
+    retryIdentifier: String? = nil,
+    trailingNote: String? = nil
+  ) {
+    self.text = text
+    self.retryAction = retryAction
+    self.retryIdentifier = retryIdentifier
+    self.trailingNote = trailingNote
+  }
+
+  public var body: some View {
+    // 图标是 2026-09-20 补的:在此之前走这条路的五种警示(采集路、麦克风回落、
+    // 速记引擎、排除写入、部分录音)一个图标都没有,而同一级的闲聊中与麦克风暂停有,
+    // 同一级长出两种脸。
+    NoticeShell(level: .warn, systemImage: "exclamationmark.triangle.fill", text: text) {
       if let retryAction {
         retryButton(retryAction)
       } else if let trailingNote {
         Text(trailingNote)
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
           .fontWeight(.semibold)
       }
     }
-    .font(.system(size: Tokens.FontSize.uiEmphasis))
-    .foregroundStyle(Tokens.Color.warn)
-    .padding(.horizontal, Tokens.Spacing.md)
-    .padding(.vertical, Tokens.Spacing.xs)
-    .background(Tokens.Color.amber)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(Tokens.Color.amberLine).frame(height: 1)
-    }
-    .accessibilityElement(children: .combine)
   }
 
   @ViewBuilder
@@ -719,23 +872,15 @@ struct TranscriptAnchorChip: View {
   @State private var isHovering = false
 
   var body: some View {
-    HStack(spacing: Tokens.Spacing.xxs) {
-      Image(systemName: "clock")
-        .font(.system(size: max(fontSize - 1, 1), weight: .semibold))
-        .accessibilityHidden(true)
-      Text(label)
-    }
-    .font(.system(size: fontSize, weight: weight, design: .monospaced))
-    .foregroundStyle(isHovering ? Tokens.Color.acDeep : Tokens.Color.ac)
-    .padding(.horizontal, chromeless ? 0 : Tokens.Spacing.xxs)
-    .padding(.vertical, chromeless ? 0 : Tokens.Spacing.hairline)
-    .background(chromeless ? Color.clear : Tokens.Color.acSoft)
-    .overlay(
-      RoundedRectangle(cornerRadius: Tokens.Radius.chip)
-        .stroke(isHovering && !chromeless ? Tokens.Color.acLine : Color.clear, lineWidth: 1)
-    )
-    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.chip))
-    .onHover { isHovering = $0 }
+    // 时间戳按 meeting.html:贴卡右内缘的等宽数字,没有时钟图标也没有药丸底。
+    // 原来是「⊙ 30:44」加一层 acSoft 底,一张卡里三五个,右边糊成一排小药丸。
+    // 悬停才显出可点:加下划线,不再靠底色。
+    Text(label)
+      .font(Tokens.V1.Text.timecode.font)
+      .monospacedDigit()
+      .foregroundStyle(Tokens.V1.Color.accent)
+      .underline(isHovering)
+      .onHover { isHovering = $0 }
     .animation(reduceMotion ? nil : .easeOut(duration: Tokens.Motion.hover), value: isHovering)
   }
 }
@@ -815,19 +960,24 @@ struct SectionHeaderRow: View {
   var subtitleIdentifier: String? = nil
 
   var body: some View {
-    HStack(spacing: Tokens.Spacing.xs) {
+    // 卡头按 meeting.html:标题是深色小标题,计数与副题一起贴右内缘,不是标题旁边的徽章。
+    // 原来标题用 ink3 小字 + 紧贴的计数圆圈,一屏几张卡下来分不出哪是标题哪是内容。
+    HStack(spacing: Tokens.V1.Space.xs) {
       Text(title)
-        .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink3)
-      if let count {
-        SectionCountBadge(value: count)
-      }
+        .font(Tokens.V1.Text.heading.font)
+        .foregroundStyle(Tokens.V1.Color.ink)
+      Spacer(minLength: Tokens.V1.Space.sm)
       if let subtitle, !subtitle.isEmpty {
-        Spacer(minLength: 0)
         Text(subtitle)
-          .font(.system(size: Tokens.FontSize.caption))
-          .foregroundStyle(Tokens.Color.ink4)
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
           .modifier(OptionalIdentifier(subtitleIdentifier))
+      }
+      if let count {
+        Text("\(count) 项")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .monospacedDigit()
       }
     }
   }

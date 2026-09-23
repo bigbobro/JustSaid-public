@@ -198,7 +198,7 @@ private struct NowLineRow: View {
     .background {
       if isCallout {
         RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-          .fill(Tokens.Color.amber)
+          .fill(Tokens.V1.Color.callSoft)
           .overlay(
             RoundedRectangle(cornerRadius: Tokens.Radius.widget)
               .stroke(Tokens.Color.amberLine, lineWidth: 1)

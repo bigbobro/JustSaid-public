@@ -2,7 +2,7 @@
   "files": [
     {
       "path": ".gitattributes",
-      "sha256": "7f860cea524f0d764f55bb6ec808477eaa97a03af359b18029073ad6cb1fec7e"
+      "sha256": "733a66dd8f34444368ee1da982466d5b2bb652182775f068fcc276733aa612ea"
     },
     {
       "path": ".github/workflows/pr-validation.yml",
@@ -18,11 +18,11 @@
     },
     {
       "path": ".gitignore",
-      "sha256": "f98e7418a1fbcd9ee9524291af111b95d2f02626d22eeef063599c8e9f51d24e"
+      "sha256": "fb876f73101a8ab0e6cb75bf98203181341c40b8fba3b3daa4780142fbaa68a3"
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "a4a354271a0126bba482815ae8f452feb4eed5baeb7cf9a7f290ea5700f4fd12"
+      "sha256": "668534934d85361f821ab01590f6c74bb3a482bf9f3cdd79df2718588bfda96b"
     },
     {
       "path": "LICENSE",
@@ -34,7 +34,7 @@
     },
     {
       "path": "Package.swift",
-      "sha256": "838cd745d6c3e55154a357351aa3d739adedbb63ee8ae80b7d70c3fd2ce4c8e6"
+      "sha256": "4e2ac06e76ee230ec96dd806969d8722d3876d6b0c277b3511d9d5b04aeec02b"
     },
     {
       "path": "README.md",
@@ -58,11 +58,11 @@
     },
     {
       "path": "Sources/JustSaidApp/AppUpdater.swift",
-      "sha256": "a647489ab2b1ea5a07cf0594c30a258c41f6ad81508a28aefe32238a37c35561"
+      "sha256": "19d77d63d21e60779a0a8c6e6c3167af952ed8ef0f2ead2300ede85bc1638636"
     },
     {
       "path": "Sources/JustSaidApp/JustSaidApp.swift",
-      "sha256": "dbb0a59373689693c7875dab66f9322389d5aa371b92d57d04b72a51056eaca1"
+      "sha256": "806dbb78b8c8c7914d7e7296a601ad1014ab2c38ce8438e7e92651a48bef623a"
     },
     {
       "path": "Sources/JustSaidCore/Audio/AggregateInputStreamLayout.swift",
@@ -90,7 +90,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Audio/RecordingSession.swift",
-      "sha256": "65c2df415a4fa131cbb4e7563ece57b0af85a5285f7764c0a2bc1f836a0426bb"
+      "sha256": "61c5639d09b73b090cfdb5e3429c3d7113d22931458ff648fe4660086a110371"
     },
     {
       "path": "Sources/JustSaidCore/Audio/SystemAudioCapture.swift",
@@ -158,7 +158,7 @@
     },
     {
       "path": "Sources/JustSaidCore/NameAlerts/NameAlertSession.swift",
-      "sha256": "62c493ed6ede2fd5c51c8b3fbe8cfd459b2bf779eb0931920a2bf64b7f1fc81c"
+      "sha256": "a3941c4cce71014737bc46f1a162da4c80db035ccf8e85d0f0b588b5d2e8a6c5"
     },
     {
       "path": "Sources/JustSaidCore/NameAlerts/NameAlertText.swift",
@@ -178,7 +178,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Persistence/AudioRetentionSweeper.swift",
-      "sha256": "98b29f035a1b79a75eb9051bd4654c2a2c0c45ef29af0ae8ba108fb9131b61ef"
+      "sha256": "1d3269b7cc3dbc85a630b8e10f068a71b60bc264c0251cd52b48217c2328ba1d"
     },
     {
       "path": "Sources/JustSaidCore/Persistence/CompletenessAck.swift",
@@ -206,7 +206,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Persistence/HarvestIgnoreStore.swift",
-      "sha256": "eafe0e0e81828b950fbf01164cc3286205eec75ee7f956946f51daee8c30b93a"
+      "sha256": "4464c48d5e98b3fbe62503fff0ef0bef51097ef3e4878dcf285d302669528dbb"
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MP4ContainerDuration.swift",
@@ -222,11 +222,11 @@
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MeetingMetadata.swift",
-      "sha256": "0a5abf300518f0ea8a12aa77cb22aa328b9a0553f46b3bbb380576d2046aa8d2"
+      "sha256": "93569c429e74f93f1d6e2734cc0ee304e4ad8459bceceb59d2f916025ce8236f"
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MeetingStore.swift",
-      "sha256": "9a229a53cfee4384c554c133a7ed9e6f78044df8f6d9961e732bb89abc2fa234"
+      "sha256": "d5147f93f67ba12f0d86556412d1e5762c677ea94e8f43b69726571a5a5db557"
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MinutesHistory.swift",
@@ -289,20 +289,12 @@
       "sha256": "eef99b22d87a51fbc199077ba56ba3c175052f3aa166a9b1bc0eb2e789dee8c8"
     },
     {
-      "path": "Sources/JustSaidCore/PostMeeting/PostMeetingEchoPCM.swift",
-      "sha256": "664505104c37762f2ae2cf0262826f114f3e9dd38c89b0795e38ae622f380445"
-    },
-    {
-      "path": "Sources/JustSaidCore/PostMeeting/PostMeetingEchoReductionService.swift",
-      "sha256": "0a3a3890550f3c4b65b3e7498a46304472457653e504549c9ab766ce737079c6"
-    },
-    {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingNoticeDismissal.swift",
       "sha256": "9789095b3f1faa296280b64a89f59220b9651e5c4bb9a2596751fadc54a96573"
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingPipeline.swift",
-      "sha256": "d752216f2ba5ebed649fab7c77e9dbdb214e2ec5c9defd95d1564b1b66e360de"
+      "sha256": "5b83fa5199771eeb24065f01f41eaf8dad25b7b359a4ebc830a6c04c4430d378"
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingProgress.swift",
@@ -378,7 +370,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Summary/SummaryContracts.swift",
-      "sha256": "05cce78aa77301624cb55d3367a1f46170740a77384034f05d04d938f69066a0"
+      "sha256": "2562f370e0e447158b4efc5073f81d4744ad4480158a30165a79e564f0e24272"
     },
     {
       "path": "Sources/JustSaidCore/Summary/SummaryFailurePolicy.swift",
@@ -391,6 +383,34 @@
     {
       "path": "Sources/JustSaidCore/Summary/SummaryVisualizationWire.swift",
       "sha256": "cd919353f985dc53f3b5dd66b7aa170de49e2121dc35781cf352d5ef0257c8e8"
+    },
+    {
+      "path": "Sources/JustSaidCore/Todos/TodoCandidateReconciler.swift",
+      "sha256": "9cdfc2d91759a3e809bfd331940ab2be1bf09da02f764bdec3f904b6d2d3e30c"
+    },
+    {
+      "path": "Sources/JustSaidCore/Todos/TodoDueInterpreter.swift",
+      "sha256": "1c81e83baf20e995dbc484cc471b3961c2a89891df305961fdb881ac7a8af162"
+    },
+    {
+      "path": "Sources/JustSaidCore/Todos/TodoLegacyBridge.swift",
+      "sha256": "b51972f26d7cb5fc0c0c54a00fca65058857ed636abbfd46700b277093768b79"
+    },
+    {
+      "path": "Sources/JustSaidCore/Todos/TodoModels.swift",
+      "sha256": "140115fbaae544449bb80b607940de76bea0f085c45c6bcbf68806eb63838dfd"
+    },
+    {
+      "path": "Sources/JustSaidCore/Todos/TodoOrdering.swift",
+      "sha256": "5a90b2527431e9d10e9d05f9f6c644b1a06b330c0e525f05d32d32cbcf0dc8ce"
+    },
+    {
+      "path": "Sources/JustSaidCore/Todos/TodoQueries.swift",
+      "sha256": "02713afe039becd07cd81bac039e89d5a5234cdc0346897d3bc7c0467a56b028"
+    },
+    {
+      "path": "Sources/JustSaidCore/Todos/TodoStore.swift",
+      "sha256": "bd99b075438bb54ba794be35318a55651045754ac470d334aa6616098524debe"
     },
     {
       "path": "Sources/JustSaidCore/Transcription/AudioFileRealtimeDriver.swift",
@@ -441,20 +461,80 @@
       "sha256": "e118200f0c3959186204b2982cb31f262fc58c210c5d4c4eac59339722436632"
     },
     {
+      "path": "Sources/JustSaidUI/DesignSystem/ChineseDateText.swift",
+      "sha256": "3909a340f3992b2b83e3f2da0f00c2fa27f0bd1a74e13ca358bdbacd67168497"
+    },
+    {
       "path": "Sources/JustSaidUI/DesignSystem/Components.swift",
-      "sha256": "872dc32cf8949806ab277cdba40a251c9f63114eb6a154275d6b1c953c1326e0"
+      "sha256": "c5b6f764cba11dc212829e4410db0d7f15025c1cb1b741d6f0cead2cbb0946c7"
     },
     {
       "path": "Sources/JustSaidUI/DesignSystem/DesignTokens.swift",
-      "sha256": "92d60340d3279ebd4bf0a009566c050a01b388579fd93ff64aab22065b1723f7"
+      "sha256": "ba0698b64b95cd4e1c90df83126c9f712d000a1e9ac0b4d6778c7a0a2ee5c6b7"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/DesignTokensV1.swift",
+      "sha256": "67bc6cbc2cff1ef4b428fd7a4f7ff86a21ae6828e90cd7be2fb4ae15ec09c8ac"
     },
     {
       "path": "Sources/JustSaidUI/DesignSystem/ElapsedTime.swift",
-      "sha256": "19927268adcf6052de1fa122ec5a00e22364cd7581638808bd4ef373cd1a4018"
+      "sha256": "b4a4a94262d153fcb7b66ac9bef4e13a6765d5e7dd136cda626470d634b7292c"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/HomeEntryArtwork.swift",
+      "sha256": "e81e0121f9e4e0a2090ef1d82d6f79928265e7e8f6f47450d314624bde415d81"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/MeetingOutcomePill.swift",
+      "sha256": "97d96aee0c08d9752acbc99e155aa5258e8233a8e6c9d9161a3d7402c2d4d481"
     },
     {
       "path": "Sources/JustSaidUI/DesignSystem/RichTextView.swift",
-      "sha256": "8bb27539375d7d2546ca24d1ac38b6797d95c6549c135ef0fa41cd7f526bf90f"
+      "sha256": "11d10ff14dd9a1a7334e4227999c66c15a01ab12d3e7cd6918ae2d82fd592a4c"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/SettingsForm.swift",
+      "sha256": "b47c1b2fda87fa75b383d466cf401b9df94ec0664369af04ccc9f77dfa35c90c"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/StatusGlyph.swift",
+      "sha256": "60e4d9946ff407b6e5defc9001c4087bdfff3d7e1f7bf359231e60c35d9a782f"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/SystemTimeZone.swift",
+      "sha256": "5510c3c19ddc9b29a238580c35095278d9b809e561789238a18f716ae2af89f5"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/V1ButtonStyles.swift",
+      "sha256": "be7593dae9ca12fcb3e9bb1ddbe6c5b48ce3892c0465e27b80a45a9a16a4c73d"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/V1Checkbox.swift",
+      "sha256": "9e58daaaa64656e552a4b94a216de09b1d3aaa968edb4996bd7bf7da214b13e8"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/V1FormControls.swift",
+      "sha256": "c328aa98c4054617ce962e156229abf0dd2eb8392ae3667b70727753c186b0cc"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/V1Glass.swift",
+      "sha256": "02baac28bf9e727f6ade7f6f2d2284b821104d78e8b777d7173573a7af056b6f"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/V1SecondaryPanel.swift",
+      "sha256": "c652b864f263acb7d22f31cc439de04157ad0e990a5e1cf595bfc93198b7cd92"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/V1SegmentedPicker.swift",
+      "sha256": "981c007067edc3b441e19e1cb3662c0df9e5b1f9d2fc915ee2a04fa52e6e6503"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/V1SwitchToggleStyle.swift",
+      "sha256": "e17f47c3263ba0ea239e4c82e2a207a86383e28c2551554c3e0ebf7447c7a0de"
+    },
+    {
+      "path": "Sources/JustSaidUI/DesignSystem/WorkspaceTopBar.swift",
+      "sha256": "bfe77c74e57ae575a62070a80515cb7ef213a5f07165c3230008fa677e3942d4"
     },
     {
       "path": "Sources/JustSaidUI/Notes/NotesController.swift",
@@ -469,52 +549,72 @@
       "sha256": "4485d1aa7cd31eeed8aab73a256723ff2aa25251cc208dd15a1b3b96bb816759"
     },
     {
+      "path": "Sources/JustSaidUI/Views/AppRailView.swift",
+      "sha256": "1a4c902c4d0689a729280afb37c6d537c2d8cde546e84ebdaab07ea2b6383ec6"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/AppShellView.swift",
+      "sha256": "419c47e8a9f5325f05ec898d8793cc83d75478b88956b35f47e297fe48abed49"
+    },
+    {
       "path": "Sources/JustSaidUI/Views/ChannelEditorView.swift",
       "sha256": "5462642b014832642d068e499df7294e93b0d0e6ff9838c1cd71fad78b660e78"
     },
     {
       "path": "Sources/JustSaidUI/Views/ChannelRoleCard.swift",
-      "sha256": "d9449e010f548b89f63f7ddabb20264616648d612033c476265dee9c0732a3a2"
+      "sha256": "f78b79ab7deca40619546221294b326e1508aecb00148f73fb4b35f7f5a35ed3"
     },
     {
       "path": "Sources/JustSaidUI/Views/ChapterDirectoryView.swift",
-      "sha256": "80f74889971b1feabd984950682869ebfe814a9adabc095d67d7cbbc4ab06f4a"
+      "sha256": "35794df73070fec77a9145a1470a1a34ec15f3e15732854276c35b01eb61dcc4"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/ClientProjectDirectory.swift",
+      "sha256": "1ed2ce00f1a40df0342734ad108db25c2bae02ee0c1d9f9060a40a6a2e3eefb8"
     },
     {
       "path": "Sources/JustSaidUI/Views/CockpitRailView.swift",
-      "sha256": "2c0a416a6de24ec8f3625554d6514f9cdd8b5bb4fc98b1e45a0e18c84d390f34"
+      "sha256": "7e68abef37a377f37b2a2107b77034e472ffb70568937a4a551e01f3e8579daa"
     },
     {
       "path": "Sources/JustSaidUI/Views/CompactOverlayView.swift",
-      "sha256": "4a2f236a26b316c5c8bae95c94e7fd0e7f4b7a41b59d977ea58b3563f992f11c"
+      "sha256": "e8167e0bc757d6571b91a4456f7c17f5923ceab886ba7b25a60783e04e52e947"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/CurrentMeetingTitleField.swift",
+      "sha256": "2af848683fe0f43a529318be09a02a5fc45495250394bf8f1cc69459dab57668"
     },
     {
       "path": "Sources/JustSaidUI/Views/DictionarySettingsView.swift",
-      "sha256": "6c3d7b9c3d3c3d514022b38807a0881439980584eec8125fd5cacc987906dcca"
-    },
-    {
-      "path": "Sources/JustSaidUI/Views/EchoReductionModel.swift",
-      "sha256": "db089a9bc4d2305bcba0aa55eaa32045beeee41452bf339dc474876fdc1dff02"
-    },
-    {
-      "path": "Sources/JustSaidUI/Views/EchoReductionSheet.swift",
-      "sha256": "2331f89ad86e698c3e153f6205d3181b2bf03c619a17a204387fedb4841e4209"
+      "sha256": "3c033a41e947284b6d84352ac6335ac36b7d17e604ccfab4b7cbaf667139a19a"
     },
     {
       "path": "Sources/JustSaidUI/Views/ExclusionSupport.swift",
-      "sha256": "0f70b0c5d94c8cc55a083812faf0acf33275525bbec478fe8408e19f5a53150a"
+      "sha256": "9cf5a53bfb3bc2dcfb2cb14f8ef5c912f45572e231dfef22404b77e6aa514ee9"
     },
     {
       "path": "Sources/JustSaidUI/Views/GeneralSettingsPane.swift",
-      "sha256": "7ac5a4b682c0e9c385cd0dd1a62a81118bd58353a525c170484ad3ee5cd64348"
+      "sha256": "d00e2f13d43d63cd63b8ed4682e09c0f9fbf233e6bf00272f50db87beb13a82d"
     },
     {
       "path": "Sources/JustSaidUI/Views/HistoryPaneView.swift",
-      "sha256": "d2901c9dd7549c4105e11993c7257e9f389ea6172bf7cfb50c037ff801d2f7ea"
+      "sha256": "0aca70b6ac4230889ad3d95c5e03744dc109ce8e75459e8bde92ec43a1036055"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/HomeMeetingsView.swift",
+      "sha256": "a744e53d3359f387d3ba4e2fc2008fd61d10b6c6cbc90c6f5049d4b55a7bfee3"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/HomeModelPreparationView.swift",
+      "sha256": "8857ba5d1c84fafdf5f130b8ee8e1e8a27c64ee0c4385623ff83b5068eab777c"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/HomeView.swift",
+      "sha256": "4dc9d8874300c04adc52fcafb6c3a4a86c7e8fb4382cda9b7cc0969b0186a077"
     },
     {
       "path": "Sources/JustSaidUI/Views/LanguageMismatchBanner.swift",
-      "sha256": "887d1522f26a297a757a56728afb206801994808637819073c01b8e64629c563"
+      "sha256": "b96aec97dc96be91664e5bed5bed3bae8487afc8b3b9c7eb413c8108daca99d0"
     },
     {
       "path": "Sources/JustSaidUI/Views/LibraryBadges.swift",
@@ -522,43 +622,47 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/LibraryChrome.swift",
-      "sha256": "bf70ce8c23f95a3a0b793f95375992ba05cc4c6a901176a7cd2f3ea46ad3a00f"
+      "sha256": "1e7468c23c891f9a865327240a076071f2607808c5d181161536c7cdf4a8e8de"
     },
     {
       "path": "Sources/JustSaidUI/Views/LibraryEditFields.swift",
-      "sha256": "38e8d756d4bfb1e545e5330f56f79846c4553b6a0ec245505e933425efeaf9bf"
+      "sha256": "0c1f964807b03b60d5d03dee48fe11499176598e5a5c2a2d966635b27c90ae28"
     },
     {
       "path": "Sources/JustSaidUI/Views/LibraryOverflowPanel.swift",
       "sha256": "480be68df6faa32a99af039d1c66b276e051f62c3c61a8f8734b366b5a80911d"
     },
     {
+      "path": "Sources/JustSaidUI/Views/LiveNoticeRegistry.swift",
+      "sha256": "cc385fee3f6c00f9abb3cd94bfb2787ff6d1c1ccd90344d40d99e12c87bd91df"
+    },
+    {
       "path": "Sources/JustSaidUI/Views/LiveTranscriptPresentation.swift",
-      "sha256": "f552f13f8ddfe7a05066683583e71d07c75bb386ff6b67b54355a26f25cf872a"
+      "sha256": "c2be42e9cfc36c0b4cf1bcf54f98f38b34a83d4f5fb53a62a1a44a160e8581c1"
     },
     {
       "path": "Sources/JustSaidUI/Views/LocalModelsSettingsCard.swift",
-      "sha256": "d1ad59e70c46d9560cb21d1ccf386638aaf90910bca7f5d860fce66a10c11f39"
+      "sha256": "9c9552ef98308402982667f34c8685d1663dac138f94df09341cd303bcdf18f8"
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView+Banners.swift",
-      "sha256": "79ee5ec23a8b0e5279e702e7fd845fafe6b0be9ade4e1ca2dd63013701c528e9"
+      "sha256": "d988ab1ef9b9f78a7ad3f6d70ceedfe144ac16303aa7e5aa64bb72fde0ac29f4"
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView+Exclusions.swift",
-      "sha256": "c5a4d57799c7f97232a0bb63c96b408c423954d5fcfdaeaeaec4f08485b0e81d"
+      "sha256": "1a3acf2dc952c5e3da8a1f65329a5de4bdee151a6939b37db0fa67b7bb52ab68"
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView+Sheets.swift",
-      "sha256": "534128e9471eedd5f6b5af812170670e8f145d298616281a1e844010170b9744"
+      "sha256": "730061e90d248d0fff9762bc92accd9aa6f3a5c57feb026ab88cd47a9990d8de"
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView+Toolbars.swift",
-      "sha256": "f1539c31b6a9094123fd5761af99452e8605db752dad0327c1ed4e005fc311be"
+      "sha256": "3810b7f54e025ce997a67b762be68f46b6dd3e1164df2a22ccbe87b5fafb8320"
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView.swift",
-      "sha256": "f8713638e84d3315042a9479c3a18b4dd131483f7738153ddc2c0fde797a628a"
+      "sha256": "94e0894acc8ff0d4cfe13d2ab824a8efb4bc8101670781707b9a56bdd462c623"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingDocumentView.swift",
@@ -566,67 +670,75 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryBackgroundIO.swift",
-      "sha256": "645da55975585c8b7eef84c5d1d5bf700939e6b9841216ba026b3907640a8029"
+      "sha256": "0ac4a10d2c32fbc0e0ee8369f79454896583b2fcc2d4ab691cdba66b70ac2ff5"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/MeetingLibraryModel+ActionItems.swift",
+      "sha256": "b39630948232cb109c0938df716f34cc54f022bca9e93decc6f014cd572afb10"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel+Exclusions.swift",
-      "sha256": "587ebf120e35008eb80ef8b5d9be0124ed49aac7323c2e9ee25be0fd814f0d72"
+      "sha256": "80c803697fc7212c3664031b73385d55732370697b2a5bd64563e17abc4a4e12"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel+Naming.swift",
-      "sha256": "25f408eedb776c968fcb91212844a72b6698458910cef42cea4f00131e7086b5"
+      "sha256": "8f2d072d8e38e6a9be2d7da70b302db7bfa47980b30d30ae5601d8999f22215f"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel+Search.swift",
-      "sha256": "352e578a4a6773b14f6007484e3af3dab2a6ba5a6d725364c0716769d61d2180"
+      "sha256": "03ef083d022c05c5f21e9a8cfa31b08f4be56c2f7239a5c58285d1d46f810d79"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel.swift",
-      "sha256": "eaa6b38e1f2eba36b5355041a4e72b12d93e09376817ca9129c402a79b880a94"
+      "sha256": "b1e2f8845bd83ad60f7cf6a6764a5db6824ad3967f935b1ed8265a69db83e242"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailHeader.swift",
-      "sha256": "81d9a23513c8174692d4a7d6599203db21c196cca1442cf73ecdc5e28c83e10f"
+      "sha256": "6a031c1f3c226ad95912cbd76d9e4485dbf69f597877d156c86b99dea3777874"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailPane.swift",
-      "sha256": "946b2910b7df5923209be84dc5dc2caf5f9da22a13e135cfafffc2669f271004"
+      "sha256": "8ef40d8e8636d1ac744154f89580dbc09048939cfd7e7979439b185e9a48e852"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailTools.swift",
-      "sha256": "436b6548f6b3f4ae9d92232368d72cc92c012169530d7c679d693f3e0beb2ec9"
+      "sha256": "b79cd5fd48aa46fe4f26f612ba8a20c66a6ff083e3c31490c1c2911f9d3d154a"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/MeetingLibraryView+Filters.swift",
+      "sha256": "ab3288c13b62551211fdc1201802bc467bf628d1b4f56501adaf520fbe68980a"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+InMeetingTab.swift",
-      "sha256": "1e19a893fe2fd7e3c65c80ef4701e624b70a675bec5ba75edbcb21352862789f"
+      "sha256": "8c84c895da00a0c1ee6e92cd73b8e848a849b5014839c17c5aa0e8a4d3f5cf98"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+ListPane.swift",
-      "sha256": "9ecae5699993da47b3a4d59d063b07be698b0deabb8c700f54b9f40d3da699e1"
+      "sha256": "d6d56708d094a869f095fa9eba58f59d62dc48ccc4eb18c1b8cd5293f0394f88"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+SearchPane.swift",
-      "sha256": "ae18a72abf442e698ea4cf08325c828d0014c068418dd3e523d43c991c905916"
+      "sha256": "e730358693bfc2f4ecbbdfe8fa101a0c104028f4cea147896caea87ae6eee68e"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+TranscriptTab.swift",
-      "sha256": "7fa163a5e4c6e8273c5567b1e175a190064ddba0a5e3533e88cbf28e9ce087dc"
+      "sha256": "6676ae7c930a133c0664ffd9f087efa584c7b6e13ababf967222a13151f74b92"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView.swift",
-      "sha256": "af8991aae97529840451157962f9e0e9a8f6ebef92a71d70626436cbe5f2208d"
+      "sha256": "642cbbd20788ddb15ccba2461a6d93af4a59e082aa4cc536ea70cbc4ab3b1194"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingNotesDocumentView.swift",
-      "sha256": "bc68224891e194b59de55d1348e0fe91fa4874c468979c5b421b22ffa8095ce0"
+      "sha256": "58766ecdf8c4d6fb147588514525941bbbb5451098466be959df0c5fd04e6e1c"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingPipelineState.swift",
-      "sha256": "b8956fcdea0ba1d30a57089628c6373d5acecd799ff61824cbddb544be2b738c"
+      "sha256": "89b2116ccc7c8dd3e8311d2abda594187c9cde059c4e21393aff6875b041d36b"
     },
     {
       "path": "Sources/JustSaidUI/Views/MicrophonePauseBanner.swift",
-      "sha256": "21b846b0f2defad9243262554fac645cb6d7bceeec13babfe70c9d6dcd9bb49c"
+      "sha256": "01f7e053617f2bdf783bed2deeeb7d4c433511cf45bc6d7341ebd2934e8ea21a"
     },
     {
       "path": "Sources/JustSaidUI/Views/MinutesDocumentPane.swift",
@@ -638,11 +750,15 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/ModelPreparationView.swift",
-      "sha256": "1ff7da0f040da6dbce978f68eb265ede3e43efde134c13b6f767984ea5f3af89"
+      "sha256": "98a33da64cd604947169d7cba1e82108eb75b5453f264d0a914824d199405e42"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/NameAlertSettingsPane.swift",
+      "sha256": "1ff97797e5e30bcafa25f358d2aba83e5bc3a3c6018077cf1ea2c037e71327ea"
     },
     {
       "path": "Sources/JustSaidUI/Views/NameAlertViews.swift",
-      "sha256": "cf2fb9b28a64f8b94c876942f5b1c44433a484f6ddeaf8fc5b19f1fbf27a81dd"
+      "sha256": "5331b9f985ad1a8e0d112c6e956aaab7971d08f778b240ec6b36bd578c4d1382"
     },
     {
       "path": "Sources/JustSaidUI/Views/NotesPaneView.swift",
@@ -650,27 +766,27 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/NowPaneView.swift",
-      "sha256": "dc4b9e06eba9490a96e0479a9dd3d6e10b6e86a0d0e2761b4462febb9fc21715"
+      "sha256": "143e0a54c2b1a2c4cc80ed284bdc0a5b7f859523672ae16aac1f28125bd8101d"
     },
     {
       "path": "Sources/JustSaidUI/Views/OnePagerView.swift",
-      "sha256": "f98c21ce6efbf5191caa2f8830bd4164553fa97ff0eed58b22685824a8e3335a"
+      "sha256": "5dd7e26cd5382c9993a18b14d741d4d96eae9c2744deae2b3da04a0c73261cf5"
     },
     {
       "path": "Sources/JustSaidUI/Views/ProviderSettingsView.swift",
-      "sha256": "87b8132d1e9f276c6c7855d233bda1f6723272bc1c3ffedd944c9044b0534b40"
+      "sha256": "bb144d3120690ff799ca582d57bb9df35d2122aca95742498fdd2cd09fee5034"
     },
     {
       "path": "Sources/JustSaidUI/Views/RememberedScrollView.swift",
-      "sha256": "fe106d9a6936ee7f957da03f339c78a5e406317b914842cb8d61d7522a7bf174"
+      "sha256": "458635664570da77571718f83043c7189717e33b772e5540242d8f3a51d8e54d"
     },
     {
       "path": "Sources/JustSaidUI/Views/SettingsChannelManagement.swift",
-      "sha256": "bcde6ae9673104690c84650ac91abaf7511fadda62788a9d1ddee41809aae161"
+      "sha256": "9aef63cf7e56fec553cf70013d24ef3ef172e928523640b609d5e25bf77f434b"
     },
     {
       "path": "Sources/JustSaidUI/Views/SettingsShared.swift",
-      "sha256": "56623de87c13344ad225b30f5e0e8ebb3f18553c4d30a99b749823bd6a320700"
+      "sha256": "c04da8391d1892c3f830738ed53fc0c252c77b8360ce962ae008eb22e8208c8e"
     },
     {
       "path": "Sources/JustSaidUI/Views/SourcePopoverView.swift",
@@ -678,15 +794,15 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/SpeakerNamingSuggestionBanner.swift",
-      "sha256": "fbe4111db08b0218ebeb1a6297d7178f6289e8ae14786e34983954a09c54fbb6"
+      "sha256": "53f9316a8d5bb765c5dfd60976b543c756bdbf984ceb23c3f58f9814e98655c0"
     },
     {
       "path": "Sources/JustSaidUI/Views/StatusBanner.swift",
-      "sha256": "9d0e72e5884a18507999ee11eb29d49cd6aed3fdf19977358387a782b0490042"
+      "sha256": "bab711884f16b72bdc6e875e9a5bcebefd7dbc06225772cf175f17873dd64d22"
     },
     {
       "path": "Sources/JustSaidUI/Views/StorageSettingsCard.swift",
-      "sha256": "9c3c921497e57f7b161150f9e97d195f3eb6931232cf8e91fcc55c22ca390be8"
+      "sha256": "9596471c7690d2816c8c3c4d1cf9d417a8ef84d1ac7f1edf14e7492375bc56f9"
     },
     {
       "path": "Sources/JustSaidUI/Views/StoredSecretDigest.swift",
@@ -698,15 +814,87 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/SummaryTopicCardsDocumentView.swift",
-      "sha256": "6a0eee9f715f5c4e8d039a5c156cb656f4743d35b23685c6cc86d019c30cbd28"
+      "sha256": "8c36046ab5cdb835596be6e509af021be8128bbcc91f624e77c379793ea397f8"
     },
     {
       "path": "Sources/JustSaidUI/Views/SummaryWidgetViews.swift",
-      "sha256": "dec508c06a240342af565f9fea03aa0d9dc43eb02ad7260752085567a310658d"
+      "sha256": "602c3d74eaba4b26c9047c8eeb9a4b1409f772039b378ae35d7ba1bfc8900f5f"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/TimeZoneSettingsCard.swift",
+      "sha256": "5c4c30601829a5dbb60818c464d3ccb4f0df30951e6930c7197d782ba3a04375"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/MeetingCandidateSession.swift",
+      "sha256": "14f81fbd8608d1cdbcb3a523e5da88dbbe8d506ae4f5eea19680dcaf2702e939"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/MeetingCandidateViews.swift",
+      "sha256": "87b46693cbb7ff0b5b564ccc472a53d0c1fd247f5b6fe30759113963b7d8490d"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoDeadlinePicker.swift",
+      "sha256": "5e037ee8402cc3bfa4538efb78067c0bbe6f913a1ffd886f7c5eea4f278bfade"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoDeletedMeetingLedger.swift",
+      "sha256": "9bbf1d69a3292481b6d201f6b09f4d4330a6834f737d17bea1a485b0db78d3a3"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoDetailView.swift",
+      "sha256": "75158c6738a876572f0ba48e01a6d07d85e654135a796c92a53172b9bc619f7f"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoDisplay.swift",
+      "sha256": "809c173ed689b6b50ba59fa01314668a4d90e60492f6b80a46eedaf919282268"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoDragPreview.swift",
+      "sha256": "d03a95ba8a4ca35c1b0391b636eba7ad0955116d37c34d6dafc659e48dd421d2"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoEditorView.swift",
+      "sha256": "5bee6b5178f06d2d473edb378f3bd8bd0d44b969a2aba6bde4e591dc4e514dc3"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoHighlightedText.swift",
+      "sha256": "7f9dbe8cc15d3d090f4981983b52d43e72fef829b6fa9914a8b4c77351bca2b7"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoListView.swift",
+      "sha256": "3a4322a7e4898de7670fbfe24dceea3b41b6cfdcd482e802daa472318a4c7522"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoMatrixView.swift",
+      "sha256": "21a4fcfc39a54a7e08d6034a3308e49bed1ea8d3783745e240b4364e7bc8f37f"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoMovePopover.swift",
+      "sha256": "d10adb8a6836422bc4a6a94d3747efa8bed7925026324cba495ea5b8ca23b8c7"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoPageModel.swift",
+      "sha256": "3f7173228e165d42d4ce23e47e8cea68e8a895e16d95a34d4b28e065ec5c5e4c"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoPageView.swift",
+      "sha256": "f02fc7db78b2495cd99187afce9141456b7361f23cc20324c48d5859150e151d"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoRowMenu.swift",
+      "sha256": "cb41794be884312d9e30dcab4a33f12baae6f847c31d623de95c0878d07f9cba"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoRowView.swift",
+      "sha256": "1d29d203ec6c1d1c24f2be2b956160a1b82a2e72b99dac0804b8a1bc76fca7e0"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/Todos/TodoSidebarView.swift",
+      "sha256": "69c7002ec540a20444e62e8f6b046a3a2b47dc4749c4fb6686558e7cd5f477fb"
     },
     {
       "path": "Sources/JustSaidUI/Views/TranscriptDocumentView.swift",
-      "sha256": "3db412bf401541605d9df3b97471053da76cdd16c35050bf39748c9daa11b67e"
+      "sha256": "5db2bb1cc4e0f3840aaf3b7256beffaf750651d7cffa97709f6b9dc601a8bd66"
     },
     {
       "path": "Sources/JustSaidUI/Views/TranscriptPaneView.swift",
@@ -714,7 +902,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/TranscriptTextView.swift",
-      "sha256": "b24bf79497a8eb2206bcfd727d7d528be97cf01784f74b7819a92ed52d985c5e"
+      "sha256": "c65b824507ca3fd68c0a9b4099367716d2b832741aef9e96a77b73f8d19277fb"
     },
     {
       "path": "Sources/JustSaidUI/Views/VerifyWorkbenchView.swift",
@@ -722,103 +910,39 @@
     },
     {
       "path": "Sources/JustSaidUI/Windowing/AppCoordinator.swift",
-      "sha256": "2a858b2b8d0945f5b1d60771d472085b50401bede998458acede756ac3bb797d"
+      "sha256": "438cfe0f63293934c063c695ea202156c8bb9e0f10e9da11bacfa060bddcf51c"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/AppUpdates.swift",
-      "sha256": "dff3890887e1e098bd5749c60d83c58a440ecfbe061af508e1ab158a6da690cd"
+      "sha256": "283f6dfdb553f9dd1e25a34fb75d80c4590de9ae08f20e6576126fba60657b91"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/CompactOverlayViewModel.swift",
-      "sha256": "e392f68229f1926a5a055fda496967da8cb4fbe78d2912833f62efcf728c278e"
+      "sha256": "d6a64fe88283b1d51aa0cc94c023ffb3782a3d4e6e45126a5e6a143377418154"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/CompactPanelController.swift",
-      "sha256": "6ff714b28c8424d1d8402680fa26ed1a67ed4417b56d2aa44b6ce05be8b251df"
+      "sha256": "df13bde921a05432fff1cf158cf24d213cee452c2148352214d2fc4d505446f9"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/GlobalHotkeyManager.swift",
-      "sha256": "a23e121bb9a9beb8d1a105047dc1db6ddc39da2c64c3d69d4b45d836dc3c6747"
+      "sha256": "4b3ecd0a16eefdce0e81e0d29b7186906826ddc2baac6d939dde25dd0b570709"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/MeetingPresenceController.swift",
-      "sha256": "35de83f555d2eda1744d99a72b68dc199e0c36a020d0a280a6adab4d4fd52c9a"
+      "sha256": "418c2591ec26be825049c46152f54c949a701c2e8913c81620c7c560df00a609"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/MeetingPresenceGeometry.swift",
-      "sha256": "c692ea50c3e66a78059b87f095c7d9217cd60d7fc4c4c166d83beabf2048fa6e"
+      "sha256": "552142a0fbb53c4b385676148b0fdcecf62f7e652aa827a7ae7d6fa72148f225"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/MenuBarController.swift",
-      "sha256": "3bbda032832d54c792170993991974881a7696ed08e194e43c738a681c18705a"
+      "sha256": "3f7a3bed8c4d385a08f2fcc112d111e16d07aeb0ad5675343601036c6b9bd35b"
     },
     {
-      "path": "Sources/SpeexEchoCanceller/LICENSE",
-      "sha256": "2654a4264b2bfe298dedc508748d140111840c315cc8eb646a3a68c13fa75b01"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/PROVENANCE.json",
-      "sha256": "db0d3c949aeedb5226e72cb1323c709a2e399a7abb8f8ba901dc807afdf18d3a"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/include/JustSaidSpeex.h",
-      "sha256": "f2b6a2f7ed7a18c8831ae5aa85b00c58a21e7b7ce57634a4ce2a367c8c9254cf"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/arch.h",
-      "sha256": "102f6a14a95f8ae0bcfc69270f3a9e3fbba08b63bba688ca524f71e3faa48c23"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/config.h",
-      "sha256": "0482bc8833423b6958776d9e754ac9aad4c148aa3ef75a0ecc801d6473d8d17e"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/fftwrap.c",
-      "sha256": "a59ec583e5660207da9cf3c1ddd6a7ff1ed91382eb40df2a4e77d5cddfe14c52"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/fftwrap.h",
-      "sha256": "fd289dcc47b9ddb2b33039c1990c4644bb279c9413ede6e74fdb2742c3888ee5"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/include/speex/speex_echo.h",
-      "sha256": "ab18db97564a241c9e06d723351c2155bf04a23ac30e0c27a3d86dcc04de3426"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/include/speex/speexdsp_config_types.h",
-      "sha256": "adae4ec8c26f2ed0fcc9cb5d1bdc029b0e21fde99af6dbcbd430e729a48afa18"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/include/speex/speexdsp_types.h",
-      "sha256": "4f97187c057fd8493c787f2526752859cf57007d50fef8d2e03c9b79b2fed490"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/math_approx.h",
-      "sha256": "a024693b0d29dc4e904021a1b442908c1fa726b18f5d31b0935e38646f2701ff"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/mdf.c",
-      "sha256": "a096297873dfd0a07509028d2cdd02d12edf8f1d03319fcecedda003d18d22a8"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/os_support.h",
-      "sha256": "5ab9c979e8ac1f72c7441d24e39e7840828dd9356aac49a31eabeddb808bf1d3"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/pseudofloat.h",
-      "sha256": "0bd544dbed0096e02da2fd800d673bafb19bd97f56e268b98402ad641726daae"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/smallft.c",
-      "sha256": "25bcc6e38baeca23e828bfcbbb1cc0a0d3f6f898d9e02c95cbb4b4c0fb4b3df7"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/vendor/smallft.h",
-      "sha256": "715352e7efe55cb671f37fa341610ce7df893016625506e22175d9f1b1b817e9"
-    },
-    {
-      "path": "Sources/SpeexEchoCanceller/wrapper.c",
-      "sha256": "1f90f5b199f78b02441d6d03b7796614e9ac84d32903b9e9d1aa1bc367fb4749"
+      "path": "Sources/JustSaidUI/Windowing/QuitConfirmation.swift",
+      "sha256": "51758c54731d8165b7853609e7b67b73804c37fae68f4a29d4fac5bbc2ffe7a4"
     },
     {
       "path": "Support/LocalModelAssets.json",
@@ -838,11 +962,11 @@
     },
     {
       "path": "Support/ThirdPartyNotices.txt",
-      "sha256": "edc69d41f19a612c4a90de618cf68861931fbf4a86fc3662e90537c2ff1f7bf8"
+      "sha256": "e27fbfdf79ad83a8fbfe7895d99d2a4fe3c477ce41cca9320c1a30afb829e938"
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "a4a354271a0126bba482815ae8f452feb4eed5baeb7cf9a7f290ea5700f4fd12"
+      "sha256": "668534934d85361f821ab01590f6c74bb3a482bf9f3cdd79df2718588bfda96b"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -850,7 +974,7 @@
     },
     {
       "path": "docs/publication/Package.public.swift",
-      "sha256": "838cd745d6c3e55154a357351aa3d739adedbb63ee8ae80b7d70c3fd2ce4c8e6"
+      "sha256": "4e2ac06e76ee230ec96dd806969d8722d3876d6b0c277b3511d9d5b04aeec02b"
     },
     {
       "path": "docs/publication/README.public.md",
@@ -861,14 +985,14 @@
   "manifest_path_excluded_from_file_hashes": "PUBLIC_EXPORT_MANIFEST.json",
   "package_manifest": {
     "canonical_signature": {
-      "canonical_target_count": 33,
+      "canonical_target_count": 35,
       "dependencies": [
         [
           "https://github.com/k2-fsa/sherpa-onnx",
           "116a44e72c5bb631dcdbdb9c176f0304f5fc6fb0"
         ]
       ],
-      "expected_public_target_count": 4,
+      "expected_public_target_count": 3,
       "name": "JustSaid",
       "products": [
         [
@@ -903,7 +1027,7 @@
           "path": null
         },
         {
-          "declaration_digest": "bfc026919fbcf4a8",
+          "declaration_digest": "1ac746100390b08b",
           "kind": "target",
           "name": "JustSaidCore",
           "path": null
@@ -913,12 +1037,6 @@
           "kind": "target",
           "name": "JustSaidUI",
           "path": null
-        },
-        {
-          "declaration_digest": "065c0f84224d6803",
-          "kind": "target",
-          "name": "SpeexEchoCanceller",
-          "path": null
         }
       ]
     },
@@ -926,6 +1044,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "2c6d9893406e1d30e50f7f15da2cd999fdccadd3",
+  "source_sha": "f5a1d593c0faf9c812f56c8c56a74ce34ec6be43",
   "source_status": "clean"
 }

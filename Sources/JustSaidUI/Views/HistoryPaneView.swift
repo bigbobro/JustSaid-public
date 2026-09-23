@@ -25,7 +25,12 @@ struct HistoryPaneView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
+      // 头部要整体压在时间线之上。「图例」悬停卡是 topBar 内的 overlay,越界往下画,
+      // 但 VStack 里后面的兄弟(时间线)默认画在前面的兄弟之上——于是浮卡被话题行
+      // 穿过来盖住,看着像这层是半透明的(owner 2026-09-21 实测:「跟背后那个进行中叠在一起」)。
+      // legend 自己那句 zIndex(1) 只在 topBar 的 HStack 内排序,管不到这一层。
       topBar
+        .zIndex(1)
       ScrollViewReader { proxy in
         ZStack(alignment: .bottom) {
           ScrollView {
@@ -231,6 +236,27 @@ private struct EngineStatusChip: View {
   }
 }
 
+/// 话题块整体排除(08-14):时间范围解析不出时置灰而不是藏掉——
+/// 藏起来用户会以为这个功能不存在。没有回调则整条菜单不存在(不是空菜单)。
+private struct TopicExcludeContextMenu: ViewModifier {
+  let timeRangeLabel: String
+  let onExcludeTopicRange: ((ClosedRange<TimeInterval>) -> Void)?
+
+  func body(content: Content) -> some View {
+    if let onExcludeTopicRange {
+      let range = ExclusionUI.topicRangeSeconds(timeRangeLabel)
+      content.contextMenu {
+        Button("这个话题是闲聊，整块排除") {
+          if let range { onExcludeTopicRange(range) }
+        }
+        .disabled(range == nil)
+      }
+    } else {
+      content
+    }
+  }
+}
+
 struct SummaryTopicCardView: View {
   let topic: SummaryTopic
   let accent: Color
@@ -245,6 +271,12 @@ struct SummaryTopicCardView: View {
   /// 排除入口(08-14),optional:留痕页不传 = 无菜单,不污染只读留痕。
   var onExcludeBulletAnchor: ((TimeInterval) -> Void)? = nil
   var onExcludeTopicRange: ((ClosedRange<TimeInterval>) -> Void)? = nil
+  /// 去掉内层那一圈底色与描边,由调用方统一套外框。
+  ///
+  /// 原来是「裸标题在块外 + 要点区自己一个 card 底和描边」,和「这场会」那边的积木
+  /// (细边 + paper-2 + 大圆角、标题在块内)不是一套,同一个会议页里两种盒子
+  /// (owner 2026-09-20:要跟前面这些页天然融合一体)。默认 false,驾驶舱零变化。
+  var chromeless: Bool = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
@@ -279,19 +311,13 @@ struct SummaryTopicCardView: View {
             .foregroundStyle(Tokens.Color.ink4)
         }
       }
-      .contextMenu {
-        // 话题块整体排除(08-14):时间范围解析不出时置灰而不是藏掉——
-        // 藏起来用户会以为这个功能不存在。
-        if let onExcludeTopicRange {
-          let range = ExclusionUI.topicRangeSeconds(topic.timeRangeLabel)
-          Button("这个话题是闲聊，整块排除") {
-            if let range {
-              onExcludeTopicRange(range)
-            }
-          }
-          .disabled(range == nil)
-        }
-      }
+      // 留痕页不传 onExcludeTopicRange,原来仍然挂着 .contextMenu,右键弹出一个**空菜单**。
+      // 空菜单比没有菜单更糟:它让人以为这里本该有东西、是坏了。没有回调就整条不挂。
+      .modifier(
+        TopicExcludeContextMenu(
+          timeRangeLabel: topic.timeRangeLabel,
+          onExcludeTopicRange: onExcludeTopicRange
+        ))
 
       VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
         ForEach(topic.bullets) { bullet in
@@ -327,9 +353,11 @@ struct SummaryTopicCardView: View {
           )
         }
       }
-      .padding(.horizontal, Tokens.Spacing.smd)
-      .padding(.vertical, Tokens.Spacing.sm)
-      .background(tier.background, in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+      .padding(.horizontal, chromeless ? .zero : Tokens.Spacing.smd)
+      .padding(.vertical, chromeless ? .zero : Tokens.Spacing.sm)
+      .background(
+        chromeless ? Color.clear : tier.background,
+        in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
       .overlay(alignment: .leading) {
         // focus 的整高墨青左缘(P3):只在层级里出现,不影响内容内边距。
         if let leadingEdge = tier.leadingEdge {
@@ -343,17 +371,19 @@ struct SummaryTopicCardView: View {
           .frame(width: 3)
         }
       }
-      .overlay(
-        RoundedRectangle(cornerRadius: Tokens.Radius.card)
-          .stroke(
-            // 录制中/章节定位强调的优先级高于层级描边。
-            topic.isInProgress || isHighlighted ? Tokens.Color.ac : tier.stroke,
-            lineWidth: topic.isInProgress || isHighlighted ? 1.5 : 1
-          )
-      )
-      .tokenShadow(tier.shadow ?? (color: .clear, radius: 0, y: 0))
+      .overlay {
+        if !chromeless {
+          RoundedRectangle(cornerRadius: Tokens.Radius.card)
+            .stroke(
+              // 录制中/章节定位强调的优先级高于层级描边。
+              topic.isInProgress || isHighlighted ? Tokens.Color.ac : tier.stroke,
+              lineWidth: topic.isInProgress || isHighlighted ? 1.5 : 1
+            )
+        }
+      }
+      .tokenShadow(chromeless ? (color: .clear, radius: 0, y: 0) : (tier.shadow ?? (color: .clear, radius: 0, y: 0)))
     }
-    .padding(.bottom, Tokens.Spacing.xsm)
+    .padding(.bottom, chromeless ? .zero : Tokens.Spacing.xsm)
     .accessibilityElement(children: .contain)
     .accessibilityLabel("话题：\(topic.title)，\(topic.timeRangeLabel)")
     .runtimeAccessibilityIdentifier(tier.accessibilityID)

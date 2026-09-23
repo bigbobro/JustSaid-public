@@ -177,6 +177,23 @@ public final class RecordingSession: ObservableObject {
   @Published public private(set) var microphoneLevel: Float = 0
   /// 只暂停麦克风内容；系统声、录制时钟与母带写入均继续。
   @Published public private(set) var isMicrophonePaused = false
+  /// **仅供截图装置**摆出「正在录制」那一屏。真实录制链路一律走 `start()`——
+  /// 这里只改三个 `@Published` 的呈现值,不开音频、不落盘、不动 meeting.json。
+  ///
+  /// 2026-09-21 加:闲聊与暂停麦克风从控制轨搬到顶栏之后,这两颗按钮只在录制中显示,
+  /// 而截图装置拍到的是 `.idle` 的舱 —— 我看不见自己刚改的东西。
+  /// 拍不到 = 看不见,所以宁可留这个窄口子(与 `LocalModelAssetManager.makePreviewReady` 同类)。
+  public func applyPreviewRecordingState(
+    startedAt: Date = Date(timeIntervalSinceNow: -1_862),
+    title: String = "TE 周会：网关交期与监控窗口",
+    isMicrophonePaused: Bool = false
+  ) {
+    self.startedAt = startedAt
+    currentTitle = title
+    self.isMicrophonePaused = isMicrophonePaused
+    phase = .recording
+  }
+
   /// 本场录音的权威起点(= meeting.json 的 startedAt)。
   ///
   /// 界面层原先各自记一个"点开始的那一刻",于是**从菜单栏开录时根本没人记**——

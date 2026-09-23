@@ -1,19 +1,56 @@
+import AppKit
 import JustSaidCore
 import SwiftUI
 
-/// 设置页「词典」页签(F1)。
+/// 独立词典页及其双区内容。
 ///
 /// 一份全局词表、一处维护、两处生效(精转热词直传 + 纪要提示词专名锚定),读写都走
 /// `DictionaryStore`,落地就是明文 `~/JustSaid/词典.txt`——用户直接改那个文件也算数,
-/// 所以本页每次出现都重读磁盘,底部还留了一个 ↻ 让开着窗也能对齐文件。
+/// 所以本页每次出现都重读磁盘。
 ///
-/// 形态参照 Typeless:卡片栅格 + 搜索 + 悬停改删。2026-07-30 用户实测后的交互修订:
+/// 词典为常驻主栏，收割箱为次栏；保留搜索与悬停改删。既有交互约定:
 /// - **点空白即失焦提交**(原先编辑框永远占着焦点,"存没存"无从判断);Esc 取消;
 /// - **保存回执**:刚保存的词卡片闪一下青色(与转写跳转定位的闪烁同一语言);
 /// - **双击词条进入编辑**;悬停按钮加大加距、带悬浮提示,删除悬停变警示色;
-/// - **搜索框回车即添加**(没有匹配时)——找词与加词是同一个动作;网格首格常驻「+ 新词」。
+/// - **搜索框回车即添加**(没有匹配时)——找词与加词是同一个动作;标题行右端提供「新词」。
+/// 图标轨上的独立词典页，保留词典与收割箱的双区内容。
+public struct DictionaryPageView: View {
+  private let store: DictionaryStore
+  private let meetingStore: MeetingStore
+  private let harvestIgnoreStore: HarvestIgnoreStore
+  private let onHarvestCountChange: (() -> Void)?
+  private let onDone: (() -> Void)?
+
+  public init(
+    store: DictionaryStore, meetingStore: MeetingStore,
+    harvestIgnoreStore: HarvestIgnoreStore,
+    onHarvestCountChange: (() -> Void)? = nil, onDone: (() -> Void)? = nil
+  ) {
+    self.store = store
+    self.meetingStore = meetingStore
+    self.harvestIgnoreStore = harvestIgnoreStore
+    self.onHarvestCountChange = onHarvestCountChange
+    self.onDone = onDone
+  }
+
+  public var body: some View {
+    VStack(spacing: .zero) {
+      WorkspaceTopBar("词典") { EmptyView() }
+      DictionarySettingsView(
+        store: store, meetingStore: meetingStore, harvestIgnoreStore: harvestIgnoreStore,
+        onHarvestCountChange: onHarvestCountChange
+      )
+      .padding(.top, Tokens.V1.Space.md)
+    }
+    .background(Tokens.V1.Color.paper)
+    .onExitCommand { onDone?() }
+    .runtimeAccessibilityIdentifier("dictionary.page")
+  }
+}
+
 public struct DictionarySettingsView: View {
   @StateObject private var model: DictionaryPaneModel
+  private let onHarvestCountChange: (() -> Void)?
   @FocusState private var editorFocus: EditorFocus?
 
   enum EditorFocus: Hashable {
@@ -24,8 +61,10 @@ public struct DictionarySettingsView: View {
   public init(
     store: DictionaryStore = DictionaryStore(),
     meetingStore: MeetingStore = MeetingStore(),
-    harvestIgnoreStore: HarvestIgnoreStore = HarvestIgnoreStore()
+    harvestIgnoreStore: HarvestIgnoreStore = HarvestIgnoreStore(),
+    onHarvestCountChange: (() -> Void)? = nil
   ) {
+    self.onHarvestCountChange = onHarvestCountChange
     _model = StateObject(
       wrappedValue: DictionaryPaneModel(
         store: store,
@@ -60,36 +99,113 @@ public struct DictionarySettingsView: View {
     }
   }
 
+  @State private var bulkAction: BulkAction?
+  @State private var selectedWords: Set<String> = []
+  @State private var deletionWords: [String]?
+
+  private var selectedVisibleWords: [String] {
+    model.visibleWords.filter { selectedWords.contains($0) }
+  }
+
+  @State private var selectedHarvestWords: Set<String> = []
+
+  private var selectedCandidates: [String] {
+    model.harvestItems.map(\.text).filter { selectedHarvestWords.contains($0) }
+  }
+
+  private struct BulkAction: Identifiable {
+    let accepting: Bool
+    let words: [String]
+    var id: Bool { accepting }
+  }
+
   public var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      header
-      Divider()
-      if let errorMessage = model.errorMessage {
-        DegradedBanner(text: errorMessage)
-          .overlay(alignment: .trailing) {
-            if model.canDismissWriteError {
-              Button("关闭") {
-                model.dismissWriteError()
+    GeometryReader { geometry in
+      SettingsPage(fullWidth: true, title: "词典与收割箱", subtitle: "维护常用专名，处理纪要里发现的新词。") {
+        VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
+          if let errorMessage = model.errorMessage {
+            DegradedBanner(text: errorMessage)
+              .overlay(alignment: .trailing) {
+                if model.canDismissWriteError {
+                  Button("关闭") { model.dismissWriteError() }
+                    .buttonStyle(.v1Outline)
+                    .accessibilityLabel("关闭写入失败提示")
+                    .runtimeAccessibilityIdentifier("settings.dictionary.error-dismiss")
+                }
               }
-              .buttonStyle(.textAction)
-              .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-              .foregroundStyle(Tokens.Color.warn)
-              .padding(.trailing, Tokens.Spacing.md)
-              .accessibilityLabel("关闭写入失败提示")
-              .runtimeAccessibilityIdentifier("settings.dictionary.error-dismiss")
-            }
           }
+          HStack(alignment: .top, spacing: Tokens.V1.Space.lg) {
+            wordsSection
+              .frame(
+                width: (geometry.size.width - Tokens.V1.Space.xl * 2 - Tokens.V1.Space.lg) * 3 / 5)
+            harvestSection
+              .frame(maxWidth: .infinity)
+          }
+          .frame(
+            height: max(
+              Tokens.V1.Size.settingsSheetMinHeight,
+              geometry.size.height - Tokens.V1.Size.barHeight - Tokens.V1.Space.lg)
+          )
+          .runtimeAccessibilityIdentifier("settings.dictionary.regions")
+          .disabled(model.isLoading)
+        }
       }
-      content
-      Divider()
-      harvestSection
-      Divider()
-      footer
     }
-    .background(Tokens.Color.bg)
+    .runtimeAccessibilityIdentifier(
+      bulkAction == nil
+        ? "settings.dictionary.harvest.confirmation.closed"
+        : "settings.dictionary.harvest.confirmation.pending"
+    )
+    .runtimeAccessibilityIdentifier(
+      model.isLoading ? "settings.dictionary.loading" : "settings.dictionary.ready"
+    )
     // 点页面任意空白 = 收走焦点;编辑卡以失焦为提交信号(见 DictionaryWordEditorCard)。
     .contentShape(Rectangle())
     .onTapGesture { editorFocus = nil }
+    .runtimeAccessibilityIdentifier(
+      deletionWords == nil
+        ? "settings.dictionary.deletion.closed" : "settings.dictionary.deletion.pending"
+    )
+    .onChange(of: model.harvestItems.count) { _, _ in onHarvestCountChange?() }
+    .onChange(of: model.visibleWords) { _, words in
+      selectedWords.formIntersection(words)
+    }
+    .confirmationDialog(
+      "删除所选词条？",
+      isPresented: Binding(get: { deletionWords != nil }, set: { if !$0 { deletionWords = nil } }),
+      titleVisibility: .visible, presenting: deletionWords
+    ) { words in
+      Button("删除 \(words.count) 个词条", role: .destructive) {
+        model.confirmRemove(words)
+        deletionWords = nil
+      }
+      Button("取消", role: .cancel) { deletionWords = nil }
+    } message: { words in
+      Text("将删除这 \(words.count) 个词条及其称呼。此操作无法撤销。")
+    }
+    .onChange(of: model.harvestItems.map(\.text)) { _, words in
+      selectedHarvestWords.formIntersection(words)
+    }
+    .confirmationDialog(
+      bulkAction?.accepting == true ? "采纳所选候选？" : "忽略全部候选？",
+      isPresented: Binding(get: { bulkAction != nil }, set: { if !$0 { bulkAction = nil } }),
+      titleVisibility: .visible, presenting: bulkAction
+    ) { action in
+      Button(action.accepting ? "采纳所选 \(action.words.count) 个" : "全部忽略 \(action.words.count)") {
+        if action.accepting {
+          model.harvestAcceptAll(action.words)
+        } else {
+          model.harvestIgnoreAll(action.words)
+        }
+        bulkAction = nil
+      }
+      Button("取消", role: .cancel) { bulkAction = nil }
+    } message: { action in
+      Text(
+        action.accepting
+          ? "将这 \(action.words.count) 个候选作为新主体加入词典。"
+          : "将这 \(action.words.count) 个候选加入忽略表，之后不再出现在收纳箱。词典和会议内容保持不变。")
+    }
   }
 
   /// 用户改搜索词才清提示;程序把 query 清空(已存在回执)不走这个 Binding。
@@ -105,84 +221,128 @@ public struct DictionarySettingsView: View {
     )
   }
 
-  // MARK: - 头部:说明 + 搜索(兼添加) + 新词
+  // MARK: - 常驻词典主区
 
-  private var header: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-      HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.smd) {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-          Text("词典")
-            .font(.system(size: Tokens.FontSize.pageTitle, weight: .semibold))
-            .foregroundStyle(Tokens.Color.ink)
-          Text("这里的专名会在会后精转时直传给识别引擎，并要求纪要按这里的拼写落字。一处维护，两处生效。")
-            .font(.system(size: Tokens.FontSize.bodyMinimum))
-            .foregroundStyle(Tokens.Color.ink3)
-            .fixedSize(horizontal: false, vertical: true)
-          // 名册行是这一版的主力:同一个人在会上有好几种叫法,写出来才能都进热词、
-          // 也才能让纪要统一署名。语法不写出来就等于没有。
-          Text("同一个人有多种叫法的，写成「本名=称呼1，称呼2」——例如 张三=三儿，老张。这些叫法都会发给识别引擎，纪要一律用本名署名。")
-            .font(.system(size: Tokens.FontSize.uiEmphasis))
-            .foregroundStyle(Tokens.Color.ink4)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        Spacer(minLength: Tokens.Spacing.xsm)
+  private var wordsSection: some View {
+    VStack(spacing: .zero) {
+      HStack(spacing: Tokens.V1.Space.xs) {
+        Text("词典").font(Tokens.V1.Text.heading.font).foregroundStyle(Tokens.V1.Color.ink)
+        Text("\(model.words.count) 个词，用于精转与纪要。")
+          .font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
+        Spacer(minLength: .zero)
       }
-
-      HStack(spacing: Tokens.Spacing.xs) {
-        Image(systemName: "magnifyingglass")
-          .font(.system(size: Tokens.FontSize.ui))
-          .foregroundStyle(Tokens.Color.ink4)
-        TextField("搜索词条；没有匹配时，回车直接添加", text: searchQuery)
-          .textFieldStyle(.plain)
-          .font(.system(size: Tokens.FontSize.body))
-          .onSubmit { model.addFromSearch() }
-          .accessibilityLabel("搜索词条，没有匹配时回车直接添加")
-        if !model.query.isEmpty {
-          Button {
-            model.query = ""
-            model.clearSearchHint()
-          } label: {
-            Image(systemName: "xmark.circle.fill")
-              .font(.system(size: Tokens.FontSize.ui))
-          }
-          .buttonStyle(IconHoverButtonStyle(base: Tokens.Color.ink4, hover: Tokens.Color.ink2))
-          .accessibilityLabel("清空搜索")
-        }
-      }
-      .padding(.horizontal, Tokens.Spacing.xsm)
-      .padding(.vertical, Tokens.Spacing.xs)
-      // 设置页输入井统一 surface2(批4 皮层统一):此前用 pane 底自成一派。
-      .insetPanel()
-      if let searchHint = model.searchHint {
-        Text(searchHint)
-          .font(.system(size: Tokens.FontSize.ui))
-          .foregroundStyle(Tokens.Color.ink3)
-          .fixedSize(horizontal: false, vertical: true)
-          .runtimeAccessibilityIdentifier("settings.dictionary.search-hint")
-      }
+      .padding(.horizontal, Tokens.V1.Space.md)
+      .frame(height: Tokens.V1.Size.barHeight)
+      .runtimeAccessibilityIdentifier("settings.group.词典.heading")
+      regionDivider
+      header
+      regionDivider
+      content
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .runtimeAccessibilityIdentifier("settings.dictionary.words.viewport")
     }
-    .padding(.horizontal, Tokens.Spacing.lg)
-    .padding(.vertical, Tokens.Spacing.xl)
+    .modifier(DictionaryRegionSurface())
+    .runtimeAccessibilityIdentifier("settings.dictionary.words.region")
   }
 
-  // MARK: - 正文:卡片栅格 / 两种空态
+  private var regionDivider: some View {
+    Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
+  }
 
-  @ViewBuilder
-  private var content: some View {
-    if model.words.isEmpty && !model.isAddingWord {
-      VStack(spacing: Tokens.Spacing.smd) {
-        emptyState(
-          title: "词表还是空的",
-          detail: "把客户名、产品名、同事英文名这类容易被听错的专名加进来。"
-            + "文件就是 \(model.fileLabel)，直接编辑那个文件同样算数。"
-        )
-        GhostAddCard {
+  /// 选择态只替换搜索工具行，卡头与词条区都保留。
+  private var header: some View {
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
+      HStack(spacing: Tokens.V1.Space.xs) {
+        searchTools
+        Button("新词") {
           model.beginAdding()
           editorFocus = .newWord
         }
-        .frame(width: 168)
-        .padding(.bottom, Tokens.Spacing.lg)
+        .buttonStyle(.v1Primary)
+        .accessibilityLabel("新增一个词条")
+        .runtimeAccessibilityIdentifier("settings.dictionary.add")
       }
+    }
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .padding(.vertical, Tokens.V1.Space.sm)
+  }
+
+  @ViewBuilder
+  private var searchTools: some View {
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
+      if !selectedVisibleWords.isEmpty {
+        HStack(spacing: Tokens.V1.Space.xs) {
+          harvestCheckbox(
+            "全选", isSelected: selectedVisibleWords.count == model.visibleWords.count,
+            isMixed: selectedVisibleWords.count < model.visibleWords.count, showsTitle: false
+          ) {
+            selectedWords =
+              selectedVisibleWords.count == model.visibleWords.count ? [] : Set(model.visibleWords)
+          }
+          .runtimeAccessibilityIdentifier("settings.dictionary.select-all")
+          Text("已选择 \(selectedVisibleWords.count) 个词")
+            .font(Tokens.V1.Text.strong.font)
+            .runtimeAccessibilityIdentifier(
+              "settings.dictionary.selection-count.\(selectedVisibleWords.count)")
+          Spacer(minLength: Tokens.V1.Space.xs)
+          Button("删除") { deletionWords = selectedVisibleWords }
+            .buttonStyle(.v1Outline)
+            .foregroundStyle(Tokens.V1.Color.danger)
+            .runtimeAccessibilityIdentifier("settings.dictionary.delete-selected")
+        }
+        .frame(minHeight: Tokens.V1.Size.controlLg)
+        .runtimeAccessibilityIdentifier("settings.dictionary.selection-header")
+      } else {
+        HStack(spacing: Tokens.V1.Space.xs) {
+          V1TextField(
+            placeholder: "搜索，或直接输入新词；一个人有多种叫法写成「张三=三儿，老张」",
+            text: searchQuery, identifier: "settings.dictionary.search"
+          )
+          .onSubmit { model.addFromSearch() }
+          .help(
+            "回车把没有匹配的词直接加进词典。\n"
+              + "同一个人有多种叫法的，写成「本名=称呼1，称呼2」——例如 张三=三儿，老张。\n"
+              + "这些叫法都会发给识别引擎，纪要一律用本名署名。"
+          )
+          .accessibilityLabel("搜索词条，没有匹配时回车直接添加；可用「本名=称呼」登记别名")
+          if !model.query.isEmpty {
+            Button {
+              model.query = ""
+              model.clearSearchHint()
+            } label: {
+              Image(systemName: "xmark.circle.fill")
+                .font(Tokens.V1.Text.meta.font)
+            }
+            .buttonStyle(
+              IconHoverButtonStyle(base: Tokens.V1.Color.ink4, hover: Tokens.V1.Color.ink2)
+            )
+            .accessibilityLabel("清空搜索")
+          }
+        }
+        if let searchHint = model.searchHint {
+          Text(searchHint)
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink3)
+            .fixedSize(horizontal: false, vertical: true)
+            .runtimeAccessibilityIdentifier("settings.dictionary.search-hint")
+        }
+      }
+    }
+  }
+
+  // MARK: - 正文:词条列表 / 两种空态
+
+  @ViewBuilder
+  private var content: some View {
+    if model.isLoading && model.words.isEmpty {
+      ProgressView("正在读取词典…")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if model.words.isEmpty && !model.isAddingWord {
+      emptyState(
+        title: "词表还是空的",
+        detail: "把客户名、产品名、同事英文名这类容易被听错的专名加进来。"
+          + "文件就是 \(model.fileLabel)，直接编辑那个文件同样算数。"
+      )
     } else if model.visibleWords.isEmpty && !model.isAddingWord && !model.query.isEmpty {
       emptyState(
         title: "没有匹配「\(model.query)」的词条",
@@ -190,11 +350,7 @@ public struct DictionarySettingsView: View {
       )
     } else {
       ScrollView {
-        LazyVGrid(
-          columns: [GridItem(.adaptive(minimum: 168, maximum: 260), spacing: Tokens.Spacing.sm)],
-          alignment: .leading,
-          spacing: Tokens.Spacing.sm
-        ) {
+        LazyVStack(alignment: .leading, spacing: .zero) {
           if model.isAddingWord {
             DictionaryWordEditorCard(
               initialText: "",
@@ -206,12 +362,6 @@ public struct DictionarySettingsView: View {
             )
             .id(model.addingSessionID)
             .runtimeAccessibilityIdentifier("settings.dictionary.new-editor")
-          } else if model.query.isEmpty {
-            // 常驻「+ 新词」占首格:加词不必去右上角找按钮(2026-07-30 用户实测反馈)。
-            GhostAddCard {
-              model.beginAdding()
-              editorFocus = .newWord
-            }
           }
           ForEach(model.visibleWords, id: \.self) { word in
             if model.editingWord == word {
@@ -226,6 +376,11 @@ public struct DictionarySettingsView: View {
             } else {
               DictionaryWordCard(
                 word: word,
+                isSelected: selectedWords.contains(word),
+                isSelecting: !selectedVisibleWords.isEmpty,
+                onSelect: {
+                  if !selectedWords.insert(word).inserted { selectedWords.remove(word) }
+                },
                 isRecentlySaved: model.recentlySaved == word,
                 isArmedForDeletion: model.armedDeletionWord == word,
                 onEdit: {
@@ -240,162 +395,203 @@ public struct DictionarySettingsView: View {
             }
           }
         }
-        .padding(.horizontal, Tokens.Spacing.lg)
-        .padding(.vertical, Tokens.Spacing.xl)
       }
     }
   }
 
   private func emptyState(title: String, detail: String) -> some View {
-    VStack(spacing: Tokens.Spacing.xs) {
+    VStack(spacing: Tokens.V1.Space.xs) {
       Text(title)
-        .font(.system(size: Tokens.FontSize.headingSmall, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink2)
+        .font(Tokens.V1.Text.heading.font)
+        .foregroundStyle(Tokens.V1.Color.ink2)
       Text(detail)
-        .font(.system(size: Tokens.FontSize.uiEmphasis))
-        .foregroundStyle(Tokens.Color.ink3)
+        .font(Tokens.V1.Text.meta.font)
+        .foregroundStyle(Tokens.V1.Color.ink3)
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: Tokens.Layout.emptyStateContentWidth)
+
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .padding(Tokens.Spacing.lg)
+    .padding(Tokens.V1.Space.md)
   }
 
   // MARK: - 收割箱(08-17 #4):精转后未入册专名,入册永远由用户拍板
 
   private var harvestSection: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
-      HStack(spacing: Tokens.Spacing.xs) {
-        Text("收割箱")
-          .font(.system(size: Tokens.FontSize.headingSmall, weight: .semibold))
-          .foregroundStyle(Tokens.Color.ink)
-        if !model.harvestItems.isEmpty {
-          Text("\(model.harvestItems.count) 个候选")
-            .font(.system(size: Tokens.FontSize.ui))
-            .foregroundStyle(Tokens.Color.ink4)
+    VStack(spacing: .zero) {
+      HStack(spacing: Tokens.V1.Space.xs) {
+        Text("收割箱").font(Tokens.V1.Text.heading.font).foregroundStyle(Tokens.V1.Color.ink)
+          .runtimeAccessibilityIdentifier("settings.group.收割箱.heading")
+        Text("\(model.harvestItems.count) 个候选")
+          .font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
+        Spacer(minLength: .zero)
+        Button("全部忽略") {
+          bulkAction = BulkAction(accepting: false, words: model.harvestItems.map(\.text))
         }
-        Spacer(minLength: Tokens.Spacing.xsm)
+        .buttonStyle(.v1Outline)
+        .disabled(model.harvestItems.isEmpty)
+        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.ignore-all")
       }
-      Text("纪要生成时顺带发现的未入册专名。并入现有条目当称呼、立为新主体，或忽略——绝不自动入册。")
-        .font(.system(size: Tokens.FontSize.ui))
-        .foregroundStyle(Tokens.Color.ink4)
-        .fixedSize(horizontal: false, vertical: true)
+      .padding(.horizontal, Tokens.V1.Space.md)
+      .frame(height: Tokens.V1.Size.barHeight)
+      regionDivider
       if model.harvestItems.isEmpty {
         Text("暂无待收割生词")
-          .font(.system(size: Tokens.FontSize.uiEmphasis))
-          .foregroundStyle(Tokens.Color.ink3)
-          .padding(.vertical, Tokens.Spacing.xs)
+          .font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          .padding(Tokens.V1.Space.md)
           .runtimeAccessibilityIdentifier("settings.dictionary.harvest.empty")
       } else {
+        harvestTools
+        regionDivider
         ScrollView {
-          VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-            ForEach(model.harvestItems) { item in
-              harvestRow(item)
-            }
+          LazyVStack(alignment: .leading, spacing: .zero) {
+            ForEach(model.harvestItems) { item in harvestRow(item) }
           }
         }
-        .frame(maxHeight: 168)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.viewport")
       }
     }
-    .padding(.horizontal, Tokens.Spacing.lg)
-    .padding(.vertical, Tokens.Spacing.sm)
+    .modifier(DictionaryRegionSurface())
+    .runtimeAccessibilityIdentifier("settings.dictionary.harvest.region")
+    .help("纪要生成时发现的未入库专名；由你决定并入、立为新主体或忽略。")
+  }
+
+  private var harvestTools: some View {
+    HStack(spacing: Tokens.V1.Space.xs) {
+      harvestCheckbox(
+        "全选", isSelected: selectedCandidates.count == model.harvestItems.count,
+        isMixed: !selectedCandidates.isEmpty && selectedCandidates.count < model.harvestItems.count
+      ) {
+        selectedHarvestWords =
+          selectedCandidates.count == model.harvestItems.count
+          ? [] : Set(model.harvestItems.map(\.text))
+      }
+      .runtimeAccessibilityIdentifier("settings.dictionary.harvest.select-all")
+      Spacer(minLength: .zero)
+      if !selectedCandidates.isEmpty {
+        Button {
+          bulkAction = BulkAction(accepting: true, words: selectedCandidates)
+        } label: {
+          Text("采纳所选 \(selectedCandidates.count) 个")
+            .runtimeAccessibilityIdentifier(
+              "settings.dictionary.harvest.selection-count.\(selectedCandidates.count)")
+        }
+        .accessibilityValue("\(selectedCandidates.count)")
+        .buttonStyle(.v1Outline)
+        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.accept-selected")
+      }
+    }
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .padding(.vertical, Tokens.V1.Space.sm)
   }
 
   private func harvestRow(_ item: HarvestBoxItem) -> some View {
-    HStack(spacing: Tokens.Spacing.xsm) {
-      Text(item.text)
-        .font(.system(size: Tokens.FontSize.body))
-        .foregroundStyle(Tokens.Color.ink)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .help(item.text)
-      Text("共 \(item.totalCount) 次 · \(item.meetingCount) 场")
-        .font(.system(size: Tokens.FontSize.secondary))
-        .foregroundStyle(Tokens.Color.ink4)
-        .lineLimit(1)
-      Spacer(minLength: Tokens.Spacing.xxs)
-      Menu {
-        ForEach(model.mergeTargets, id: \.self) { canonical in
-          Button("并入「\(canonical)」当称呼") {
-            model.harvestMerge(item.text, into: canonical)
-          }
+    HStack(spacing: Tokens.V1.Space.xs) {
+      harvestCheckbox(
+        "选择「\(item.text)」", isSelected: selectedHarvestWords.contains(item.text),
+        showsTitle: false
+      ) {
+        if !selectedHarvestWords.insert(item.text).inserted {
+          selectedHarvestWords.remove(item.text)
         }
-      } label: {
-        Text("并入…")
-          .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
       }
-      .menuStyle(.button)
-      .buttonStyle(.textAction)
-      .fixedSize()
-      .disabled(model.mergeTargets.isEmpty)
-      .help(
-        model.mergeTargets.isEmpty
-          ? "词典还没有可并入的主体条目"
-          : "把「\(item.text)」追加为某个现有主体的称呼"
-      )
-      .accessibilityLabel("把「\(item.text)」并入现有条目当称呼")
-      .runtimeAccessibilityIdentifier("settings.dictionary.harvest.merge")
-      Button("新主体") {
-        model.harvestAddNewSubject(item.text)
+      .runtimeAccessibilityIdentifier("settings.dictionary.harvest.select.\(item.text)")
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s2xs) {
+        Text(item.text)
+          .font(Tokens.V1.Text.body.font)
+          .foregroundStyle(Tokens.V1.Color.ink)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .help(item.text)
+        Text("共 \(item.totalCount) 次 · \(item.meetingCount) 场")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
       }
-      .buttonStyle(.textAction)
-      .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-      .help("把「\(item.text)」作为新主体加进词典")
-      .accessibilityLabel("把「\(item.text)」立为新主体")
-      .runtimeAccessibilityIdentifier("settings.dictionary.harvest.new")
-      Button("忽略") {
-        model.harvestIgnore(item.text)
+      Spacer(minLength: .zero)
+      HStack(spacing: Tokens.V1.Space.s2xs) {
+        Menu {
+          ForEach(model.mergeTargets, id: \.self) { canonical in
+            Button("并入「\(canonical)」当称呼") {
+              model.harvestMerge(item.text, into: canonical)
+            }
+          }
+        } label: {
+          Text("并入词条")
+            .font(Tokens.V1.Text.micro.font)
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(
+          V1ButtonStyle.v1Outline.height(Tokens.V1.Size.controlSm).labelFont(
+            Tokens.V1.Text.meta.font)
+        )
+        .fixedSize()
+        .layoutPriority(1)
+        .disabled(model.mergeTargets.isEmpty)
+        .help(
+          model.mergeTargets.isEmpty
+            ? "词典还没有可并入的主体条目"
+            : "把「\(item.text)」追加为某个现有主体的称呼"
+        )
+        .accessibilityLabel("把「\(item.text)」并入现有条目当称呼")
+        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.merge")
+        Button("新主体") {
+          model.harvestAddNewSubject(item.text)
+        }
+        .buttonStyle(
+          V1ButtonStyle.v1Outline.height(Tokens.V1.Size.controlSm).labelFont(
+            Tokens.V1.Text.meta.font)
+        )
+        .font(Tokens.V1.Text.strong.font)
+        .fixedSize()
+        .help("把「\(item.text)」作为新主体加进词典")
+        .accessibilityLabel("把「\(item.text)」立为新主体")
+        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.new")
+        Button("忽略") {
+          model.harvestIgnore(item.text)
+        }
+        .buttonStyle(
+          V1ButtonStyle.v1Outline.height(Tokens.V1.Size.controlSm).labelFont(
+            Tokens.V1.Text.meta.font)
+        )
+        .font(Tokens.V1.Text.meta.font)
+        .foregroundStyle(Tokens.V1.Color.ink3)
+        .fixedSize()
+        .help("从收割箱移除「\(item.text)」，之后不再出现")
+        .accessibilityLabel("忽略「\(item.text)」")
+        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.ignore")
       }
-      .buttonStyle(.textAction)
-      .font(.system(size: Tokens.FontSize.ui))
-      .foregroundStyle(Tokens.Color.ink3)
-      .help("从收割箱移除「\(item.text)」，之后不再出现")
-      .accessibilityLabel("忽略「\(item.text)」")
-      .runtimeAccessibilityIdentifier("settings.dictionary.harvest.ignore")
     }
-    .padding(.horizontal, Tokens.Spacing.sm)
-    .padding(.vertical, Tokens.Spacing.xxs)
+    .padding(.horizontal, Tokens.V1.Space.sm)
+    .padding(.vertical, Tokens.V1.Space.sm)
+    .frame(minHeight: Tokens.V1.Size.controlLg + Tokens.V1.Space.md)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(
-      RoundedRectangle(cornerRadius: Tokens.Radius.widget).fill(Tokens.Color.pane)
-    )
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
+    }
     .runtimeAccessibilityIdentifier("settings.dictionary.harvest.row.\(item.text)")
   }
 
-  // MARK: - 底部:词数 + 文件出处 + 重读
-
-  private var footer: some View {
-    HStack(spacing: Tokens.Spacing.xsm) {
-      Text("\(model.words.count) 个词")
-        .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink3)
-      Text(model.fileLabel)
-        .font(.system(size: Tokens.FontSize.secondary, design: .monospaced))
-        .foregroundStyle(Tokens.Color.ink4)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .textSelection(.enabled)
-      Spacer(minLength: Tokens.Spacing.xsm)
-      Button {
-        model.reload()
-      } label: {
-        Image(systemName: "arrow.clockwise")
-          .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
-      }
-      .buttonStyle(.iconHover)
-      .help("重新读取词典文件(在别处直接改过文件时用)")
-      .accessibilityLabel("重新读取词典文件")
-    }
-    .padding(.horizontal, Tokens.Spacing.lg)
-    .padding(.vertical, Tokens.Spacing.sm)
+  private func harvestCheckbox(
+    _ title: String, isSelected: Bool, isMixed: Bool = false,
+    showsTitle: Bool = true, action: @escaping () -> Void
+  ) -> some View {
+    DictionarySelectionCheckbox(
+      title: title, isSelected: isSelected, isMixed: isMixed,
+      showsTitle: showsTitle, action: action)
   }
+
 }
 
 // MARK: - 词条卡片
 
 private struct DictionaryWordCard: View {
   let word: String
+  let isSelected: Bool
+  let isSelecting: Bool
+  let onSelect: () -> Void
   let isRecentlySaved: Bool
   let isArmedForDeletion: Bool
   let onEdit: () -> Void
@@ -406,34 +602,33 @@ private struct DictionaryWordCard: View {
   @State private var isHovering = false
   @State private var isHoveringEdit = false
   @State private var isHoveringDelete = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// 卡片主体永远显示本名;称呼只报个数——一张卡片上摊开五种叫法,读的人先看到的是一堆别称。
   private var entry: DictionaryEntry? { DictionaryEntry.parse(word) }
 
   var body: some View {
-    HStack(spacing: Tokens.Spacing.xs) {
-      VStack(alignment: .leading, spacing: Tokens.Spacing.hairline) {
-        Text(entry?.canonical ?? word)
-          .font(.system(size: Tokens.FontSize.body))
-          .foregroundStyle(Tokens.Color.ink)
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .help(entry?.canonical ?? word)
-        if let count = entry?.appellations.count, count > 0 {
-          Text("称呼 \(count) 个")
-            .font(.system(size: Tokens.FontSize.caption))
-            .foregroundStyle(Tokens.Color.ink4)
-            .lineLimit(1)
-        }
+    HStack(spacing: Tokens.V1.Space.xs) {
+      Text(entry?.canonical ?? word)
+        .font(Tokens.V1.Text.body.font)
+        .foregroundStyle(Tokens.V1.Color.ink)
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .help(entry?.canonical ?? word)
+        .onTapGesture(count: 2, perform: onEdit)
+      if let count = entry?.appellations.count, count > 0 {
+        Text("\(count)")
+          .font(Tokens.V1.Text.micro.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .help("称呼 \(count) 个，双击编辑")
+          .accessibilityLabel("称呼 \(count) 个")
       }
-      Spacer(minLength: Tokens.Spacing.xxs)
+      Spacer(minLength: .zero)
       // 用 opacity 而不是 if:悬停按钮始终在布局树里,鼠标移入不会把卡片撑变形。
       // 间距 8、字号 12(2026-07-30 用户实测:原 spacing 2 / 10.5 号太挤,分不清也易误触)。
-      HStack(spacing: Tokens.Spacing.xsm) {
+      HStack(spacing: Tokens.V1.Space.xs) {
         Button(action: onEdit) {
           Image(systemName: "pencil")
-            .foregroundStyle(isHoveringEdit ? Tokens.Color.ink : Tokens.Color.ink3)
+            .foregroundStyle(isHoveringEdit ? Tokens.V1.Color.ink : Tokens.V1.Color.ink3)
         }
         .help("编辑")
         .onHover { isHoveringEdit = $0 }
@@ -447,7 +642,7 @@ private struct DictionaryWordCard: View {
         } label: {
           Image(systemName: isArmedForDeletion ? "trash.fill" : "trash")
             .foregroundStyle(
-              isHoveringDelete || isArmedForDeletion ? Tokens.Color.warn : Tokens.Color.ink3
+              isHoveringDelete || isArmedForDeletion ? Tokens.V1.Color.danger : Tokens.V1.Color.ink3
             )
         }
         .help(isArmedForDeletion ? "再点一次确认删除" : "删除")
@@ -455,67 +650,48 @@ private struct DictionaryWordCard: View {
         .accessibilityLabel(isArmedForDeletion ? "确认删除「\(word)」" : "删除「\(word)」")
       }
       .buttonStyle(.plain)
-      .font(.system(size: Tokens.FontSize.bodyMinimum))
-      .opacity(isHovering ? 1 : 0)
+      .font(Tokens.V1.Text.meta.font)
+      .opacity(isHovering && !isSelecting ? 1 : 0)
+      .allowsHitTesting(isHovering && !isSelecting)
+      .accessibilityHidden(!isHovering || isSelecting)
+      DictionarySelectionCheckbox(
+        title: "选择「\(word)」", isSelected: isSelected,
+        showsTitle: false, action: onSelect
+      )
+      .runtimeAccessibilityIdentifier("settings.dictionary.select.\(word)")
+      .opacity(isHovering || isSelecting ? 1 : 0)
+      .allowsHitTesting(isHovering || isSelecting)
+      .accessibilityHidden(!isHovering && !isSelecting)
+      .runtimeAccessibilityIdentifier(
+        isHovering || isSelecting
+          ? "settings.dictionary.checkbox.visible.\(word)"
+          : "settings.dictionary.checkbox.hidden.\(word)")
     }
-    .padding(.horizontal, Tokens.Spacing.sm)
-    .padding(.vertical, Tokens.Spacing.xsm)
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .frame(maxWidth: .infinity)
+    .frame(height: Tokens.V1.Size.railItem.height)
     .background(
-      isRecentlySaved ? Tokens.Color.acSoft : Tokens.Color.card,
-      in: RoundedRectangle(cornerRadius: Tokens.Radius.widget)
+      isRecentlySaved
+        ? Tokens.V1.Color.accentSoft
+        : isHovering || isSelected ? Tokens.V1.Color.paper3 : Tokens.V1.Color.raised
     )
-    .overlay(
-      RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-        .stroke(
-          isRecentlySaved || isHovering ? Tokens.Color.acLine : Tokens.Color.line,
-          lineWidth: 1
-        )
-    )
-    .tokenShadow(Tokens.Shadow.sh1)
-    .animation(reduceMotion ? nil : .easeOut(duration: Tokens.Motion.flashOut), value: isRecentlySaved)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
+    }
+
     .onHover { hovering in
       isHovering = hovering
       if !hovering {
         onDisarmDelete()
       }
     }
-    // 双击直接进编辑:比找悬停里的铅笔更顺手;单击落到页面手势上只负责收焦点。
-    .onTapGesture(count: 2, perform: onEdit)
+    // 双击本名编辑；勾选框与行尾按钮不参与双击识别。
     .help("双击编辑")
-  }
-}
-
-/// 常驻的「+ 新词」占位卡片:虚线描边,点击就地变成输入框。
-private struct GhostAddCard: View {
-  let onTap: () -> Void
-  @State private var isHovering = false
-
-  var body: some View {
-    Button(action: onTap) {
-      HStack(spacing: Tokens.Spacing.xxs) {
-        Image(systemName: "plus")
-          .font(.system(size: Tokens.FontSize.secondary, weight: .semibold))
-        Text("新词")
-          .font(.system(size: Tokens.FontSize.body))
-      }
-      .foregroundStyle(isHovering ? Tokens.Color.ac : Tokens.Color.ink4)
-      .padding(.horizontal, Tokens.Spacing.sm)
-      .padding(.vertical, Tokens.Spacing.xsm)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .overlay(
-        RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-          .strokeBorder(
-            isHovering ? Tokens.Color.acLine : Tokens.Color.line,
-            style: StrokeStyle(lineWidth: 1, dash: [4, 3])
-          )
-      )
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .onHover { isHovering = $0 }
-    .accessibilityLabel("新增一个词条")
-    .runtimeAccessibilityIdentifier("settings.dictionary.add")
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(entry?.canonical ?? word)
+    // 勾选框随悬停显示，旁白用户仍能随时进入或退出选择态。
+    .accessibilityAction(named: isSelected ? "取消选择" : "选择", onSelect)
+    .runtimeAccessibilityIdentifier("settings.dictionary.word.\(word)")
   }
 }
 
@@ -552,7 +728,7 @@ private struct DictionaryWordEditorCard: View {
   var body: some View {
     TextField(placeholder, text: $draft)
       .textFieldStyle(.plain)
-      .font(.system(size: Tokens.FontSize.body))
+      .font(Tokens.V1.Text.body.font)
       .focused(focus, equals: focusValue)
       .onSubmit { settle() }
       // 焦点被收走(点空白/切到别处)= 提交:失焦不能不了了之,这是"存没存"焦虑的根源。
@@ -566,14 +742,12 @@ private struct DictionaryWordEditorCard: View {
         return .handled
       }
       .onAppear { focus.wrappedValue = focusValue }
-      .padding(.horizontal, Tokens.Spacing.sm)
-      .padding(.vertical, Tokens.Spacing.xsm)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Tokens.Color.card, in: RoundedRectangle(cornerRadius: Tokens.Radius.widget))
-      .overlay(
-        RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-          .stroke(Tokens.Color.ac, lineWidth: 1.5)
-      )
+      .padding(.horizontal, Tokens.V1.Space.sm)
+      .frame(maxWidth: .infinity)
+      .frame(height: Tokens.V1.Size.control)
+      .modifier(V1FormSurface(focused: focus.wrappedValue == focusValue))
+      .padding(.horizontal, Tokens.V1.Space.sm)
+      .padding(.vertical, Tokens.V1.Space.xs)
       .accessibilityLabel(initialText.isEmpty ? "新词" : "编辑「\(initialText)」")
   }
 
@@ -604,6 +778,8 @@ private struct DictionaryWordEditorCard: View {
 @MainActor
 final class DictionaryPaneModel: ObservableObject {
   @Published private(set) var words: [String] = []
+  @Published private(set) var isLoading = false
+  private var reloadTask: Task<Void, Never>?
   @Published private(set) var editingWord: String?
   @Published private(set) var isAddingWord = false
   @Published private(set) var addingSessionID = 0
@@ -622,9 +798,10 @@ final class DictionaryPaneModel: ObservableObject {
   /// 收割箱(08-17 #4):全库 minutes.json 候选 − 名册词面 − 忽略表,聚合后的行。
   @Published private(set) var harvestItems: [HarvestBoxItem] = []
 
-  private let store: DictionaryStore
+  /// internal:壳里的设置页要把同一个 store 交给词典分区,不另开一个。
+  let store: DictionaryStore
   private let meetingStore: MeetingStore
-  private let harvestIgnoreStore: HarvestIgnoreStore
+  let harvestIgnoreStore: HarvestIgnoreStore
   private var flashTask: Task<Void, Never>?
   private var deleteArmTask: Task<Void, Never>?
 
@@ -636,9 +813,11 @@ final class DictionaryPaneModel: ObservableObject {
     self.store = store
     self.meetingStore = meetingStore
     self.harvestIgnoreStore = harvestIgnoreStore
-    // 在 init 里就读盘,而不是等 onAppear:页面第一帧就是真内容,不闪空态。
+    // 首帧只安排读取；会议枚举与纪要解码不占主线程。
     reload()
   }
+
+  var fileURL: URL { store.fileURL }
 
   var fileLabel: String {
     let path = store.fileURL.path
@@ -655,15 +834,43 @@ final class DictionaryPaneModel: ObservableObject {
     return words.filter { DictionarySettingsView.matches($0, keyword: keyword) }
   }
 
-  func reload() {
-    do {
-      words = try store.load()
-      readErrorMessage = nil
-    } catch {
-      readErrorMessage = "读取词典文件失败：\(error.localizedDescription)"
+  func reload(flashing saved: String? = nil) {
+    reloadTask?.cancel()
+    isLoading = true
+    let previousWords = words
+    let store = store
+    let meetingStore = meetingStore
+    let ignoreStore = harvestIgnoreStore
+    reloadTask = Task { [weak self] in
+      let snapshot = await Task.detached(priority: .userInitiated) {
+        var loadedWords = previousWords
+        var readFailure: String?
+        do { loadedWords = try store.load() } catch {
+          readFailure = "读取词典文件失败：\(error.localizedDescription)"
+        }
+        let roster = DictionaryEntry.parseAll(loadedWords).flatMap(\.allSpokenForms)
+        let ignored = (try? ignoreStore.load()) ?? []
+        let candidates = meetingStore.listMeetings().compactMap { record -> [HarvestCandidate]? in
+          guard let data = try? Data(contentsOf: record.paths.minutesStructured),
+            let document = try? StructuredArtifactCodec.decode(
+              MeetingMinutesDocument.self, from: data)
+          else { return nil }
+          return document.unknownProperNouns
+        }
+        return (
+          loadedWords, readFailure,
+          HarvestAggregator.aggregate(
+            candidatesByMeeting: candidates, rosterForms: roster, ignored: ignored)
+        )
+      }.value
+      // A superseded read must never replace a newer edit/reload.
+      guard !Task.isCancelled, let self else { return }
+      words = snapshot.0
+      readErrorMessage = snapshot.1
+      harvestItems = snapshot.2
+      isLoading = false
+      if writeErrorMessage == nil, let saved, words.contains(saved) { flash(saved) }
     }
-    // 收割箱跟着词表一起刷新:入册后按当前名册现算,已入册的候选立刻退箱。
-    reloadHarvest()
   }
 
   func dismissWriteError() {
@@ -732,8 +939,13 @@ final class DictionaryPaneModel: ObservableObject {
   }
 
   func confirmRemove(_ word: String) {
+    confirmRemove([word])
+  }
+
+  func confirmRemove(_ selected: [String]) {
     disarmDeletion()
-    persist(words.filter { $0 != word }, flashing: nil)
+    let removing = Set(selected)
+    persist(words.filter { !removing.contains($0) }, flashing: nil)
   }
 
   /// 搜索框回车:没有匹配 → 直接把搜索词加进词典;已有完全一致的词 → 闪那个词;
@@ -767,6 +979,7 @@ final class DictionaryPaneModel: ObservableObject {
   }
 
   private func persist(_ candidate: [String], flashing saved: String?) {
+    guard !isLoading else { return }
     do {
       try store.save(candidate)
       writeErrorMessage = nil
@@ -775,10 +988,7 @@ final class DictionaryPaneModel: ObservableObject {
     }
     // 成功要回读(拿到去重后的真身),失败更要回读(把界面拉回文件的真实状态)。
     // 读成功不得清写失败:否则横幅一闪即灭,用户以为存上了。
-    reload()
-    if writeErrorMessage == nil, let saved, words.contains(saved) {
-      flash(saved)
-    }
+    reload(flashing: saved)
   }
 
   private func flash(_ word: String) {
@@ -798,30 +1008,24 @@ final class DictionaryPaneModel: ObservableObject {
     words.compactMap { DictionaryEntry.parse($0)?.canonical }
   }
 
-  /// 全库聚合:逐场读 minutes.json 的 unknownProperNouns(v1 旧档为 nil 自然跳过),
-  /// 减名册词面、减忽略表。minutes.json 都是小文件,与 `reload()` 同步读盘一个口径;
-  /// 单场坏文件跳过,不挡整箱。
-  func reloadHarvest() {
-    let roster = DictionaryEntry.parseAll(words).flatMap(\.allSpokenForms)
-    let ignored = (try? harvestIgnoreStore.load()) ?? []
-    let candidatesByMeeting = meetingStore.listMeetings().compactMap {
-      record -> [HarvestCandidate]? in
-      guard
-        let data = try? Data(contentsOf: record.paths.minutesStructured),
-        let document = try? StructuredArtifactCodec.decode(
-          MeetingMinutesDocument.self,
-          from: data
-        )
-      else {
-        return nil
-      }
-      return document.unknownProperNouns
+  /// 刷新依然读取外部编辑，但在后台完成。
+  func reloadHarvest() { reload() }
+
+  func harvestAcceptAll(_ candidates: [String]) {
+    let additions = candidates.filter { existingWord(matching: $0) == nil }
+    guard !additions.isEmpty else { return }
+    persist(additions + words, flashing: nil)
+  }
+
+  func harvestIgnoreAll(_ candidates: [String]) {
+    guard !isLoading else { return }
+    do {
+      try harvestIgnoreStore.ignoreAll(candidates)
+      writeErrorMessage = nil
+    } catch {
+      writeErrorMessage = "写入收割忽略表失败：\(error.localizedDescription)"
     }
-    harvestItems = HarvestAggregator.aggregate(
-      candidatesByMeeting: candidatesByMeeting,
-      rosterForms: roster,
-      ignored: ignored
-    )
+    reloadHarvest()
   }
 
   /// 把候选词面追加为某现有主体的称呼:走 DictionaryStore 既有行语法保存通道。
@@ -854,11 +1058,63 @@ final class DictionaryPaneModel: ObservableObject {
 
   /// 忽略:进忽略表,不碰词典,也不回写任何会议的 minutes.json。
   func harvestIgnore(_ word: String) {
+    guard !isLoading else { return }
     do {
       try harvestIgnoreStore.ignore(word)
     } catch {
       writeErrorMessage = "写入收割忽略表失败：\(error.localizedDescription)"
     }
     reloadHarvest()
+  }
+}
+
+private struct DictionarySelectionCheckbox: View {
+  let title: String
+  let isSelected: Bool
+  var isMixed = false
+  var showsTitle = true
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: Tokens.V1.Space.xs) {
+        ZStack {
+          RoundedRectangle(cornerRadius: Tokens.V1.Radius.xs)
+            .fill(isSelected || isMixed ? Tokens.V1.Color.accent : Tokens.V1.Color.raised)
+            .overlay {
+              RoundedRectangle(cornerRadius: Tokens.V1.Radius.xs)
+                .strokeBorder(
+                  Tokens.V1.Color.controlRule, lineWidth: Tokens.V1.Size.controlRuleWidth)
+            }
+          if isSelected || isMixed {
+            Image(systemName: isMixed ? "minus" : "checkmark")
+              .font(.system(size: Tokens.V1.Space.sm - Tokens.V1.Space.s3xs, weight: .bold))
+              .foregroundStyle(Tokens.V1.Color.accentInk)
+          }
+        }
+        .frame(width: Tokens.V1.Size.checkBox, height: Tokens.V1.Size.checkBox)
+        if showsTitle { Text(title).font(Tokens.V1.Text.meta.font) }
+      }
+      .foregroundStyle(Tokens.V1.Color.ink2)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .fixedSize()
+    .accessibilityLabel(title)
+    .accessibilityValue(isMixed ? "部分选中" : isSelected ? "已选中" : "未选中")
+    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+  }
+}
+
+private struct DictionaryRegionSurface: ViewModifier {
+  func body(content: Content) -> some View {
+    content
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background(Tokens.V1.Color.raised)
+      .clipShape(RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg))
+      .overlay {
+        RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg)
+          .strokeBorder(Tokens.V1.Color.rule, lineWidth: Tokens.V1.Size.controlRuleWidth)
+      }
   }
 }

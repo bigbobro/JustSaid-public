@@ -11,7 +11,8 @@ public struct AudioRetentionSweepResult: Sendable, Equatable {
   }
 }
 
-/// 按用户档位删除超期且已精转会议的顶层 m4a 与本应用生成的回声副本。
+/// 按用户档位删除超期且已精转会议的顶层 m4a,以及 1.2.1 生成的回声副本录音(功能已下线,
+/// 旧会议里的副本只剩这里会清)。
 /// 不删文本或副本报告,不递归清理用户文件,不碰会议库外目录。
 public struct AudioRetentionSweeper {
   public var fileManager: FileManager
@@ -120,6 +121,8 @@ public struct AudioRetentionSweeper {
     }
   }
 
+  /// 1.2.1 回声副本的布局:`echo-reduction/<UUID>/report.json` + `microphone.wav`。生成它的服务已删除,
+  /// 这里只认与报告对得上的那份录音。
   /// Only the service-owned layout and matching report identify a derived audio file.
   /// Reject links and unknown folders; the existing retention policy is not a recursive delete.
   private func echoReductionAudioFiles(in record: MeetingRecord) throws -> [URL] {

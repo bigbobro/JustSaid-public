@@ -17,8 +17,6 @@ public struct MeetingLibraryView: View {
   @Binding private var retainedGlobalSearchQuery: String
   @Binding private var retainedGroupByClient: Bool
   private let activeMeetingTitle: String?
-  /// 生产由主工作台注入既有 `startMeeting`;nil 只服务不启动录制的隔离布局探针。
-  let onStartRecording: (() -> Void)?
   /// 顶栏「会议库 · N 场」的 N;列表 reload 后回写,避免顶栏自己扫盘。
   let onMeetingsCountChange: ((Int) -> Void)?
   /// 顶栏 ⋯ popover 的导入/重扫入口;列表头不再放这两颗按钮。
@@ -29,6 +27,16 @@ public struct MeetingLibraryView: View {
   @FocusState var isTranscriptSearchFocused: Bool
   @FocusState var isLibrarySearchFocused: Bool
   @FocusState var focusedPane: LibraryKeyboardPane?
+  /// 筛选面板默认展开:设计稿里它是常驻的第二面板,顶栏那颗只做收起/展开。
+  /// 默认收起会让「筛选」按钮成为唯一入口,而胶囊行与面板本该同时可见。
+  @State var showsFilterPanel = true
+  @State var searchMeetingFilter: String?
+  @Binding var retainedFilters: LibraryFilterSelection
+  let onFilterActionReady: ((@escaping () -> Void) -> Void)?
+  /// 面板展开状态回传,供顶栏那颗开关显示按下态。
+  let onFilterPanelVisibilityChange: ((Bool) -> Void)?
+  @State var showsMeetingPage: Bool
+  let onMeetingPageChange: ((URL?) -> Void)?
   @State var isTranscriptSearchPresented = false
   @State var transcriptSearchQuery = ""
   @State var isShowingChapterDirectory = false
@@ -39,8 +47,14 @@ public struct MeetingLibraryView: View {
   @State var librarySearchSpeakerFilter: String?
   /// 鼠标点选与删除邻近选中保留列表位置;键盘 / 回程仍同步滚动。
   @State var suppressNextSelectionScroll = false
-  @State var echoReductionMeeting: MeetingLibraryItem?
+  @State var showsSpeakerNaming = false
+  @State var processingInfoMeeting: MeetingLibraryItem?
   @Binding var retainedQueueFilter: LibraryQueueFilter
+  let returnsToTodos: Bool
+  let onReturnToTodos: (() -> Void)?
+  let todoPage: TodoPageModel?
+  let onShowTodos: (() -> Void)?
+  let onLibraryModel: ((MeetingLibraryModel) -> Void)?
 
   public init(
     meetingStore: MeetingStore = MeetingStore(),
@@ -58,12 +72,28 @@ public struct MeetingLibraryView: View {
     globalSearchQuery: Binding<String> = .constant(""),
     groupByClient: Binding<Bool> = .constant(false),
     queueFilter: Binding<LibraryQueueFilter> = .constant(.all),
-    onStartRecording: (() -> Void)? = nil,
+    filters: Binding<LibraryFilterSelection> = .constant(.init()),
+    onFilterActionReady: ((@escaping () -> Void) -> Void)? = nil,
+    onFilterPanelVisibilityChange: ((Bool) -> Void)? = nil,
+    onMeetingPageChange: ((URL?) -> Void)? = nil,
     onMeetingsCountChange: ((Int) -> Void)? = nil,
-    onChromeActionsReady: ((@escaping () -> Void, @escaping () -> Void) -> Void)? = nil
+    onChromeActionsReady: ((@escaping () -> Void, @escaping () -> Void) -> Void)? = nil,
+    initialMeetings: [MeetingLibraryItem] = [],
+    onSnapshot: (([MeetingLibraryItem]) -> Void)? = nil,
+    transcriptJumpSeconds: TimeInterval? = nil,
+    returnsToTodos: Bool = false,
+    onReturnToTodos: (() -> Void)? = nil,
+    deletedMeetingLedger: TodoDeletedMeetingLedger? = nil,
+    todoPage: TodoPageModel? = nil,
+    onShowTodos: (() -> Void)? = nil,
+    onLibraryModel: ((MeetingLibraryModel) -> Void)? = nil
   ) {
+    _retainedFilters = filters
+    self.onFilterActionReady = onFilterActionReady
+    self.onFilterPanelVisibilityChange = onFilterPanelVisibilityChange
+    _showsMeetingPage = State(initialValue: focus != nil)
+    self.onMeetingPageChange = onMeetingPageChange
     activeMeetingTitle = recordingSession?.currentTitle
-    self.onStartRecording = onStartRecording
     self.onMeetingsCountChange = onMeetingsCountChange
     self.onChromeActionsReady = onChromeActionsReady
     _retainedSelectedMeetingID = selectedMeetingID
@@ -73,44 +103,97 @@ public struct MeetingLibraryView: View {
     _retainedGlobalSearchQuery = globalSearchQuery
     _retainedGroupByClient = groupByClient
     _retainedQueueFilter = queueFilter
+    self.returnsToTodos = returnsToTodos
+    self.onReturnToTodos = onReturnToTodos
+    self.todoPage = todoPage
+    self.onShowTodos = onShowTodos
+    self.onLibraryModel = onLibraryModel
     _model = StateObject(
-      wrappedValue: MeetingLibraryModel(
-        meetingStore: meetingStore,
-        focus: focus,
-        restoredSelectedID: selectedMeetingID.wrappedValue,
-        restoredTab: selectedTab.wrappedValue,
-        restoredSearchQuery: globalSearchQuery.wrappedValue,
-        restoredGroupByClient: groupByClient.wrappedValue,
-        restoredQueueFilter: queueFilter.wrappedValue,
-        recordingSession: recordingSession,
-        postMeetingPipelineResolver: postMeetingPipelineResolver,
-        destinationHistory: exportDestinationHistory,
-        diagnosticsDestinationHistory: diagnosticsDestinationHistory,
-        postMeetingTasks: postMeetingTasks,
-        dictionaryStore: dictionaryStore
-      )
+      wrappedValue: {
+        let model = MeetingLibraryModel(
+          meetingStore: meetingStore,
+          focus: focus,
+          restoredSelectedID: selectedMeetingID.wrappedValue,
+          restoredTab: selectedTab.wrappedValue,
+          restoredSearchQuery: globalSearchQuery.wrappedValue,
+          restoredGroupByClient: groupByClient.wrappedValue,
+          restoredQueueFilter: queueFilter.wrappedValue,
+          recordingSession: recordingSession,
+          postMeetingPipelineResolver: postMeetingPipelineResolver,
+          destinationHistory: exportDestinationHistory,
+          diagnosticsDestinationHistory: diagnosticsDestinationHistory,
+          postMeetingTasks: postMeetingTasks,
+          dictionaryStore: dictionaryStore,
+          initialMeetings: initialMeetings,
+          transcriptJumpSeconds: transcriptJumpSeconds,
+          deletedMeetingLedger: deletedMeetingLedger
+        )
+        model.onSnapshotApplied = { items in
+          todoPage?.tagDirectory.replaceMeetings(items)
+          onSnapshot?(items)
+        }
+        onLibraryModel?(model)
+        return model
+      }()
     )
   }
 
   public var body: some View {
-    // 两栏以工作区视口为高度边界。避免 HSplitView 的宿主在 lazy 内容变化时
-    // 反复按内容估算纵向尺寸，带动整窗布局；分隔条仍只调整原有列宽。
+    meetingActionDialogs(libraryBody)
+  }
+
+  private var libraryBody: some View {
     GeometryReader { geometry in
-      HSplitView {
-        meetingList
-          .frame(
-            minWidth: Tokens.Layout.libraryListMinWidth,
-            idealWidth: Tokens.Layout.libraryListIdealWidth,
-            maxWidth: Tokens.Layout.libraryListMaxWidth
-          )
-          .frame(height: geometry.size.height)
-        detail
-          .frame(minWidth: Tokens.Layout.libraryDetailMinWidth)
-          .frame(height: geometry.size.height)
+      // 列表一直挂着,进会议只是把详情盖在上面(owner 2026-09-20)。
+      // 原来是 if/else 换视图:列表被拆掉,滚动位置只能事后靠锚点恢复,于是返回时
+      // 先画在顶上再跳一下,被锚住的那一行上面还留着半截日期节头(「空栏间隔」)。
+      // 不拆它,ScrollView 自己的偏移就在那儿,返回即原位,不需要任何恢复动作。
+      ZStack {
+        HStack(spacing: .zero) {
+          if showsFilterPanel { libraryFilterPanel }
+          meetingList
+        }
+        .opacity(showsMeetingPage ? 0 : 1)
+        .allowsHitTesting(!showsMeetingPage)
+        .accessibilityHidden(showsMeetingPage)
+        if showsMeetingPage {
+          // 从右推入、返回时推出。原来是瞬间硬切,人不知道自己往哪走了
+          // (owner 2026-09-20「感觉跟整个 app 不自然」)。
+          // 见 docs/design-system/README.md「往里走一层」。
+          detail
+            .background(Tokens.V1.Color.paper)
+            .transition(.move(edge: .trailing))
+            .onExitCommand {
+              if returnsToTodos {
+                onReturnToTodos?()
+              } else {
+                returnToMeetingLibrary()
+              }
+            }
+        }
       }
+      .animation(
+        reduceMotion ? nil : .easeOut(duration: Tokens.V1.Motion.base),
+        value: showsMeetingPage)
+      .frame(width: geometry.size.width, height: geometry.size.height)
     }
-    .background(Tokens.Color.bg)
-    .onAppear { model.reload() }
+    .background(Tokens.V1.Color.paper)
+    .dropDestination(for: URL.self) { urls, _ in
+      guard let url = urls.first, urls.count == 1 else { return false }
+      HangSentinel.shared.note("library:drop-import")
+      model.beginImport(sourceFileURL: url)
+      return true
+    }
+    .onAppear {
+      model.filterSelection = retainedFilters
+      model.reload()
+      onFilterActionReady?({
+        showsFilterPanel.toggle()
+        onFilterPanelVisibilityChange?(showsFilterPanel)
+      })
+      onFilterPanelVisibilityChange?(showsFilterPanel)
+    }
+    .onChange(of: model.filterSelection) { _, filters in retainedFilters = filters }
     .onAppear {
       onMeetingsCountChange?(model.meetings.count)
       onChromeActionsReady?({ pickImportFile() }, { model.reload() })
@@ -147,6 +230,7 @@ public struct MeetingLibraryView: View {
       // 回写 AppCoordinator(G3):⌘L 往返后新 model 用它恢复并重扫。
       retainedGlobalSearchQuery = query
       // 展开态与说话人 chip 是对某一次结果集的呈现选择,换词即清。
+      searchMeetingFilter = nil
       expandedSearchGroups = []
       librarySearchSpeakerFilter = nil
     }
@@ -168,7 +252,7 @@ public struct MeetingLibraryView: View {
     .onChange(of: model.visibleOrderedMeetings.map(\.id)) { oldIDs, meetingIDs in
       guard
         let retainedListScrollPosition,
-        !meetingIDs.contains(retainedListScrollPosition)
+        !meetingIDs.contains(LibraryListAnchor.meetingID(retainedListScrollPosition))
       else {
         return
       }
@@ -177,6 +261,9 @@ public struct MeetingLibraryView: View {
     }
     .onChange(of: activeMeetingTitle) { _, title in
       model.syncActiveMeetingTitle(title)
+    }
+    .sheet(item: $processingInfoMeeting) { item in
+      MeetingProcessingInfoView(item: item)
     }
     .sheet(item: $model.pendingImportSheet) { sheet in
       ImportRecordingForm(
@@ -192,10 +279,6 @@ public struct MeetingLibraryView: View {
           )
         }
       )
-    }
-    .sheet(item: $echoReductionMeeting) { item in
-      EchoReductionSheet(item: item, libraryModel: model)
-        .id(item.id)
     }
     .confirmationDialog(
       "这份录音较大且本机压不了",
@@ -216,10 +299,28 @@ public struct MeetingLibraryView: View {
     }
   }
 
+  func openMeetingPage(_ item: MeetingLibraryItem, resetTab: Bool = true) {
+    HangSentinel.shared.note("library:open-meeting")
+    model.select(item.id)
+    if resetTab { model.tab = .onePage }
+    // 不改锚点(owner 2026-09-20):原来进会议时把锚点改成这一场,返回时它就被顶到
+    // 列表第一行,整份列表看着像重新排了序。列表自己在滚动停下和卸载时记住真实位置。
+    showsMeetingPage = true
+    onMeetingPageChange?(item.paths.directory)
+    focusedPane = .detail
+  }
+
+  func returnToMeetingLibrary() {
+    HangSentinel.shared.note("library:return-to-list")
+    // 同上:返回沿用列表自己记住的位置,不把选中那一场顶到第一行。
+    showsMeetingPage = false
+    onMeetingPageChange?(nil)
+    focusedPane = .list
+  }
+
   /// F5:确认弹窗里选定份数后开跑。取 pending 与清 pending 只在这一处,
   /// 避免两个按钮各写一遍、漏清 pending 导致弹窗关不掉。
-  func startMinutesGeneration(scope: MinutesGenerationScope) {
-    guard let target = model.pendingMinutesGeneration else { return }
+  func startMinutesGeneration(for target: MeetingLibraryItem, scope: MinutesGenerationScope) {
     model.pendingMinutesGeneration = nil
     model.generateMinutes(for: target, scope: scope)
   }
@@ -236,6 +337,7 @@ public struct MeetingLibraryView: View {
   func goNamingFromMinutesDialog() {
     model.pendingMinutesGeneration = nil
     model.tab = .transcript
+    showsSpeakerNaming = true
   }
 
   func pickImportFile() {
@@ -260,6 +362,10 @@ enum LibraryKeyboardPane: Hashable {
 }
 
 func libraryScrollAnchor(_ anchor: String, oldIDs: [String], newIDs: [String]) -> String? {
+  if anchor.hasPrefix(LibraryListAnchor.sectionPrefix) {
+    return libraryScrollAnchor(LibraryListAnchor.meetingID(anchor), oldIDs: oldIDs, newIDs: newIDs)
+      .map { LibraryListAnchor.sectionPrefix + $0 }
+  }
   let surviving = Set(newIDs)
   if surviving.contains(anchor) { return anchor }
   guard let index = oldIDs.firstIndex(of: anchor) else { return newIDs.first }

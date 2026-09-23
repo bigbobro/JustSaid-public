@@ -44,15 +44,22 @@ public final class HarvestIgnoreStore: @unchecked Sendable {
 
   /// 追加一个忽略词面;已在表中为幂等成功。
   public func ignore(_ word: String) throws {
-    let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return }
+    try ignoreAll([word])
+  }
+
+  /// One locked, atomic write for a confirmed batch; preserve all existing ignored words.
+  public func ignoreAll(_ candidates: [String]) throws {
+    let additions = Set(candidates.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty })
+    guard !additions.isEmpty else { return }
     try synchronized {
       var words: Set<String> = []
       if fileManager.fileExists(atPath: fileURL.path) {
         let data = try Data(contentsOf: fileURL)
         words = Set(try StructuredArtifactCodec.decode([String].self, from: data))
       }
-      guard words.insert(trimmed).inserted else { return }
+      guard !additions.isSubset(of: words) else { return }
+      words.formUnion(additions)
       try fileManager.createDirectory(
         at: fileURL.deletingLastPathComponent(),
         withIntermediateDirectories: true

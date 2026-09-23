@@ -57,24 +57,27 @@ struct NameAlertNameRow: View {
   }
 }
 
-// MARK: - 纵向卡片名字区(C)
+// MARK: - 悬浮内容卡名字区
 
-/// 悬浮卡片与独立强提醒共用的 C 名字区:「有人叫你」与名字上下排,「知道了」独立在右;
-/// 长名字最多两行后省略。按钮闭包捕获渲染时的事件 id,不会确认后来到达的新事件。
+/// 确认闭包按值捕获当前事件,不会误确认后来到达的点名。
 struct NameAlertNameZone: View {
   let event: NameAlertEvent
   let onAcknowledge: (NameAlertEvent.ID) -> Void
 
   var body: some View {
     let eventID = event.id
-    HStack(alignment: .center, spacing: Tokens.Spacing.xl) {
-      VStack(alignment: .leading, spacing: Tokens.Spacing.hairline) {
+    HStack(spacing: Tokens.V1.Space.sm) {
+      Image(systemName: "bell")
+        .font(.system(size: Tokens.V1.Size.railIcon))
+        .foregroundStyle(Tokens.V1.Color.call)
+        .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
         Text("有人叫你")
-          .font(.system(size: Tokens.FontSize.ui, weight: .medium))
-          .foregroundStyle(Tokens.Color.acDeep)
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink2)
         Text(event.aliasText)
-          .font(.system(size: Tokens.FontSize.headline, weight: .bold))
-          .foregroundStyle(Tokens.Color.ink)
+          .font(Tokens.V1.Text.heading.font)
+          .foregroundStyle(Tokens.V1.Color.call)
           .lineLimit(2)
           .truncationMode(.tail)
           .fixedSize(horizontal: false, vertical: true)
@@ -84,16 +87,14 @@ struct NameAlertNameZone: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .accessibilityElement(children: .combine)
       .accessibilityLabel("有人叫你：\(event.aliasText)")
-
       Button {
         onAcknowledge(eventID)
       } label: {
-        Text("知道了")
-          .padding(.horizontal, Tokens.Spacing.xxs)
-          .padding(.vertical, Tokens.Spacing.hairline)
+        Image(systemName: "checkmark")
+          .font(.system(size: Tokens.V1.Text.body.size, weight: .bold))
       }
       .buttonStyle(AcknowledgeButtonStyle())
-      .fixedSize()
+      .help("知道了")
       .accessibilityLabel("知道了，确认这次点名")
       .runtimeAccessibilityIdentifier("name-alert.acknowledge")
     }
@@ -101,34 +102,36 @@ struct NameAlertNameZone: View {
   }
 }
 
-/// 「知道了」深青实底白字(已确认 C):浅色取 acDeep、深色取浅色档 ac,两种外观下白字都够对比;
-/// 悬停提亮一档,与组件库胶囊同一悬停纪律(0.12s easeOut、减少动态效果不动画)。
 private struct AcknowledgeButtonStyle: ButtonStyle {
+  var strong = false
   func makeBody(configuration: Configuration) -> some View {
-    AcknowledgeBody(configuration: configuration)
+    AcknowledgeBody(configuration: configuration, strong: strong)
   }
 
   private struct AcknowledgeBody: View {
     let configuration: ButtonStyleConfiguration
+    let strong: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     var body: some View {
       configuration.label
-        .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .semibold))
-        .foregroundStyle(Tokens.Color.onAccent)
-        .padding(.horizontal, Tokens.Spacing.sm)
-        .padding(.vertical, Tokens.Spacing.xxs)
+        .foregroundStyle(strong ? Tokens.V1.Color.handleAccent : Tokens.V1.Color.call)
+        .frame(width: Tokens.V1.Size.controlSm, height: Tokens.V1.Size.controlSm)
         .background(
-          RoundedRectangle(cornerRadius: Tokens.Radius.control)
-            .fill(
-              isHovering
-                ? Color(light: 0x0f76_6e, dark: 0x1486_7d)
-                : Color(light: 0x0b5d_57, dark: 0x0f76_6e))
+          strong
+            ? (isHovering ? Tokens.V1.Color.knob : Tokens.V1.Color.handleInk)
+            : (isHovering ? Tokens.V1.Color.paper2 : Tokens.V1.Color.raised), in: Circle()
         )
-        .opacity(configuration.isPressed ? 0.75 : 1)
+        .overlay {
+          Circle().strokeBorder(
+            strong ? Color.clear : Tokens.V1.Color.controlRule,
+            lineWidth: Tokens.V1.Size.controlRuleWidth)
+        }
+        .opacity(configuration.isPressed ? Tokens.V1.Feedback.pressedOpacity : 1)
         .onHover { isHovering = $0 }
-        .animation(reduceMotion ? nil : .easeOut(duration: Tokens.Motion.hover), value: isHovering)
+        .animation(
+          reduceMotion ? nil : .easeOut(duration: Tokens.V1.Motion.fast), value: isHovering)
     }
   }
 }
@@ -137,31 +140,97 @@ private struct AcknowledgeButtonStyle: ButtonStyle {
 
 /// 后台强提醒卡:只有名字与「知道了」,不含摘要、不超时、不抢焦点。与卡片同一套亮边与高光;
 /// 卡片只在有未确认点名时存在,确认后由面板淡出。
+/// 独立强提醒:桌面上那颗**胶囊**。
+///
+/// 设计系统 `.pill`(`styles.css`,画面见 `screens/overlays-desk.html` 与
+/// `screens/settings-name-alert.html`):40 高、pill 圆角、handle 深色底、
+/// handle-ink 文字、handle-accent 图标,一道竖线之后是一颗圆的「知道了」。
+///
+/// 2026-09-21 改回胶囊。此前是一张 408 宽的大卡片(42 的铃铛块 + 两行名字区 + 亮边),
+/// 那是实现没跟上设计:它要做的事只有一件——告诉你有人叫你、按一下确认,
+/// 不需要一张卡的体量压在别人的屏幕上(owner:「我们这个不是胶囊吗?」)。
 struct NameAlertStrongCard: View {
   let event: NameAlertEvent
   let onAcknowledge: (NameAlertEvent.ID) -> Void
 
+  var showsShadow = true
+
+  @ViewBuilder
   var body: some View {
-    HStack(spacing: Tokens.Spacing.md) {
-      Image(systemName: "bell.fill")
-        .font(.system(size: Tokens.FontSize.displaySmall, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ac)
-        .frame(width: 42, height: 42)
-        .background(Tokens.Color.acSoft, in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
-        .accessibilityHidden(true)
-      NameAlertNameZone(event: event, onAcknowledge: onAcknowledge)
+    if showsShadow {
+      pill
+        .tokenShadow(Tokens.V1.Shadow.floatNear)
+        .tokenShadow(Tokens.V1.Shadow.floatFar)
+    } else {
+      pill
     }
-    .padding(Tokens.Spacing.lg)
-    .frame(width: MeetingPresenceMetrics.strongCardWidth, alignment: .leading)
-    .background(Tokens.Color.card)
-    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.compactPanel))
-    .overlay { PresenceCardRim(isPending: true) }
+  }
+
+  @ViewBuilder
+  private var pill: some View {
+    let eventID = event.id
+    HStack(spacing: Tokens.V1.Space.sm) {
+      Image(systemName: "bell")
+        .font(.system(size: Tokens.V1.Text.micro.size, weight: .semibold))
+        .foregroundStyle(Tokens.V1.Color.handleAccent)
+        .accessibilityHidden(true)
+
+      // 「有人叫你 · 林澈」一行说完。名字加重,眼睛先落在它上面。
+      HStack(spacing: Tokens.V1.Space.s3xs) {
+        Text("有人叫你 ·")
+          .foregroundStyle(Tokens.V1.Color.handleInk)
+        Text(event.aliasText)
+          .fontWeight(.semibold)
+          .foregroundStyle(Tokens.V1.Color.handleInk)
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .help(event.aliasText)
+          .runtimeAccessibilityIdentifier("name-alert.name")
+      }
+      .font(Tokens.V1.Text.body.font)
+      .fixedSize(horizontal: false, vertical: true)
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel("有人叫你：\(event.aliasText)")
+
+      Rectangle()
+        .fill(Tokens.V1.Color.handleRule2)
+        .frame(width: Tokens.V1.Size.controlRuleWidth, height: Tokens.V1.Space.md)
+        .accessibilityHidden(true)
+
+      Button {
+        onAcknowledge(eventID)
+      } label: {
+        Image(systemName: "checkmark")
+          .font(.system(size: Tokens.V1.Text.micro.size, weight: .bold))
+      }
+      .buttonStyle(AcknowledgeButtonStyle(strong: true))
+      .help("知道了")
+      .accessibilityLabel("知道了，确认这次点名")
+      .runtimeAccessibilityIdentifier("name-alert.acknowledge")
+    }
+    .padding(.leading, Tokens.V1.Space.md)
+    .padding(.trailing, Tokens.V1.Space.s2xs)
+    .frame(height: MeetingPresenceMetrics.strongPillHeight)
+    .background(Tokens.V1.Color.handle, in: Capsule())
+    .overlay {
+      Capsule().strokeBorder(
+        Tokens.V1.Color.handleRule, lineWidth: Tokens.V1.Size.controlRuleWidth)
+    }
+    .frame(maxWidth: Tokens.V1.Size.overlayWidth)
+    .fixedSize(horizontal: false, vertical: true)
     .runtimeAccessibilityIdentifier("name-alert.strong-card")
   }
 }
 
 enum MeetingPresenceMetrics {
-  static let strongCardWidth: CGFloat = Tokens.Layout.compactOverlayWidth
+  /// 设计系统 `.pill` 的高度。2026-09-21 强提醒从 408 宽的卡片改回胶囊之后,
+  /// 宽度由内容决定,不再有 `strongCardWidth` 这个量。
+  static let strongPillHeight = Tokens.V1.Size.chipsRowHeight
+  // Keep the capsule's visible top 16pt below the menu bar, independent of shadow padding.
+  static let strongTopGap = Tokens.V1.Space.md
+  static let strongShadowSide = Tokens.V1.Shadow.floatFar.radius
+  static let strongShadowTop = Tokens.V1.Shadow.floatFar.radius - Tokens.V1.Shadow.floatFar.y
+  static let strongShadowBottom = Tokens.V1.Shadow.floatFar.radius + Tokens.V1.Shadow.floatFar.y
 }
 
 // MARK: - 点名亮边与慢速高光
@@ -182,9 +251,9 @@ extension EnvironmentValues {
 enum PresenceHighlight {
   /// 高光段占轮廓全长的比例。
   static let segment: CGFloat = 0.18
-  static let rim = Color(red: 220 / 255, green: 252 / 255, blue: 245 / 255)
-  static let glow = Color(red: 95 / 255, green: 208 / 255, blue: 196 / 255)
-  static let head = Color(red: 229 / 255, green: 1, blue: 248 / 255)
+  static let rim = Tokens.V1.Color.handleAccent
+  static let glow = Tokens.V1.Color.glow
+  static let head = Tokens.V1.Color.handleInk
 
   /// 亮度/淡入淡出过渡:减少动态效果时只保留短淡入淡出。
   static func fade(reduceMotion: Bool) -> Animation {
@@ -204,19 +273,27 @@ enum PresenceHighlight {
 /// 只有面板在屏、存在点名且未开减少动态效果时才走帧;减少动态效果下只留静态亮边。
 struct PresenceCardRim: View {
   let isPending: Bool
+  @Environment(\.colorScheme) private var colorScheme
   @Environment(\.presenceDecorationActive) private var isActive
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var shape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: Tokens.Radius.compactPanel)
+    RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg)
   }
 
   var body: some View {
     ZStack {
-      shape.strokeBorder(Tokens.Color.line, lineWidth: 1)
+      shape.strokeBorder(Tokens.V1.Color.rule, lineWidth: Tokens.V1.Size.controlRuleWidth)
       ZStack {
-        shape.strokeBorder(Tokens.Color.ac.opacity(0.14), lineWidth: 5)
-        shape.strokeBorder(Tokens.Color.ac, lineWidth: 2)
+        if colorScheme == .dark {
+          shape.inset(by: Tokens.V1.Size.focusWidth + Tokens.V1.Size.controlRuleWidth)
+            .strokeBorder(Tokens.V1.Color.call, lineWidth: Tokens.V1.Size.controlRuleWidth)
+        } else {
+          shape.strokeBorder(Tokens.V1.Color.glow, lineWidth: Tokens.V1.Space.xs)
+            .blur(radius: Tokens.V1.Size.handleGlowRadius)
+            .clipShape(shape)
+        }
+        shape.strokeBorder(Tokens.V1.Color.call, lineWidth: Tokens.V1.Size.focusWidth)
         if !reduceMotion {
           TimelineView(.animation(paused: !(isPending && isActive))) { context in
             let phase = PresenceHighlight.phase(at: context.date)
@@ -242,7 +319,9 @@ struct PresenceCardRim: View {
       wrappedTrim(outline, from: phase + length * 0.55, length: length * 0.45)
         .stroke(PresenceHighlight.head, style: StrokeStyle(lineWidth: 2, lineCap: .round))
     }
-    .shadow(color: PresenceHighlight.glow.opacity(0.6), radius: 2.5)
+    .shadow(
+      color: colorScheme == .dark ? .clear : PresenceHighlight.glow.opacity(0.6),
+      radius: Tokens.V1.Size.handleGlowRadius)
   }
 
   /// 闭合路径上从 `start` 起长 `length` 的一段;越过终点的部分接回起点。
@@ -352,7 +431,6 @@ private struct DockHandleBody: View, Animatable {
   let isRecording: Bool
   let isVisible: Bool
   let reduceMotion: Bool
-  @Environment(\.colorScheme) private var colorScheme
 
   var animatableData: AnimatablePair<CGFloat, CGFloat> {
     get { AnimatablePair(depth, pendingLevel) }
@@ -362,26 +440,22 @@ private struct DockHandleBody: View, Animatable {
     }
   }
 
-  private static let waveColor = Color(red: 95 / 255, green: 208 / 255, blue: 196 / 255)
-  private static let dotColor = Color(red: 230 / 255, green: 57 / 255, blue: 70 / 255)
+  private static let waveColor = Tokens.V1.Color.handleAccent
+  private static let dotColor = Tokens.V1.Color.handleRec
   private static let barLengths: [CGFloat] = [3.5, 7.5, 7.5, 3.5]
 
   var body: some View {
-    let isDark = colorScheme == .dark
     let fillShape = DockNotchShape(edge: edge, depth: depth, closed: true)
     let rimShape = DockNotchShape(edge: edge, depth: depth, closed: false)
     ZStack {
       fillShape.fill(.ultraThinMaterial)
-      fillShape.fill(
-        isDark
-          ? Color(red: 18 / 255, green: 20 / 255, blue: 24 / 255).opacity(0.86)
-          : Color(red: 30 / 255, green: 34 / 255, blue: 40 / 255).opacity(0.76))
-      fillShape.fill(Tokens.Color.ac.opacity(0.15 * pendingLevel))
-      rimShape.stroke(Color.white.opacity(isDark ? 0.22 : 0.32), lineWidth: 0.85)
-      rimShape.stroke(Color.white.opacity((isDark ? 0.45 : 0.75) * 0.85), lineWidth: 0.75)
+      fillShape.fill(Tokens.V1.Color.handle)
+      fillShape.fill(Tokens.V1.Color.glow.opacity(pendingLevel))
+      rimShape.stroke(Tokens.V1.Color.handleRule2, lineWidth: Tokens.V1.Size.handleInnerRimWidth)
+      rimShape.stroke(Tokens.V1.Color.handleRule, lineWidth: Tokens.V1.Size.handleRimWidth)
       rimShape
-        .stroke(PresenceHighlight.rim.opacity(0.98), lineWidth: 1.35)
-        .shadow(color: PresenceHighlight.glow.opacity(0.72), radius: 2.5)
+        .stroke(PresenceHighlight.rim, lineWidth: Tokens.V1.Size.handleAlertRimWidth)
+        .shadow(color: PresenceHighlight.glow, radius: Tokens.V1.Size.handleGlowRadius)
         .opacity(pendingLevel)
       if !reduceMotion && pendingLevel > 0 {
         TimelineView(.animation(paused: !(isPending && isVisible))) { context in
@@ -407,13 +481,15 @@ private struct DockHandleBody: View, Animatable {
     let fade = max(0, min(1, min(center, 1 - center) / 0.12))
     return ZStack {
       rim.trim(from: max(0, headPosition - length), to: min(1, max(0, headPosition)))
-        .stroke(PresenceHighlight.glow.opacity(0.5), lineWidth: 1.6)
+        .stroke(PresenceHighlight.glow, lineWidth: Tokens.V1.Size.handleGlintTailWidth)
       rim.trim(
         from: max(0, headPosition - length * 0.45), to: min(1, max(0, headPosition))
       )
-      .stroke(Color.white, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+      .stroke(
+        PresenceHighlight.head,
+        style: StrokeStyle(lineWidth: Tokens.V1.Size.handleGlintHeadWidth, lineCap: .round))
     }
-    .shadow(color: PresenceHighlight.glow.opacity(0.8), radius: 3)
+    .shadow(color: PresenceHighlight.glow, radius: Tokens.V1.Size.handleGlintGlowRadius)
     .opacity(fade)
   }
 
@@ -427,14 +503,14 @@ private struct DockHandleBody: View, Animatable {
     }
     let bars = ForEach(Self.barLengths.indices, id: \.self) { index in
       RoundedRectangle(cornerRadius: 0.8)
-        .fill(Self.waveColor.opacity(0.88))
+        .fill(Self.waveColor)
         .frame(
           width: edge.isVertical ? Self.barLengths[index] * scales[index] : 1.6,
           height: edge.isVertical ? 1.6 : Self.barLengths[index] * scales[index]
         )
     }
     let dot = Circle()
-      .fill(isRecording ? Self.dotColor : Tokens.Color.railInkDisabled)
+      .fill(isRecording ? Self.dotColor : Tokens.V1.Color.handleRule2)
       .frame(width: 4.2, height: 4.2)
     let group =
       edge.isVertical
@@ -519,21 +595,36 @@ struct NameAlertLibraryStrip: View {
 
 // MARK: - 会中工具栏开关
 
-/// 驾驶舱与会议库顶栏共用的点名提醒菜单,与设置读写同一份偏好。
+/// 点名提醒菜单,与设置读写同一份偏好。菜单内容两处一模一样,只是外面那层不同:
+/// 会议库顶栏是一颗带文字的胶囊,会中主窗的控制轨是一格图标。
+///
+/// 2026-09-21 owner 定:会中主窗里它从顶栏搬到控制轨——它本来就带一盏
+/// 「提醒中」的指示灯,而轨上已经有另一盏(录制块的红点与电平)。
+/// 两盏状态灯归到一起,顶栏只留会议身份与终止动作。
+enum NameAlertMenuPlacement {
+  /// 顶栏:图标 + 文字胶囊。
+  case toolbar
+  /// 控制轨:一格 44×46 的图标,带角标。
+  case rail
+}
+
 struct NameAlertToolbarMenu: View {
   @ObservedObject var preferences: NameAlertPreferencesStore
   let session: NameAlertSession?
+  var placement: NameAlertMenuPlacement = .toolbar
   let onOpenSettings: () -> Void
 
   var body: some View {
     if let session {
       NameAlertReminderStateReader(session: session) { state in
         NameAlertToolbarMenuContent(
-          preferences: preferences, reminderState: state, onOpenSettings: onOpenSettings)
+          preferences: preferences, reminderState: state, placement: placement,
+          onOpenSettings: onOpenSettings)
       }
     } else {
       NameAlertToolbarMenuContent(
-        preferences: preferences, reminderState: .notRecording, onOpenSettings: onOpenSettings)
+        preferences: preferences, reminderState: .notRecording, placement: placement,
+        onOpenSettings: onOpenSettings)
     }
   }
 }
@@ -550,7 +641,10 @@ private struct NameAlertReminderStateReader<Content: View>: View {
 private struct NameAlertToolbarMenuContent: View {
   @ObservedObject var preferences: NameAlertPreferencesStore
   let reminderState: NameAlertReminderState
+  var placement: NameAlertMenuPlacement = .toolbar
   let onOpenSettings: () -> Void
+
+  @State private var isHovering = false
 
   private var hasValidAliases: Bool {
     !NameAlertAliasSet(preferences.preferences.aliases).isEmpty
@@ -644,21 +738,93 @@ private struct NameAlertToolbarMenuContent: View {
       Divider()
       Button("设置名字与提醒…", action: onOpenSettings)
     } label: {
-      HStack(spacing: Tokens.Spacing.xxs) {
-        Image(systemName: symbol)
-          .foregroundStyle(status == .needsAliases ? Tokens.Color.warn : Tokens.Color.ink2)
-          .accessibilityHidden(true)
-        Text(title)
-          .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .semibold))
-          .foregroundStyle(Tokens.Color.ink2)
+      switch placement {
+      case .toolbar:
+        HStack(spacing: Tokens.Spacing.xxs) {
+          Image(systemName: symbol)
+            .foregroundStyle(status == .needsAliases ? Tokens.Color.warn : Tokens.Color.ink2)
+            .accessibilityHidden(true)
+          Text(title)
+            .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .semibold))
+            .foregroundStyle(Tokens.Color.ink2)
+        }
+      case .rail:
+        railLabel
       }
     }
     .menuStyle(.button)
     .menuIndicator(.hidden)
-    .buttonStyle(.toolbarPill)
-    .fixedSize()
+    .modifier(NameAlertMenuChrome(placement: placement))
     .help(detail)
     .accessibilityLabel("\(title)，\(detail)")
+  }
+}
+
+/// 轨上那一格的样子。尺寸、圆角、悬停与角标都照 `RailButton`——
+/// 它和闲聊、暂停原来是并排的同一种格子,不能长得不一样。
+extension NameAlertToolbarMenuContent {
+  fileprivate var railLabel: some View {
+    VStack(spacing: Tokens.V1.Space.s2xs) {
+      Image(systemName: symbol)
+        .font(.system(size: Tokens.V1.Size.railIcon, weight: .regular))
+        .accessibilityHidden(true)
+      Text("点名")
+        .font(Tokens.V1.Text.micro.font)
+        .lineLimit(1)
+    }
+    .foregroundStyle(railForeground)
+    .frame(width: Tokens.V1.Size.railItem.width, height: Tokens.V1.Size.railItem.height)
+    .background(
+      RoundedRectangle(cornerRadius: Tokens.V1.Radius.md)
+        .fill(railBackground)
+    )
+    .overlay(alignment: .topTrailing) {
+      if let dot = railStatusDot {
+        Circle()
+          .fill(dot)
+          .frame(width: Tokens.V1.Space.xs, height: Tokens.V1.Space.xs)
+          .overlay(Circle().stroke(Tokens.V1.Color.rail, lineWidth: Tokens.V1.Size.focusWidth))
+          .padding(.top, Tokens.V1.Space.s2xs)
+          .padding(.trailing, Tokens.V1.Space.xs)
+          .accessibilityHidden(true)
+          .runtimeAccessibilityIdentifier("cockpit.rail.name-alerts.dot")
+      }
+    }
+    .contentShape(Rectangle())
+    .onHover { isHovering = $0 }
+  }
+
+  /// 「提醒中」是绿灯(正在替你听),「需要设置名字」是警示黄。
+  /// 已暂停不点灯——没有状态就什么都不显示。
+  fileprivate var railStatusDot: Color? {
+    switch status {
+    case .active: return Tokens.V1.Color.accent
+    case .needsAliases: return Tokens.V1.Color.warn
+    case .paused, .idleReady: return nil
+    }
+  }
+
+  fileprivate var railForeground: Color {
+    Tokens.V1.Color.ink2
+  }
+
+  fileprivate var railBackground: Color {
+    if status == .active { return Tokens.V1.Color.paper3 }
+    return isHovering ? Tokens.V1.Color.scrim : .clear
+  }
+}
+
+/// 顶栏那颗是胶囊按钮,轨上那格自己画背景,不能再套一层胶囊。
+private struct NameAlertMenuChrome: ViewModifier {
+  let placement: NameAlertMenuPlacement
+
+  func body(content: Content) -> some View {
+    switch placement {
+    case .toolbar:
+      content.buttonStyle(.toolbarPill).fixedSize()
+    case .rail:
+      content.buttonStyle(.plain)
+    }
   }
 }
 
@@ -681,7 +847,7 @@ struct NameAlertSettingsCard: View {
           set: { preferences.setRemindersEnabled($0) }
         )
       )
-      .toggleStyle(.switch)
+      .toggleStyle(.v1Switch)
       .runtimeAccessibilityIdentifier("settings.name-alerts.enabled")
 
       Text("暂停提醒时不弹出、不发声，录制中仍在本机识别；恢复后不补发已识别的点名，新到达的识别可能来自几秒前的说话。")
@@ -765,7 +931,7 @@ struct NameAlertSettingsCard: View {
           set: { preferences.setSoundEnabled($0) }
         )
       )
-      .toggleStyle(.switch)
+      .toggleStyle(.v1Switch)
       .runtimeAccessibilityIdentifier("settings.name-alerts.sound")
 
       Text("名字只保存在本机，识别在本机完成；独立强提醒在投屏时仍可能被共享。")

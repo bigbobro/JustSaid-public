@@ -141,8 +141,12 @@ enum DockGeometry {
     )
   }
 
-  /// 独立强提醒卡:可用区域顶部居中偏右,不遮主窗中心。
+  /// 强提醒胶囊的可见上沿距菜单栏 16pt;面板的透明投影边不计入间距。
   static func strongAlertFrame(size: CGSize, in visible: CGRect) -> CGRect {
-    defaultWindowFrame(size: size, in: visible)
+    CGRect(
+      x: visible.midX - size.width / 2,
+      y: visible.maxY - MeetingPresenceMetrics.strongTopGap
+        + MeetingPresenceMetrics.strongShadowTop - size.height,
+      width: size.width, height: size.height)
   }
 }

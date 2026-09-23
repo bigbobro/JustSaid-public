@@ -17,12 +17,12 @@ extension MeetingLibraryView {
   /// 全库搜索行:放大镜聚焦钮(⌘⇧F)+ 输入框 + 「N 场 · M 条」计数 + 扫描中指示。
   /// Esc 在框内按下即清空并失焦,列表回满库。检索只读,零写入任何会议包文件。
   var librarySearchRow: some View {
-    HStack(spacing: Tokens.Spacing.xs) {
+    HStack(spacing: Tokens.V1.Space.xs) {
       Button {
         isLibrarySearchFocused = true
       } label: {
         Image(systemName: "magnifyingglass")
-          .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
+          .font(.system(size: Tokens.V1.Text.meta.size, weight: .semibold))
       }
       .buttonStyle(.iconHover)
       .keyboardShortcut("f", modifiers: [.command, .shift])
@@ -31,7 +31,7 @@ extension MeetingLibraryView {
       .runtimeAccessibilityIdentifier("library.search.focus")
       TextField("搜全部会议的原话", text: $model.librarySearchQuery)
         .textFieldStyle(.plain)
-        .font(.system(size: Tokens.FontSize.uiEmphasis))
+        .font(.system(size: Tokens.V1.Text.label.size))
         .focused($isLibrarySearchFocused)
         .onKeyPress(.escape) {
           clearLibrarySearch()
@@ -43,37 +43,37 @@ extension MeetingLibraryView {
           .runtimeAccessibilityIdentifier("library.search.scanning")
       }
       if !normalizedLibrarySearchQuery.isEmpty {
-        Text("\(model.librarySearchResults.count) 场 · \(model.librarySearchTotalHitCount) 条")
-          .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
-          .foregroundStyle(Tokens.Color.ink3)
+        Text("\(filteredSearchResults.count) 场 · \(filteredSearchResults.reduce(0) { $0 + visibleSearchHits($1).count }) 条")
+          .font(.system(size: Tokens.V1.Text.meta.size, weight: .semibold))
+          .foregroundStyle(Tokens.V1.Color.ink3)
           .fixedSize(horizontal: true, vertical: false)
           .runtimeAccessibilityIdentifier("library.search.count")
         Button {
           clearLibrarySearch()
         } label: {
           Image(systemName: "xmark")
-            .font(.system(size: Tokens.FontSize.glyphTiny, weight: .bold))
+            .font(.system(size: Tokens.V1.Text.micro.size, weight: .bold))
         }
         .buttonStyle(.iconHover)
         .accessibilityLabel("清空全库搜索")
         .runtimeAccessibilityIdentifier("library.search.clear")
       }
     }
-    .padding(.horizontal, Tokens.Spacing.sm)
-    .padding(.vertical, Tokens.Spacing.xsm)
+    .padding(.horizontal, Tokens.V1.Space.sm)
+    .padding(.vertical, Tokens.V1.Space.xs)
     .background(
-      Tokens.Color.cardWash,
-      in: RoundedRectangle(cornerRadius: Tokens.Radius.widget)
+      Tokens.V1.Color.paper2,
+      in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.md)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: Tokens.Radius.widget)
+      RoundedRectangle(cornerRadius: Tokens.V1.Radius.md)
         .stroke(
-          isLibrarySearchFocused ? Tokens.Color.ac : Tokens.Color.line,
-          lineWidth: 1
+          isLibrarySearchFocused ? Tokens.V1.Color.accent : Tokens.V1.Color.rule,
+          lineWidth: Tokens.V1.Size.controlRuleWidth
         )
     )
-    .padding(.horizontal, Tokens.Spacing.md)
-    .padding(.vertical, Tokens.Spacing.sm)
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .padding(.vertical, Tokens.V1.Space.sm)
   }
 
   private func clearLibrarySearch() {
@@ -84,24 +84,30 @@ extension MeetingLibraryView {
   /// 结果区:说话人 chip(R4)+ 按会议分组的命中。lazy 容器不加容器级
   /// `.textSelection`(长文档纪律);滚动位置不记忆、不逐帧写回。
   var librarySearchResultsList: some View {
-    VStack(alignment: .leading, spacing: 0) {
+    VStack(alignment: .leading, spacing: .zero) {
       librarySearchSpeakerChips
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: .zero) {
           if model.librarySearchResults.isEmpty, !model.isLibrarySearching {
             Text("全部会议的转写里都没有「\(normalizedLibrarySearchQuery)」。")
-              .font(.system(size: textScale.size(Tokens.FontSize.ui)))
-              .foregroundStyle(Tokens.Color.ink3)
+              .font(.system(size: textScale.size(Tokens.V1.Text.body.size)))
+              .foregroundStyle(Tokens.V1.Color.ink3)
               .fixedSize(horizontal: false, vertical: true)
-              .padding(Tokens.Spacing.md)
+              .padding(Tokens.V1.Space.md)
               .runtimeAccessibilityIdentifier("library.search.empty")
           }
-          ForEach(model.librarySearchResults, id: \.meetingID) { result in
+          ForEach(filteredSearchResults, id: \.meetingID) { result in
             librarySearchGroup(result)
           }
         }
       }
     }
+  }
+
+  private var filteredSearchResults: [LibrarySearchResult] {
+    let ids = Set(model.queueFilteredMeetings.map(\.id))
+    return model.librarySearchResults.filter { ids.contains($0.meetingID)
+      && (searchMeetingFilter == nil || searchMeetingFilter == $0.meetingID) }
   }
 
   /// 当前结果里出现过的显示名,按首次出现顺序——与转写页看到的名字同一结算口径。
@@ -122,40 +128,40 @@ extension MeetingLibraryView {
     let speakers = librarySearchSpeakers
     if speakers.count > 1 {
       ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: Tokens.Spacing.xs) {
+        HStack(spacing: Tokens.V1.Space.xs) {
           ForEach(speakers, id: \.self) { speaker in
             let isActive = librarySearchSpeakerFilter == speaker
             Button {
               librarySearchSpeakerFilter = isActive ? nil : speaker
             } label: {
               Text(speaker)
-                .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
-                .foregroundStyle(isActive ? Tokens.Color.acDeep : Tokens.Color.ink2)
+                .font(.system(size: Tokens.V1.Text.meta.size, weight: .semibold))
+                .foregroundStyle(isActive ? Tokens.V1.Color.accent : Tokens.V1.Color.ink2)
                 .lineLimit(1)
-                .padding(.horizontal, Tokens.Spacing.xsm)
-                .padding(.vertical, Tokens.Spacing.xxs)
+                .padding(.horizontal, Tokens.V1.Space.xs)
+                .padding(.vertical, Tokens.V1.Space.s2xs)
                 .background(
-                  Capsule().fill(isActive ? Tokens.Color.acSoft : Tokens.Color.cardWash)
+                  Capsule().fill(isActive ? Tokens.V1.Color.accentSoft : Tokens.V1.Color.paper2)
                 )
                 .overlay(
                   Capsule().stroke(
-                    isActive ? Tokens.Color.acLine : Tokens.Color.line,
-                    lineWidth: 1
+                    isActive ? Tokens.V1.Color.controlRule : Tokens.V1.Color.rule,
+                    lineWidth: Tokens.V1.Size.controlRuleWidth
                   )
                 )
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .hoverStrokeOutline(cornerRadius: Tokens.Radius.pill)
+            .hoverStrokeOutline(cornerRadius: Tokens.V1.Radius.pill)
             .help(isActive ? "取消只看「\(speaker)」的命中" : "只看「\(speaker)」的命中")
             .runtimeAccessibilityIdentifier(
               isActive ? "library.search.speaker-chip.active" : "library.search.speaker-chip"
             )
           }
         }
-        .padding(.horizontal, Tokens.Spacing.md)
+        .padding(.horizontal, Tokens.V1.Space.md)
       }
-      .padding(.bottom, Tokens.Spacing.xs)
+      .padding(.bottom, Tokens.V1.Space.xs)
     }
   }
 
@@ -173,23 +179,26 @@ extension MeetingLibraryView {
     if !hits.isEmpty,
       let item = model.meetings.first(where: { $0.id == result.meetingID })
     {
-      VStack(alignment: .leading, spacing: 0) {
-        HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.xs) {
+      VStack(alignment: .leading, spacing: .zero) {
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.V1.Space.xs) {
           Text(item.title)
-            .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .semibold))
-            .foregroundStyle(Tokens.Color.ink)
+            .font(.system(size: Tokens.V1.Text.label.size, weight: .semibold))
+            .foregroundStyle(Tokens.V1.Color.ink)
             .lineLimit(1)
             .truncationMode(.tail)
             .help(item.title)
-          Spacer(minLength: Tokens.Spacing.xxs)
+          Spacer(minLength: Tokens.V1.Space.s2xs)
+          Button("只看这场") { searchMeetingFilter = result.meetingID }
+            .buttonStyle(.v1Quiet)
+            .runtimeAccessibilityIdentifier("library.search.only-meeting")
           Text("\(item.compactStartedLabel) · \(hits.count) 条")
-            .font(.system(size: Tokens.FontSize.caption))
-            .foregroundStyle(Tokens.Color.ink4)
+            .font(.system(size: Tokens.V1.Text.meta.size))
+            .foregroundStyle(Tokens.V1.Color.ink4)
             .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.horizontal, Tokens.Spacing.md)
-        .padding(.top, Tokens.Spacing.sm)
-        .padding(.bottom, Tokens.Spacing.xxs)
+        .padding(.horizontal, Tokens.V1.Space.md)
+        .padding(.top, Tokens.V1.Space.sm)
+        .padding(.bottom, Tokens.V1.Space.s2xs)
         .runtimeAccessibilityIdentifier("library.search.group")
         let isExpanded = expandedSearchGroups.contains(result.meetingID)
         let shownHits = isExpanded ? hits : Array(hits.prefix(Self.searchGroupFoldLimit))
@@ -201,14 +210,14 @@ extension MeetingLibraryView {
             expandedSearchGroups.insert(result.meetingID)
           }
           .buttonStyle(.textAction)
-          .font(.system(size: Tokens.FontSize.secondary, weight: .semibold))
-          .foregroundStyle(Tokens.Color.acDeep)
-          .padding(.horizontal, Tokens.Spacing.md)
-          .padding(.vertical, Tokens.Spacing.xxs)
+          .font(.system(size: Tokens.V1.Text.meta.size, weight: .semibold))
+          .foregroundStyle(Tokens.V1.Color.accent)
+          .padding(.horizontal, Tokens.V1.Space.md)
+          .padding(.vertical, Tokens.V1.Space.s2xs)
           .runtimeAccessibilityIdentifier("library.search.more")
         }
         Divider()
-          .padding(.top, Tokens.Spacing.xxs)
+          .padding(.top, Tokens.V1.Space.s2xs)
       }
     }
   }
@@ -223,30 +232,31 @@ extension MeetingLibraryView {
       focusedMeetingTitleID = nil
       focusedPane = .detail
       model.openLibrarySearchHit(meetingID: result.meetingID, hit: hit)
+      if let item = model.selectedItem { openMeetingPage(item, resetTab: false) }
     } label: {
-      VStack(alignment: .leading, spacing: Tokens.Spacing.hairline) {
-        HStack(spacing: Tokens.Spacing.xs) {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
+        HStack(spacing: Tokens.V1.Space.xs) {
           Text(hit.timestamp)
-            .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-            .foregroundStyle(Tokens.Color.ink4)
+            .font(.system(size: Tokens.V1.Text.micro.size, design: .monospaced))
+            .foregroundStyle(Tokens.V1.Color.ink4)
           Text(hit.speaker)
-            .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
-            .foregroundStyle(Tokens.Color.ink3)
+            .font(.system(size: Tokens.V1.Text.meta.size, weight: .semibold))
+            .foregroundStyle(Tokens.V1.Color.ink3)
             .lineLimit(1)
         }
         librarySearchSnippet(hit.text)
-          .font(.system(size: textScale.size(Tokens.FontSize.bodyMinimum)))
-          .foregroundStyle(Tokens.Color.ink2)
+          .font(.system(size: textScale.size(Tokens.V1.Text.body.size)))
+          .foregroundStyle(Tokens.V1.Color.ink2)
           .multilineTextAlignment(.leading)
           .fixedSize(horizontal: false, vertical: true)
       }
-      .padding(.horizontal, Tokens.Spacing.md)
-      .padding(.vertical, Tokens.Spacing.xxs)
+      .padding(.horizontal, Tokens.V1.Space.md)
+      .padding(.vertical, Tokens.V1.Space.s2xs)
       .frame(maxWidth: .infinity, alignment: .leading)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .hoverRowBackground(cornerRadius: Tokens.Radius.control)
+    .hoverRowBackground(cornerRadius: Tokens.V1.Radius.sm)
     .help("跳到这场会议的转写对应位置")
     .accessibilityLabel("\(hit.timestamp) \(hit.speaker) 的发言，点击定位到转写")
     .runtimeAccessibilityIdentifier("library.search.hit")
@@ -273,7 +283,7 @@ extension MeetingLibraryView {
     let trailing = String(text[match.upperBound..<end]) + (end < text.endIndex ? "…" : "")
     return Text(leading)
       + Text(String(text[match]))
-      .foregroundStyle(Tokens.Color.acDeep)
+      .foregroundStyle(Tokens.V1.Color.accent)
       .fontWeight(.semibold)
       + Text(trailing)
   }

@@ -25,7 +25,7 @@ struct StorageSettingsCard: View {
   private var binding: RoleProviderBinding { settingsStore.binding(for: role) }
 
   var body: some View {
-    RoleCardShell(title: "会后精转 · 对象存储", subtitle: "录音先上传到对象存储，再交给 ASR 拉取；与 AI 渠道相互独立") {
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
       LabeledField(label: "存储渠道") {
         Picker("", selection: storageKindSelection) {
           ForEach(StorageProviderKind.allCases) { kind in
@@ -276,5 +276,114 @@ struct StorageSettingsCard: View {
         lastSavedAt = Date()
       }
     )
+  }
+}
+
+/// 会后精转组里的对象存储行。提供方与连接配置分行，仍属于同一阶段卡：
+/// 录音先传到这里再交给 ASR 拉取,它是这个角色链路的一环,不是另一张卡。
+/// 地址与凭证收进「配置…」浮层——填一次就不再看,不该常驻在你改主意用的表单上。
+struct StorageSettingsRow: View {
+  @ObservedObject var settingsStore: ProviderSettingsStore
+  let secretDigest: any StoredSecretDigest
+
+  @State private var isConfiguring = false
+  @State private var testState: ConnectionTestState = .idle
+
+  private let role = ProviderRole.batchASR
+
+  private var binding: RoleProviderBinding { settingsStore.binding(for: role) }
+
+  var body: some View {
+    VStack(spacing: .zero) {
+      SettingsFormRow("对象存储") {
+        V1Dropdown(
+          value: storageKindSelection.wrappedValue.displayName,
+          identifier: "settings.storage.kind"
+        ) {
+          ForEach(StorageProviderKind.allCases) { kind in
+            Button(kind.displayName) { storageKindSelection.wrappedValue = kind }
+          }
+        }
+        .frame(width: Tokens.V1.Size.settingsModelField)
+      }
+      .runtimeAccessibilityIdentifier("settings.storage.provider")
+      SettingsFormRow("连接配置", labelDetail: summary) {
+        Button("配置…") { isConfiguring = true }
+          .buttonStyle(.v1Outline)
+          .runtimeAccessibilityIdentifier("settings.storage.configure")
+        Button(testState.isRunning ? "测试中…" : "测试连接") { runStorageConnectionTest() }
+          .buttonStyle(.v1Outline)
+          .disabled(testState.isRunning)
+          .runtimeAccessibilityIdentifier("settings.storage.test")
+      }
+      .runtimeAccessibilityIdentifier("settings.storage.connection")
+    }
+    .runtimeAccessibilityIdentifier("settings.storage")
+    .sheet(isPresented: $isConfiguring) {
+      SettingsSheetShell(
+        "对象存储",
+        subtitle: "录音先上传到对象存储，再交给 ASR 拉取；与 AI 渠道相互独立",
+        onDone: { isConfiguring = false }
+      ) {
+        StorageSettingsCard(settingsStore: settingsStore, secretDigest: secretDigest)
+      }
+    }
+
+    if let note = testState.settingsNote {
+      SettingsFormNote(note, tone: testState.isFailure ? .warn : .meta)
+    }
+  }
+
+  /// 「现在往哪儿传、密钥在不在」——一行说清,不用点开就知道要不要点开。
+  private var summary: String {
+    let target: String
+    switch binding.selectedStorageProviderKind {
+    case .azureBlob:
+      let container = binding.azureContainerURL ?? ""
+      target = container.isEmpty ? "未填容器" : ProviderEffectiveSummary.host(from: container)
+    case .volcengineTOS:
+      target = binding.tosBucket.isEmpty ? "未填桶" : binding.tosBucket
+    case .cloudflareR2:
+      let bucket = binding.r2Bucket ?? ""
+      target = bucket.isEmpty ? "未填桶" : bucket
+    }
+    return "\(target) · \(hasStoredSecret ? "密钥已保存" : "未存密钥")"
+  }
+
+  private var hasStoredSecret: Bool {
+    switch binding.selectedStorageProviderKind {
+    case .azureBlob:
+      return secretDigest.exists(slot: .azureAccountKey, for: binding)
+    case .volcengineTOS:
+      return secretDigest.exists(slot: .tosAccessKey, for: binding)
+    case .cloudflareR2:
+      return secretDigest.exists(slot: .r2AccessKey, for: binding)
+    }
+  }
+
+  private var storageKindSelection: Binding<StorageProviderKind> {
+    Binding(
+      get: { binding.selectedStorageProviderKind },
+      set: { newKind in
+        var updated = binding
+        updated.storageProviderKind = newKind
+        settingsStore.update(updated)
+        testState = .idle
+      }
+    )
+  }
+
+  private func runStorageConnectionTest() {
+    testState = .running
+    Task { @MainActor in
+      await settingsStore.refreshStorageHealth(showConfigurationErrors: true)
+      if let failure = settingsStore.storageHealthFailureMessage {
+        testState = .failed(message: failure)
+      } else if let message = settingsStore.storageHealthMessage {
+        testState = .succeeded(latencyMilliseconds: 0, replyPreview: message)
+      } else {
+        testState = .idle
+      }
+    }
   }
 }

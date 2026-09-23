@@ -28,7 +28,9 @@ final class CompactPanelController {
   private(set) var isContentHovered = false
   private(set) var isHandleMouseDown = false
   /// 内容里的按钮按住期间(SwiftUI 吞掉鼠标事件,由本地事件监视记录)不误收。
-  private(set) var isContentMouseDown = false
+  private(set) var isContentMouseDown = false {
+    didSet { overlayModel.isContentGeometryHeld = isContentMouseDown }
+  }
   private(set) var collapseTask: Task<Void, Never>?
 
   /// 优先定位到主窗所在屏幕;主窗关闭时退回主屏。
@@ -690,12 +692,18 @@ final class CompactPanelController {
   private func makeStrongPanel() -> NSPanel {
     strongPanelIsLoaded = true
     let panel = NonActivatingPanel(
-      contentRect: NSRect(x: 0, y: 0, width: MeetingPresenceMetrics.strongCardWidth, height: 60),
+      // 只是个起始尺寸:`hosting.sizingOptions = [.intrinsicContentSize]` 会按胶囊
+      // 的真实大小重算。给一个接近值,避免首帧从一个明显不同的框收过去。
+      contentRect: NSRect(
+        x: 0, y: 0, width: 260,
+        height: MeetingPresenceMetrics.strongPillHeight
+          + MeetingPresenceMetrics.strongShadowTop + MeetingPresenceMetrics.strongShadowBottom),
       styleMask: [.borderless, .nonactivatingPanel],
       backing: .buffered,
       defer: false
     )
     configure(panel)
+    panel.hasShadow = false
     let hosting = NSHostingView(
       rootView: StrongAlertPanelRoot(overlayModel: overlayModel, visibility: strongVisibility)
     )
@@ -758,6 +766,11 @@ private struct StrongAlertPanelRoot: View {
     ZStack {
       if let event = overlayModel.pendingEvent {
         NameAlertStrongCard(event: event, onAcknowledge: overlayModel.onAcknowledge)
+          // 胶囊的投影画在自身边界之外,无边框面板按内容自适应会把它切掉。
+          // 透明边覆盖两层投影的范围,不让系统再沿半透明投影补一层窗口阴影。
+          .padding(.horizontal, MeetingPresenceMetrics.strongShadowSide)
+          .padding(.top, MeetingPresenceMetrics.strongShadowTop)
+          .padding(.bottom, MeetingPresenceMetrics.strongShadowBottom)
           .transition(.opacity)
       }
     }
@@ -903,6 +916,21 @@ final class HoverTrackingView: NSView {
       view.topAnchor.constraint(equalTo: topAnchor),
       view.bottomAnchor.constraint(equalTo: bottomAnchor),
     ])
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    updateWindowShadow()
+  }
+
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    updateWindowShadow()
+  }
+
+  private func updateWindowShadow() {
+    // 深色 shadow-float 为 none;只去系统投影,点名描边与 glow 仍在。
+    window?.hasShadow = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) != .darkAqua
   }
 
   override var fittingSize: NSSize {

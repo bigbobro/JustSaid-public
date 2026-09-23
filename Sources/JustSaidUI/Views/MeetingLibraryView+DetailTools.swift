@@ -5,7 +5,7 @@ extension MeetingLibraryView {
   func tabBar(_ item: MeetingLibraryItem) -> some View {
     let namingPendingCount = model.namingSuggestionRows(for: item).pendingPrefillCount
     return HStack(spacing: Tokens.Spacing.xs) {
-      ForEach(MeetingDetailTab.allCases) { tab in
+      ForEach(MeetingDetailTab.visibleCases) { tab in
         LibraryDetailTabButton(
           tab: tab,
           isSelected: model.tab == tab,
@@ -37,15 +37,11 @@ extension MeetingLibraryView {
   func minutesToolRow(_ item: MeetingLibraryItem) -> some View {
     HStack(spacing: Tokens.Spacing.xs) {
       if model.hasEnglishMinutes(for: item) {
-        Picker("纪要语言", selection: $model.minutesVariant) {
-          ForEach(MinutesVariant.allCases) { variant in
-            Text(variant.title).tag(variant)
-          }
-        }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .frame(width: 96)
-        .accessibilityLabel("切换纪要语言，中文版或英文版")
+        V1SegmentedPicker(
+          "切换纪要语言，中文版或英文版", selection: $model.minutesVariant,
+          options: MinutesVariant.allCases.map { .init($0, $0.title) }
+        )
+        .fixedSize()
       }
       if model.minutesVariant == .chinese, model.minutesRevisions.count > 1 {
         Picker("纪要版本", selection: $model.minutesRevisionID) {
@@ -84,7 +80,28 @@ extension MeetingLibraryView {
   }
 
   func transcriptToolRow(_ item: MeetingLibraryItem) -> some View {
-    HStack(spacing: Tokens.Spacing.xs) {
+    // 状态驱动:没填名的人 + 待采纳的建议都归零时,这颗按钮消失,
+    // 读原文时工具行只剩搜索和目录(Fable 评审 2026-09-20)。
+    let todo = model.namingTodoCount(for: item)
+    return HStack(spacing: Tokens.Spacing.xs) {
+      if todo > 0 || showsSpeakerNaming {
+        Button {
+          showsSpeakerNaming = true
+        } label: {
+          HStack(spacing: Tokens.Spacing.xxs) {
+            Image(systemName: "person.text.rectangle")
+              .accessibilityHidden(true)
+            Text(todo > 0 ? "认名 \(todo)" : "认名")
+              .runtimeAccessibilityIdentifier("transcript.naming.todo.\(todo)")
+          }
+        }
+        .buttonStyle(.toolbarPill)
+        .help("给说话人填真名")
+        .runtimeAccessibilityIdentifier("transcript.naming.trigger")
+        // 面板不挂在这颗按钮上:认名要靠读正文回忆「这人说了什么」,
+        // 浮层和 sheet 都会挡住正文(owner 2026-09-20)。它去占右栏的位置,
+        // 见 MeetingLibraryView+DetailPane 的 meetingActionRail 分支。
+      }
       Button {
         showTranscriptSearch()
       } label: {
@@ -109,7 +126,10 @@ extension MeetingLibraryView {
       }
       .buttonStyle(.toolbarPill)
       .popover(isPresented: $isShowingChapterDirectory, arrowEdge: .bottom) {
-        ChapterDirectoryView(topics: model.selectedHistoryTopics) { topicID in
+        ChapterDirectoryView(
+          topics: model.selectedHistoryTopics,
+          showsBullets: true
+        ) { topicID in
           selectPostMeetingChapter(topicID)
         }
       }
@@ -143,29 +163,122 @@ private struct LibraryDetailTabButton: View {
           SectionCountBadge(label: "空", quiet: true)
         }
       }
-      .font(
-        .system(
-          size: Tokens.FontSize.uiEmphasis,
-          weight: isSelected ? .semibold : .regular
-        )
-      )
-      .foregroundStyle(isSelected ? Tokens.Color.acDeep : Tokens.Color.ink2)
-      .padding(.horizontal, Tokens.Spacing.sm)
-      .padding(.vertical, Tokens.Spacing.xxs)
-      .background(
-        RoundedRectangle(cornerRadius: Tokens.Radius.control)
-          .fill(isSelected ? Tokens.Color.acSoft : Color.clear)
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: Tokens.Radius.control)
-          .stroke(isSelected ? Tokens.Color.acLine : Color.clear, lineWidth: 1)
-      )
+      .font(isSelected ? Tokens.V1.Text.strong.font : Tokens.V1.Text.label.font)
+      .foregroundStyle(isSelected ? Tokens.V1.Color.ink : Tokens.V1.Color.ink3)
+      .lineLimit(1)
+      .padding(.vertical, Tokens.V1.Space.xs)
+      .overlay(alignment: .bottom) {
+        Rectangle().fill(isSelected ? Tokens.V1.Color.ink : .clear)
+          .frame(height: Tokens.V1.Size.focusWidth)
+      }
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.v1Quiet)
     .keyboardShortcut(tab.keyboardEquivalent, modifiers: .command)
     .runtimeAccessibilityIdentifier("library.tab.\(tab.rawValue)")
-    .hoverRowBackground(cornerRadius: Tokens.Radius.control)
     .help("\(tab.title) \(tab.keycapLabel)")
     .accessibilityHint(tab.keycapLabel)
+  }
+}
+
+
+extension MeetingLibraryView {
+  /// 认名面板。原来这三块常驻在转写首屏:说话人输入框一行、一句常驻说明、认名建议两行。
+  /// 说明那句还是无条件显示的(只有报错才被替换),纯系统自言自语占一整行。
+  /// 认名是一次性任务,做完就不再需要,所以收进这里;读原文时那一页只剩正文。
+  @ViewBuilder
+  func speakerNamingPanel(_ item: MeetingLibraryItem) -> some View {
+    let roster = model.speakerRoster(for: item)
+    let suggestions = model.namingSuggestionRows(for: item)
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
+      SectionHeaderRow(title: "这场会有谁", count: roster.count)
+      SpeakerNamingSuggestionBanner(
+        rows: suggestions,
+        onAdopt: { model.adoptNamingSuggestion($0, of: item) },
+        onDismiss: { model.dismissNamingSuggestion($0, of: item) },
+        onJump: model.jumpToTranscript,
+        resolve: { model.namingEvidence($0, of: item) }
+      )
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+        ForEach(roster) { entry in
+          VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
+            HStack(spacing: Tokens.V1.Space.xs) {
+              // 字段自己画标签 chip 与输入框,还带高亮/只看/不参会;这里不再重复画标签。
+              // 300 宽的栏里一行放不下 chip + 输入框 + 段数,段数挪到样本那一行。
+              SpeakerNameField(
+                label: entry.label,
+                name: entry.name,
+                isHighlighted: model.speakerHighlight
+                  == (entry.name.isEmpty ? entry.label : entry.name),
+                isExcluded: item.excludedSpeakers.contains(entry.label),
+                channelHint: SpeakerChannelHint.presentation(
+                  for: item.channelStats?[entry.label]),
+                onToggleHighlight: {
+                  model.toggleSpeakerHighlight(entry.name.isEmpty ? entry.label : entry.name)
+                },
+                onToggleExcluded: {
+                  model.setSpeakerExcluded(
+                    entry.label,
+                    excluded: !item.excludedSpeakers.contains(entry.label),
+                    of: item)
+                },
+                onFilter: {
+                  model.toggleSpeakerFilter(entry.name.isEmpty ? entry.label : entry.name)
+                },
+                onCommit: { model.setSpeakerName($0, for: entry.label, of: item) }
+              )
+              Spacer(minLength: .zero)
+              // 段数留着,样本原话删了(owner 2026-09-20:「肯定要回原文去看」)。
+              // 上一轮按 Fable 的意见在每个人下面铺一句最长原话,想让人不回正文就能认出
+              // 是谁;实拍下来九个人就是九段引文,面板全是字,反而看不见建议。
+              // 段数本身当跳转入口:点它落到这个人说得最长的那一处,回正文认人。
+              Button {
+                if let seconds = entry.longestLineSeconds { model.jumpToTranscript(seconds) }
+              } label: {
+                Text("\(entry.segmentCount) 段")
+                  .font(Tokens.V1.Text.meta.font)
+                  .foregroundStyle(Tokens.V1.Color.ink3)
+                  .monospacedDigit()
+              }
+              .buttonStyle(.plain)
+              .disabled(entry.longestLineSeconds == nil)
+              .help("跳到他说得最长的那一段")
+            }
+          }
+          .padding(.vertical, Tokens.V1.Space.s2xs)
+        }
+      }
+      if let error = model.speakerNameError {
+        Text(error)
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.warn)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      // 填完名字任务还没完:纪要里仍是「发言人 1」。给一个出口,
+      // 但走既有的份数与计费确认弹窗,不一点就跑(Fable 评审)。
+      if model.namingTodoCount(for: item) == 0, item.hasFormalMinutes {
+        Divider()
+        HStack(spacing: Tokens.V1.Space.xs) {
+          Text("纪要里还是旧名字")
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink3)
+          Spacer(minLength: .zero)
+          Button("重新生成纪要…") {
+            showsSpeakerNaming = false
+            model.pendingMinutesGeneration = item
+          }
+          .buttonStyle(.v1Outline)
+          .disabled(!model.canGenerateMinutes(for: item))
+        }
+      }
+      Divider()
+      HStack(spacing: Tokens.V1.Space.xs) {
+        Spacer(minLength: .zero)
+        Button("完成") { showsSpeakerNaming = false }
+          .buttonStyle(.v1Primary)
+          .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(Tokens.V1.Space.md)
+    .frame(width: Tokens.V1.Size.meetingRailWidth, alignment: .leading)
   }
 }

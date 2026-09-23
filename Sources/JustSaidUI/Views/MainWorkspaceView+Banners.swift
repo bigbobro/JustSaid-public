@@ -11,29 +11,137 @@ extension MainWorkspaceView {
   /// 驾驶舱里它们排在舞台之下、整理区之上(R9)。闲聊/暂停在控制轨上另有状态点 +
   /// 悬停卡作为**首要**信号(R2),这里的状态条保留为兜底:忘封口 = 后半场不进纪要,
   /// 是会真丢内容的一类,双通道显眼是 08-14 立的规矩,不在本轮撤销。
+  /// 判定用的平铺输入。每一项取自与原组件**同一个**来源,不另算。
+  var liveNoticeInputs: LiveNoticeInputs {
+    LiveNoticeInputs(
+      isRecording: recordingSession.phase == .recording,
+      isFailed: recordingSession.phase == .failed,
+      isAfterMeeting: recordingSession.phase == .completed
+        || recordingSession.phase == .stopping,
+      hasIssue: recordingSession.issue != nil,
+      microphoneRouteNotice: recordingSession.microphoneInputStatus.notice,
+      hasLegHealthNotice: recordingSession.startedAt != nil
+        && CaptureLeg.allCases.contains { leg in
+          guard let health = recordingSession.legHealth[leg],
+            let startedAt = recordingSession.startedAt
+          else { return false }
+          return RecordingSession.makeLegHealthNotice(
+            leg: leg, health: health, startedAt: startedAt) != nil
+        },
+      openChatRangeStart: openChatRange?.start,
+      isMicrophonePaused: recordingSession.isMicrophonePaused,
+      exclusionError: exclusionError,
+      partialCaptureNotice: recordingSession.partialCaptureNotice,
+      postMeetingStage: isShowingPostMeetingDetail ? .none : summaryFeed.postMeetingStage,
+      hasLanguageMismatch: languageMismatch != nil,
+      isShowingLowRecognition: isShowingLowRecognition
+    )
+  }
+
+  /// 本场详情已有进度卡;在仲裁前排除重复提示,不占顶部空间或折叠计数。
+  /// 选中行不代表打开详情,离开会议库后保留的目录也不代表当前正在显示。
+  private var isShowingPostMeetingDetail: Bool {
+    guard appCoordinator.workspaceMode == .library,
+      let displayedDirectory = appCoordinator.openedMeetingDirectory,
+      let noticeDirectory = summaryFeed.postMeetingDirectory
+        ?? recordingSession.currentMeetingDirectory
+    else { return false }
+    return displayedDirectory.standardizedFileURL == noticeDirectory.standardizedFileURL
+  }
+
+  /// 非打断类系统横幅。
+  ///
+  /// 2026-09-20 起走仲裁(README 第 78 行):闲聊中与麦克风已暂停永远显示、不折叠;
+  /// 其余按警示 → 信息 → 中性**只露第一条**,剩下的收进「还有 N 条提示」。
+  /// 在此之前这九条是一路堆下去的,最坏六条同时压在舞台之下,整理区只剩两三行。
+  ///
+  /// 显隐判定全部搬进 `LiveNoticeRegistry`——要仲裁就必须先知道哪几条在场,
+  /// 而原来这个知识藏在各组件内部,调用点无从判断。仍然只有一个地方决定显隐。
+  ///
+  /// 驾驶舱里它们排在舞台之下、整理区之上(R9)。闲聊/暂停在控制轨上另有状态点 +
+  /// 悬停卡作为**首要**信号(R2),这里的状态条保留为兜底:忘封口 = 后半场不进纪要,
+  /// 是会真丢内容的一类,双通道显眼是 08-14 立的规矩,不在本轮撤销。
   @ViewBuilder
   var systemBanners: some View {
-    MicrophoneInputRouteBanner(status: recordingSession.microphoneInputStatus)
-    legHealthBanner
-    // 无条件实例化(红线 6):未封口区间的显隐判断收在 `ChatExclusionBanner` 内部。
-    ChatExclusionBanner(openRangeStart: openChatRange?.start) {
-      closeChatExclusion()
+    let arbitrated = LiveNoticeRegistry.arbitrate(
+      LiveNoticeRegistry.notices(for: liveNoticeInputs),
+      isExpanded: isShowingAllNotices
+    )
+    // 条与条之间留缝、左右留白:它们是并列的几件事,不是一段连续的色带。
+    // 原来每条都通栏铺满、彼此不留缝,堆三条就是一块砖(2026-09-20 截图装置看出来的)。
+    // 整条结构在没有提示时不存在(红线 6),所以这层容器也只在有内容时才画。
+    if !arbitrated.visible.isEmpty || arbitrated.collapsedCount > 0 {
+      VStack(spacing: Tokens.V1.Space.s2xs) {
+        ForEach(arbitrated.visible) { notice in
+          noticeBody(notice.id)
+        }
+    // 展开/收起是同一颗:点开看全部,再点收回去。刻意做成 toggle 而不是「展开后自己收掉」——
+    // 会自己变回去的控件让人不敢点。新提示进来也不自动展开(那等于替用户决定他该被打断)。
+    if arbitrated.collapsedCount > 0 || isShowingAllNotices {
+      Button {
+        isShowingAllNotices.toggle()
+      } label: {
+        HStack(spacing: Tokens.V1.Space.xs) {
+          Text(isShowingAllNotices ? "收起提示" : "还有 \(arbitrated.collapsedCount) 条提示")
+          Image(systemName: isShowingAllNotices ? "chevron.up" : "chevron.down")
+            .font(.system(size: Tokens.FontSize.glyphTiny, weight: .semibold))
+          Spacer(minLength: .zero)
+        }
+        .font(Tokens.V1.Text.meta.font)
+        .foregroundStyle(Tokens.V1.Color.ink3)
+        .padding(.horizontal, Tokens.V1.Space.sm)
+        .padding(.vertical, Tokens.V1.Space.s2xs)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help(isShowingAllNotices ? "只看最要紧的那条" : "展开其余提示")
+      .runtimeAccessibilityIdentifier("cockpit.notices.more")
+      }
+      }
+      .padding(.horizontal, Tokens.V1.Space.md)
+      .padding(.top, Tokens.V1.Space.s2xs)
+      .padding(.bottom, Tokens.V1.Space.xs)
     }
-    // 同款无条件实例化(红线 6):暂停态显隐收在 `MicrophonePauseBanner` 内部。
-    // 与「闲聊中」细带可同时激活、上下相邻不合并——暂停=隐私工具(本侧
-    // 什么都不记),闲聊=照录但不进纪要,两者定位不同。
-    MicrophonePauseBanner(
-      isPaused: recordingSession.isMicrophonePaused,
-      pausedAt: microphonePausedAt
-    ) {
-      recordingSession.resumeMicrophone()
+  }
+
+  /// 一条提示画成什么。显隐已经由 registry 判完,这里只负责渲染。
+  @ViewBuilder
+  private func noticeBody(_ id: String) -> some View {
+    switch id {
+    case "microphone-route":
+      MicrophoneInputRouteBanner(status: recordingSession.microphoneInputStatus)
+    case "leg-health":
+      legHealthBanner
+    case "chat-open":
+      ChatExclusionBanner(openRangeStart: openChatRange?.start) {
+        closeChatExclusion()
+      }
+    case "microphone-paused":
+      // 与「闲聊中」可同时激活、上下相邻不合并——暂停=隐私工具(本侧什么都不记),
+      // 闲聊=照录但不进纪要,两者定位不同。两条都永不折叠。
+      MicrophonePauseBanner(
+        isPaused: recordingSession.isMicrophonePaused,
+        pausedAt: microphonePausedAt
+      ) {
+        recordingSession.resumeMicrophone()
+      }
+    case "exclusion-error":
+      if let exclusionError { DegradedBanner(text: exclusionError) }
+    case "language-mismatch":
+      languageMismatchBanner
+    case "low-recognition":
+      lowRecognitionBanner
+    case "partial-capture":
+      partialCaptureBanner
+    case "post-meeting":
+      postMeetingStatusBanner
+    case "engine-issue":
+      if let issue = recordingSession.issue {
+        DegradedBanner(text: "速记引擎异常 · \(issue.message)")
+      }
+    default:
+      EmptyView()
     }
-    if let exclusionError {
-      DegradedBanner(text: exclusionError)
-    }
-    languageMismatchBanner
-    lowRecognitionBanner
-    postMeetingBanner
   }
 
   /// 会后处理进度条：点完「结束会议」之后必须看得见后续在发生什么，以及从哪里看产物。
@@ -49,11 +157,14 @@ extension MainWorkspaceView {
   /// ② `phase = .completed` 全仓唯一写点在 `RecordingSession.stop()` 内、且 `stop()`
   /// guard 死 `phase == .recording`——所以门要重开必先经 `.recording`,
   /// 而 `.recording` 必然触发 `summaryFeed.start()` → 把横幅打回 `.none`。
+  /// 单路失败的「部分完成」横幅(08-05 事故):非模态、不打断,如实说明哪路自何时
+  /// 起缺失、保住了什么;会后进度行照常显示在下方——纪要仍会基于可用一路生成。
+  ///
+  /// 2026-09-20 从 `postMeetingBanner` 里拆出来:仲裁按条给,两条都在场时如果共用
+  /// 同一个 body,同一块会被画两遍。
   @ViewBuilder
-  private var postMeetingBanner: some View {
+  private var partialCaptureBanner: some View {
     if recordingSession.phase == .completed || recordingSession.phase == .stopping {
-      // 单路失败的"部分完成"横幅(08-05 事故):非模态、不打断,如实说明哪路自何时
-      // 起缺失、保住了什么;会后进度行照常显示在下方——纪要仍会基于可用一路生成。
       if let partialNotice = recordingSession.partialCaptureNotice {
         HStack(spacing: Tokens.Spacing.xsm) {
           Image(systemName: "exclamationmark.triangle.fill")
@@ -71,13 +182,19 @@ extension MainWorkspaceView {
         .accessibilityElement(children: .contain)
         .runtimeAccessibilityIdentifier("cockpit.partial-capture")
       }
+    }
+  }
+
+  @ViewBuilder
+  private var postMeetingStatusBanner: some View {
+    if recordingSession.phase == .completed || recordingSession.phase == .stopping {
       // 「查看本场会议」打开的是**渲染这条横幅时**捕获的那场会议:点下去那一刻再读
       // `currentMeetingDirectory`,拿到的可能已经是新开的下一场。
       let noticeDirectory =
         summaryFeed.postMeetingDirectory ?? recordingSession.currentMeetingDirectory
       // 无条件实例化(红线 6):显隐判断全部收在 `PostMeetingStatusBanner` 内部。
       // `.none` 时整条结构不存在——不再退化成一句永不消失的「本场会议已保存」。
-      // 会议库详情**不再有**对应横幅(08-10 改判:状态跟着会议行走)。
+      // 本场会议详情已有进度卡时,liveNoticeInputs 已在仲裁前排除这条重复提示。
       PostMeetingStatusBanner(
         stage: summaryFeed.postMeetingStage,
         actionTitle: "查看本场会议",
@@ -189,7 +306,7 @@ extension MainWorkspaceView {
         Spacer()
       }
       .font(.system(size: Tokens.FontSize.bodyMinimum))
-      .foregroundStyle(Tokens.Color.onAccent)
+      .foregroundStyle(Tokens.V1.Color.onRec)
       .padding(.horizontal, Tokens.Spacing.md)
       .padding(.vertical, Tokens.Spacing.xs)
       .background(Tokens.Color.rec)

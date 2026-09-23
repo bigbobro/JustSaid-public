@@ -12,6 +12,24 @@ public struct NameAlertEvent: Identifiable, Equatable, Sendable {
   public let kind: LiveDecodeObservation.Kind
   public let decodedRange: ClosedRange<TimeInterval>
   public let newCallCount: Int
+
+  public init(
+    id: UInt64,
+    meeting: UInt64,
+    aliasID: Int,
+    aliasText: String,
+    kind: LiveDecodeObservation.Kind,
+    decodedRange: ClosedRange<TimeInterval>,
+    newCallCount: Int
+  ) {
+    self.id = id
+    self.meeting = meeting
+    self.aliasID = aliasID
+    self.aliasText = aliasText
+    self.kind = kind
+    self.decodedRange = decodedRange
+    self.newCallCount = newCallCount
+  }
 }
 
 public enum NameAlertReminderState: Equatable, Sendable {

@@ -119,7 +119,8 @@ public struct LiveTranscriptRowID: Hashable {
   }
 }
 
-/// quick 覆盖两列下沿；pinned 只替换整理区正文，公共降级横幅仍在同一位置。
+/// quick 只覆盖左栏(整理区)下沿，右栏的补充记录不被挡；
+/// pinned 只替换整理区正文，公共降级横幅仍在同一位置。
 public struct LiveTranscriptPresentation<Header: View, Organizer: View, Sidebar: View>: View {
   @Binding var presentation: LiveTranscriptPresentationState
   var transcriptSegments: [TranscriptSegment]
@@ -162,23 +163,30 @@ public struct LiveTranscriptPresentation<Header: View, Organizer: View, Sidebar:
           }
         }
         .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+        // 抽屉只盖**左栏**(整理区)下沿,右栏不动。
+        //
+        // 2026-09-21 owner 定。原来它盖的是两列下沿,而右栏下面正是「补充记录」的
+        // 输入框与「标记重点」按钮——抽屉一展开,「边读转写边记重点」这条路径就被堵死,
+        // 而这恰恰是抽屉态最常见的用法。
+        //
+        // 左读右记:抽屉是来读的,读的是整理区旁边的原话;右栏是记的。两件事不该互相挡。
+        .overlay(alignment: .bottom) {
+          if presentation.mode == .quick {
+            transcript
+              .frame(height: Tokens.Layout.transcriptDrawerHeight)
+              .overlay(alignment: .top) { Divider() }
+              .shadow(
+                color: Tokens.Shadow.sh3.color, radius: Tokens.Shadow.sh3.radius,
+                x: 0, y: -Tokens.Shadow.sh3.y
+              )
+              .runtimeAccessibilityIdentifier("cockpit.transcript-drawer")
+          }
+        }
         .runtimeAccessibilityIdentifier("dashboard.organizer")
         Divider()
         sidebar
       }
       .frame(maxHeight: .infinity)
-      .overlay(alignment: .bottom) {
-        if presentation.mode == .quick {
-          transcript
-            .frame(height: Tokens.Layout.transcriptDrawerHeight)
-            .overlay(alignment: .top) { Divider() }
-            .shadow(
-              color: Tokens.Shadow.sh3.color, radius: Tokens.Shadow.sh3.radius,
-              x: 0, y: -Tokens.Shadow.sh3.y
-            )
-            .runtimeAccessibilityIdentifier("cockpit.transcript-drawer")
-        }
-      }
       if presentation.mode == .closed {
         Divider()
         TranscriptStripView(segments: transcriptSegments, presentation: $presentation)
@@ -240,7 +248,8 @@ public struct LiveTranscriptVerificationScene<Feed: SummaryFeed>: View {
         LiveTranscriptRailButton(presentation: $presentation)
         Spacer()
       }
-      .background(Tokens.Color.rail)
+      .frame(width: Tokens.V1.Size.railWidth)
+      .background(Tokens.V1.Color.rail)
       VStack(spacing: 0) {
         NowPaneView(state: feed.now, onJumpToTranscript: { presentation.show(at: $0) })
           .frame(height: Tokens.Layout.nowStageHeight)

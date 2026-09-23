@@ -333,6 +333,12 @@ public struct SummaryActionItem: Identifiable, Codable, Equatable, Sendable {
     self.origin = origin
   }
 
+  /// 勾掉这条待办时存进 `MeetingMetadata.completedActionItems` 的键:正文去首尾空白、连续空白并成一个。
+  /// 不用 `id`:纪要里没写 id 的条目每读一次就新生成一个 UUID,勾选会丢。
+  public var completionKey: String {
+    text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+  }
+
   private enum CodingKeys: String, CodingKey {
     case id
     case text

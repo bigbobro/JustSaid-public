@@ -4,19 +4,49 @@ import JustSaidCore
 
 /// 主工作台全局模式:两个页面共用同一个 SwiftUI 主窗和同一份会议状态。
 public enum WorkspaceMode: Equatable, Sendable {
+  case home
   case cockpit
   case library
+  /// 设置是壳里的一页,不是弹窗(F2 设计:settings-models.html 的左边就是图标轨)。
+  /// owner 2026-09-20:「点击设置之后,不应该再弹出一个框来做配置,
+  /// 而是直接在原本的应用里进入设置页面。」
+  case settings
+  case dictionary
+  /// 我的待办。从来源会议返回时模式仍停在这里,轨保持这一格高亮。
+  case todos
+}
+
+/// 从待办打开一场会议并跳到转写。先选中会议,再跳秒,见 `MeetingLibraryModel`。
+public struct TodoSourceSession: Equatable, Sendable {
+  public var directory: URL
+  public var seconds: TimeInterval?
+
+  public init(directory: URL, seconds: TimeInterval?) {
+    self.directory = directory
+    self.seconds = seconds
+  }
 }
 
 /// 应用级协调者(拍板 T11):安装菜单栏常驻入口、维持"关主窗不退出、录音继续"、
 /// 支持从菜单栏直接开始会议录音(未在录制时),并统一主窗的驾驶舱/会议库导航。
 @MainActor
 public final class AppCoordinator: ObservableObject {
-  @Published public private(set) var workspaceMode: WorkspaceMode = .library
+  @Published public private(set) var workspaceMode: WorkspaceMode = .home
+  /// 进设置之前停在哪一页。「完成」按原路回去。
+  private var modeBeforeSettings: WorkspaceMode = .home
+  private var modeBeforeDictionary: WorkspaceMode = .home
+  @Published public var openedMeetingDirectory: URL?
   @Published public private(set) var libraryFocus: URL?
   @Published public private(set) var libraryRefreshGeneration = 0
-  /// 会议库 remount 之间保留的纯呈现态。数据仍由每个新 model 重新扫盘；
-  /// 这里只记用户所在位置，不缓存会议内容与会后任务状态。
+  /// 上一次扫盘得到的会议列表。会议库与首页的 model 每次重建时先拿它把列表画出来,
+  /// 同时照常在后台重新扫盘,扫完就换成新的(owner 2026-09-21:「每次点会议库都有一个
+  /// 正在读取的过程」——原来新 model 从空表起步,46 场约 0.1–0.3 秒的扫盘期间整页只有
+  /// 「正在读取会议库…」)。旧列表最多只活一次扫盘的时间;行上的动作照旧走会后任务
+  /// 协调者的实时状态,不信这份快照。不设 @Published:它变了不需要重画谁。
+  public var libraryItemsCache: [MeetingLibraryItem] = [] {
+    didSet { todoPage.tagDirectory.replaceMeetings(libraryItemsCache) }
+  }
+  /// 会议库 remount 之间保留的纯呈现态:用户所在位置(选中哪场、哪一签、滚到哪)。
   @Published public var librarySelectedMeetingID: String?
   @Published public var librarySelectedTab: MeetingDetailTab = .onePage
   @Published public var libraryListScrollPosition: String?
@@ -31,12 +61,15 @@ public final class AppCoordinator: ObservableObject {
   /// 分段每次由新 model 按当下磁盘现算,不缓存旧分组。
   @Published public var libraryGroupByClient = false
   /// 指挥台滤镜(批3-C,G3):随 ⌘L remount 存活的呈现态。
+  @Published public var libraryFilterSelection = LibraryFilterSelection()
   @Published public var libraryQueueFilter = LibraryQueueFilter.all
-  /// 设置打开请求(批4 容器收敛):菜单 ⌘, 经此路由到主窗 sheet。
+  /// 设置打开请求(批4 容器收敛):菜单 ⌘, 经此路由到主窗设置页。
   /// 用「挂起标志 + 挂载补发」而不是裸代次:无主窗时 openSettings 先触发重开主窗,
   /// 新视图首次挂载晚于代次递增,onChange(initial: false)会把基线记在已递增值上
   /// 丢掉这次请求——与 pendingEndMeetingRequest/flushPendingMenuRequests 同款先例。
   @Published public var pendingSettingsRequest = false
+  /// 本次运行内记住设置分段；主窗重建不复位，也不写持久偏好。
+  @Published public var settingsSection: SettingsSection = .general
   /// 章节目录打开请求(批1 快捷键迁移):菜单 ⌘K 经此路由到当前 chrome 的 popover。
   /// 与 pendingSettingsRequest 同款:无主窗时命令先 openWindow,新视图 onAppear 消费。
   @Published public var pendingChapterDirectoryRequest = false
@@ -44,6 +77,8 @@ public final class AppCoordinator: ObservableObject {
   public let meetingStore: MeetingStore
   /// 点名提醒偏好的唯一实例:设置页、两套顶栏与会中呈现读写同一份。
   public let nameAlertPreferences: NameAlertPreferencesStore
+  /// 界面按哪个时区显示时间。固定值 + 本机变化检测,见 `DisplayTimeZone`。
+  public let displayTimeZone: DisplayTimeZone
   /// 会中呈现的应用级宿主(点名检测、摘要桥接、悬浮载体);主窗首次出现时安装一次,
   /// 主窗关闭或重建都不替换。
   @Published public private(set) var meetingPresence: MeetingPresenceController?
@@ -53,6 +88,12 @@ public final class AppCoordinator: ObservableObject {
   public let postMeetingTasks: PostMeetingTaskCoordinator
   /// 应用更新入口(设置页卡片)。由 App 层在启动时设置一次;开发构建为 nil。
   public var appUpdates: AppUpdatesModel?
+  /// 待办文件与页面状态。多窗口共用这一份,写成功后替换快照,各窗一起刷新。
+  public let todoStore: TodoStore
+  public let deletedMeetings: TodoDeletedMeetingLedger
+  public let todoPage: TodoPageModel
+  /// 非空时待办页让出来源会议,模式仍是 `.todos`。
+  @Published public var todoSourceSession: TodoSourceSession?
   /// 「结束会议」收尾(停止录制 → 补充记录落盘 → 启动会后处理)进行中的次数。应用更新的
   /// 退出守卫只读,覆盖补充记录写完到会后任务登记之间的交接;两条收尾入口各自成对增减。
   public private(set) var finishingMeetingCount = 0
@@ -84,6 +125,13 @@ public final class AppCoordinator: ObservableObject {
   /// 由 `flushPendingMenuRequests` 异步补发(必须异步一拍:注册发生在 onAppear 前段,
   /// 排除区间等状态在 onAppear 后段才装载,同拍直调会让「闲聊未封口」确认被跳过——
   /// 那正是 F-C4 要修的病,不能从后门再放回来)。
+  private var endMeetingFromMenus: (() -> Void)?
+  @Published public var isChatExclusionOpen = false
+  private enum LibraryCommand: Equatable { case importRecording, rescan }
+  private var pendingLibraryCommand: LibraryCommand?
+  private var libraryImportHandler: (() -> Void)?
+  private var libraryRescanHandler: (() -> Void)?
+  public var hasPendingLibraryCommand: Bool { pendingLibraryCommand != nil }
   private var pendingStartMeetingRequest = false
   private var pendingEndMeetingRequest = false
   private var pendingMarkRequest = false
@@ -102,10 +150,21 @@ public final class AppCoordinator: ObservableObject {
     meetingStore: MeetingStore = MeetingStore(),
     postMeetingPipelineResolver: (() throws -> PostMeetingPipeline)? = nil,
     postMeetingTasks: PostMeetingTaskCoordinator? = nil,
-    nameAlertDefaults: UserDefaults = .standard
+    nameAlertDefaults: UserDefaults = .standard,
+    todoStore: TodoStore = TodoStore(),
+    deletedMeetingLedger: TodoDeletedMeetingLedger? = nil
   ) {
     self.meetingStore = meetingStore
+    self.todoStore = todoStore
+    deletedMeetings = deletedMeetingLedger
+      ?? TodoDeletedMeetingLedger(fileURL: TodoDeletedMeetingLedger.defaultFileURL())
+    todoPage = TodoPageModel(store: todoStore, preferences: nameAlertDefaults)
     nameAlertPreferences = NameAlertPreferencesStore(defaults: nameAlertDefaults)
+    // 首次运行会把本机时区固定下来;之后每次启动比一次,变了由使用者决定换不换。
+    let timeZone = DisplayTimeZone(defaults: nameAlertDefaults)
+    displayTimeZone = timeZone
+    // 格式化路径从这里取时区,而不是各自去问系统。
+    SystemTimeZone.use(timeZone)
     self.postMeetingPipelineResolver = postMeetingPipelineResolver
     self.postMeetingTasks =
       postMeetingTasks
@@ -229,6 +288,46 @@ public final class AppCoordinator: ObservableObject {
   public func registerRequestToggleChatHandler(_ handler: (() -> Void)?) {
     requestToggleChatHandler = handler
     flushPendingMenuRequests()
+  }
+
+  /// App 菜单与菜单栏共用原有结束确认与闲聊前置门。
+  public func requestEndMeeting() { endMeetingFromMenus?() }
+
+  public func requestImportRecording() { requestLibraryCommand(.importRecording) }
+  public func requestRescanRecordings() { requestLibraryCommand(.rescan) }
+
+  private func requestLibraryCommand(_ command: LibraryCommand) {
+    HangSentinel.shared.note(
+      command == .importRecording ? "menu:import-recording" : "menu:rescan-recordings")
+    let handler = command == .importRecording ? libraryImportHandler : libraryRescanHandler
+    if workspaceMode == .library, hasVisibleMainWindow, let handler {
+      activateMainWindow()
+      handler()
+      return
+    }
+    pendingLibraryCommand = command
+    // 先选内容再经 Scene 重开;openLibrary 的常规前置会复活仍被持有的旧窗。
+    selectLibrary()
+    bringUpMainWindow()
+  }
+
+  /// 复用当前会议库的选择文件与 reload,主窗重开后只补发一次。
+  func registerLibraryCommandHandlers(importRecording: (() -> Void)?, rescan: (() -> Void)?) {
+    libraryImportHandler = importRecording
+    libraryRescanHandler = rescan
+    guard let command = pendingLibraryCommand else { return }
+    let handler = command == .importRecording ? importRecording : rescan
+    guard let handler else { return }
+    Task { @MainActor [weak self] in
+      guard let self, self.pendingLibraryCommand == command else { return }
+      self.pendingLibraryCommand = nil
+      handler()
+    }
+  }
+
+  public func revealRecordingsInFinder() {
+    HangSentinel.shared.note("menu:reveal-recordings")
+    NSWorkspace.shared.open(meetingStore.rootDirectory)
   }
 
   /// 菜单栏「标记重点」与全局热键的同一入口。
@@ -387,21 +486,85 @@ public final class AppCoordinator: ObservableObject {
   /// 打开主窗内的会议库;`focus` 传入某场会议目录时直接选中它(刚结束的那一场)。
   /// 孤儿状态只在本进程第一次进入相关入口时修正，后续 ⌘L 纯导航。
   public func openLibrary(focus: URL? = nil) {
+    selectLibrary(focus: focus)
+    activateMainWindow()
+  }
+
+  private func selectLibrary(focus: URL? = nil) {
+    libraryImportHandler = nil
+    libraryRescanHandler = nil
     reconcileInterruptedMeetingsIfNeeded()
     // 迁移前 ⌘L / 菜单栏进库会把会议库 model 整个 remount,终态横幅、失败保留的纪要
     // 草稿与导入错误随之清空。所有权搬到 app 生命周期协调者后要自己补回这个边界,
     // 否则它们会粘死一整个会话(快照优先于磁盘,还会遮住磁盘真相)。
     // 只收已经结算完的呈现态,运行中的任务与散会待处理输入一律不碰。
     postMeetingTasks.dismissSettledFeedback()
+    openedMeetingDirectory = focus?.standardizedFileURL
     libraryFocus = focus?.standardizedFileURL
     libraryRefreshGeneration &+= 1
     workspaceMode = .library
-    activateMainWindow()
   }
 
   /// 回到会中驾驶舱。这个动作只换主窗内容,不触碰录音与转写任务。
+  public func showHome() {
+    HangSentinel.shared.note("workspace:home")
+    workspaceMode = .home
+    activateMainWindow()
+  }
+
+  /// 打开我的待办。再点这一格时收起来源会议,回到列表。
+  public func showTodos() {
+    HangSentinel.shared.note("workspace:todos")
+    todoSourceSession = nil
+    workspaceMode = .todos
+    activateMainWindow()
+  }
+
+  /// 待办来源回跳。轨保持待办高亮;会议页先选中这场,再按秒跳到转写。
+  public func openTodoSource(directory: URL, seconds: TimeInterval?) {
+    HangSentinel.shared.note("todos:open-source")
+    todoSourceSession = TodoSourceSession(
+      directory: directory.standardizedFileURL, seconds: seconds)
+    workspaceMode = .todos
+    activateMainWindow()
+  }
+
+  public func closeTodoSource() {
+    HangSentinel.shared.note("todos:return")
+    todoSourceSession = nil
+  }
+
   public func showCockpit() {
     selectCockpit()
+    activateMainWindow()
+  }
+
+  /// 进设置页。记住从哪来,Esc 按原路回去——设置是一页,不是模态,
+  /// 关掉它应该回到你刚才在看的东西,而不是固定弹回某一处。
+  public func showSettings(section: SettingsSection? = nil) {
+    if let section { settingsSection = section }
+    if workspaceMode != .settings { modeBeforeSettings = workspaceMode }
+    HangSentinel.shared.note("workspace:settings")
+    workspaceMode = .settings
+    activateMainWindow()
+  }
+
+  public func showDictionary() {
+    if workspaceMode != .dictionary { modeBeforeDictionary = workspaceMode }
+    workspaceMode = .dictionary
+    activateMainWindow()
+  }
+
+  public func leaveDictionary() {
+    guard workspaceMode == .dictionary else { return }
+    workspaceMode = modeBeforeDictionary
+    activateMainWindow()
+  }
+
+  /// 从设置页退出,回到进来之前那一页。
+  public func leaveSettings() {
+    guard workspaceMode == .settings else { return }
+    workspaceMode = modeBeforeSettings
     activateMainWindow()
   }
 
@@ -416,7 +579,7 @@ public final class AppCoordinator: ObservableObject {
     switch workspaceMode {
     case .cockpit:
       openLibrary()
-    case .library:
+    case .home, .library, .settings, .dictionary, .todos:
       showCockpit()
     }
   }
@@ -480,7 +643,7 @@ public final class AppCoordinator: ObservableObject {
   }
 
   /// 打开设置:挂起设置请求并唤起主窗(批4:设置唯一容器)。
-  /// 主窗在场走 onChange 即时弹;刚被重开的主窗在 onAppear 消费挂起标志补发。
+  /// 主窗在场走 onChange 即时切换;刚被重开的主窗在 onAppear 消费挂起标志补发。
   /// 无主窗的重开不在这里做——`newWindowForTab` 对本 App 是空转(真机实测),
   /// 由菜单命令侧用 SwiftUI openWindow(id:) 重开,见 JustSaidApp。
   public func openSettings() {
@@ -495,7 +658,6 @@ public final class AppCoordinator: ObservableObject {
     }
   }
 
-
   public func installMenuBarIfNeeded(
     recordingSession: RecordingSession,
     summaryFeed: LiveSummaryFeed,
@@ -507,46 +669,48 @@ public final class AppCoordinator: ObservableObject {
 
     guard menuBar == nil else { return }
 
+    endMeetingFromMenus = { [weak self, weak recordingSession, weak summaryFeed] in
+      guard let recordingSession else { return }
+      // 与主窗「结束会议」按钮同一入口(08-14 捎带):未封口的闲聊会先弹
+      // 「封口并结束/撤销并结束/返回」确认。
+      if let requestEndMeeting = self?.requestEndMeetingHandler {
+        // 先把主窗唤到前台:确认对话挂在主窗上,窗口最小化/被压在后面时
+        // 对话弹在看不见的地方,菜单点击看起来毫无反应(与 onStartMeeting
+        // 前置 showCockpit 同一先例)。
+        self?.activateMainWindow()
+        requestEndMeeting()
+        return
+      }
+      // F-C4(08-15):主窗不在且有未封口闲聊时,不再静默 stop——唤起主窗并挂起请求,
+      // 主窗 onAppear 注册 handler 后异步补发,走与主窗完全一致的确认流。
+      // 没有未封口闲聊(或元数据读不出来)才退回直接收尾:那种情况下确认流本来就会
+      // 直通 endMeeting,没有内容会丢。
+      if let self, self.hasOpenChatRange(recordingSession: recordingSession) {
+        self.pendingEndMeetingRequest = true
+        self.bringUpMainWindow()
+        return
+      }
+      self?.beginFinishingMeeting()
+      Task { @MainActor in
+        defer { self?.endFinishingMeeting() }
+        await recordingSession.stop()
+        summaryFeed?.ingest(recordingSession.liveSegments)
+        let directory = recordingSession.currentMeetingDirectory
+        summaryFeed?.stop(runPostMeeting: false)
+        if recordingSession.phase == .completed {
+          summaryFeed?.startPostMeetingProcessing(for: directory)
+        }
+        // 从菜单栏结束会议时主窗可能是关着的,直接把这场会议的产物页摆到用户面前。
+        self?.openLibrary(focus: directory)
+      }
+    }
+
     let controller = MenuBarController(
       recordingSession: recordingSession,
       onStartMeeting: { [weak self] in
         self?.requestStartMeeting()
       },
-      onEndMeeting: { [weak self, weak recordingSession, weak summaryFeed] in
-        guard let recordingSession else { return }
-        // 与主窗「结束会议」按钮同一入口(08-14 捎带):未封口的闲聊会先弹
-        // 「封口并结束/撤销并结束/返回」确认。
-        if let requestEndMeeting = self?.requestEndMeetingHandler {
-          // 先把主窗唤到前台:确认对话挂在主窗上,窗口最小化/被压在后面时
-          // 对话弹在看不见的地方,菜单点击看起来毫无反应(与 onStartMeeting
-          // 前置 showCockpit 同一先例)。
-          self?.activateMainWindow()
-          requestEndMeeting()
-          return
-        }
-        // F-C4(08-15):主窗不在且有未封口闲聊时,不再静默 stop——唤起主窗并挂起请求,
-        // 主窗 onAppear 注册 handler 后异步补发,走与主窗完全一致的确认流。
-        // 没有未封口闲聊(或元数据读不出来)才退回直接收尾:那种情况下确认流本来就会
-        // 直通 endMeeting,没有内容会丢。
-        if let self, self.hasOpenChatRange(recordingSession: recordingSession) {
-          self.pendingEndMeetingRequest = true
-          self.bringUpMainWindow()
-          return
-        }
-        self?.beginFinishingMeeting()
-        Task { @MainActor in
-          defer { self?.endFinishingMeeting() }
-          await recordingSession.stop()
-          summaryFeed?.ingest(recordingSession.liveSegments)
-          let directory = recordingSession.currentMeetingDirectory
-          summaryFeed?.stop(runPostMeeting: false)
-          if recordingSession.phase == .completed {
-            summaryFeed?.startPostMeetingProcessing(for: directory)
-          }
-          // 从菜单栏结束会议时主窗可能是关着的,直接把这场会议的产物页摆到用户面前。
-          self?.openLibrary(focus: directory)
-        }
-      },
+      onEndMeeting: { [weak self] in self?.requestEndMeeting() },
       onMarkNote: { [weak self] in
         // 与右栏补充记录区「标记重点」同一入口(G9/F-C7);全局热键也走 requestMark()。
         self?.requestMark()
@@ -585,15 +749,21 @@ public final class AppCoordinator: ObservableObject {
 /// **不会被调用**(哨兵曾接在这里,三次真机运行零启动痕迹)——写在这里的启动逻辑
 /// 是无声的死代码。启动期副作用一律走 `JustSaidApp` 的静态引导。
 public final class JustSaidAppDelegate: NSObject, NSApplicationDelegate {
-  /// 应用更新器(App 层)安装的最终退出守卫;nil = 更新器未启用,退出行为与原先一致。
+  /// 应用更新器(App 层)安装的最终退出守卫;nil = 更新器未启用,只剩下面的退出确认。
   /// 守卫只对当前这次由 Sparkle Updater 发出的退出请求读取忙碌状态。
   @MainActor public static var terminationGuard: (() -> NSApplication.TerminateReply)?
+  /// 录制中或会议还在收尾时的退出确认(`QuitConfirmation.install`);nil = 未安装,直接退出。
+  @MainActor public static var quitConfirmation: (() -> NSApplication.TerminateReply)?
 
   public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     false
   }
 
+  /// 更新器守卫先判:Sparkle 发起的退出由它拦下或放行(cancel / later);
+  /// 其余退出它一律给 terminateNow,再交给退出确认。
   public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    Self.terminationGuard?() ?? .terminateNow
+    let updaterReply = Self.terminationGuard?() ?? .terminateNow
+    guard updaterReply == .terminateNow else { return updaterReply }
+    return Self.quitConfirmation?() ?? .terminateNow
   }
 }

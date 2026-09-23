@@ -11,8 +11,20 @@
 # Preserve blank context markers in the archived unified diff.
 .trellis/tasks/archive/2026-09/09-14-meetily-audio-local-asr-research/research/prototypes/candidate-v3.patch whitespace=-blank-at-eol
 
-# Keep pinned upstream bytes, verbatim advisor output, and unified-diff context markers.
-Sources/SpeexEchoCanceller/vendor/include/speex/speexdsp_config_types.h whitespace=-blank-at-eof
-Sources/SpeexEchoCanceller/vendor/os_support.h whitespace=-blank-at-eof
+# Keep verbatim advisor output and unified-diff context markers.
 .trellis/tasks/09-16-speaker-attribution-exploration/research/chatgpt6pro-speex-decision.md whitespace=-blank-at-eol
 Verification/SpeakerAttributionExploration/aec3_linear/sonora-linear.patch whitespace=-blank-at-eol
+
+# Verbatim UI design inputs and captured walkthrough output (2026-09-22).
+".trellis/tasks/09-19-ui-batch5-overlays-menubar/research/claude-design-2026-09-22/批次5 悬浮与菜单栏.dc.html" whitespace=-blank-at-eol
+.trellis/tasks/09-19-ui-design-language/directions/A2-window-paper/README.md whitespace=-blank-at-eol
+.trellis/tasks/09-19-ui-design-language/directions/A3-window-paper/README.md whitespace=-blank-at-eol
+wayfinder/assets/walkthrough-2026-09-20-build836/index.html whitespace=-blank-at-eol
+
+# Preserve owner settings inputs and captured mockup token bytes (2026-09-23).
+.trellis/tasks/09-19-ui-batch4-settings/research/owner-stitch-settings-name-alert-2026-09-22.html whitespace=-blank-at-eol
+.trellis/tasks/09-19-ui-batch4-settings/research/round3-mockups/tokens.css whitespace=-blank-at-eof
+.trellis/tasks/09-19-ui-batch4-settings/research/round3b-mockups/tokens.css whitespace=-blank-at-eof
+.trellis/tasks/09-22-global-action-items/research/mockups/assets/tokens.css whitespace=-blank-at-eof
+# Preserve the approved Stitch settings v2 source bytes.
+.trellis/tasks/09-22-global-action-items/research/settings-v2/*.html whitespace=-blank-at-eol

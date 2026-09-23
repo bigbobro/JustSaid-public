@@ -92,25 +92,18 @@ public struct ChatExclusionBanner: View {
 
   public var body: some View {
     if let openRangeStart {
-      HStack(spacing: Tokens.Spacing.xsm) {
-        Image(systemName: "exclamationmark.triangle.fill")
-        Text("闲聊中：从 \(TranscriptAnchor(seconds: openRangeStart).timecode) 起的内容不进纪要")
-        Spacer()
+      NoticeShell(
+        level: .warn,
+        systemImage: "bubble.left.and.bubble.right.fill",
+        text: "闲聊中：从 \(TranscriptAnchor(seconds: openRangeStart).timecode) 起的内容不进纪要"
+      ) {
         Button("结束闲聊", action: onClose)
           .buttonStyle(.textAction)
           .fontWeight(.semibold)
+          .foregroundStyle(Tokens.V1.Color.warn)
           .accessibilityLabel("结束闲聊，之后的会议内容重新进纪要")
           .runtimeAccessibilityIdentifier("toolbar.chat-banner.close")
       }
-      .font(.system(size: Tokens.FontSize.uiEmphasis))
-      .foregroundStyle(Tokens.Color.warn)
-      .padding(.horizontal, Tokens.Spacing.md)
-      .padding(.vertical, Tokens.Spacing.xs)
-      .background(Tokens.Color.amber)
-      .overlay(alignment: .bottom) {
-        Rectangle().fill(Tokens.Color.amberLine).frame(height: 1)
-      }
-      .accessibilityElement(children: .contain)
       .runtimeAccessibilityIdentifier("toolbar.chat-banner")
     }
   }

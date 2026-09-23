@@ -56,21 +56,30 @@ public struct LibraryReturnTrailBanner: View {
 public struct ActionItemsCopyButton: View {
   private let text: String?
   private let pasteboard: NSPasteboard
+  private let fillsWidth: Bool
   private let onCopy: () -> Void
 
+  /// `fillsWidth`:按钮底板撑满给它的宽度。必须撑在标签里——按钮样式按标签量尺寸,
+  /// 在按钮外面加 `.frame(maxWidth: .infinity)` 只是把一颗窄按钮摆在中间。
   public init(
     text: String?,
     pasteboard: NSPasteboard = .general,
+    fillsWidth: Bool = false,
     onCopy: @escaping () -> Void = {}
   ) {
     self.text = text
     self.pasteboard = pasteboard
+    self.fillsWidth = fillsWidth
     self.onCopy = onCopy
   }
 
   public var body: some View {
-    Button("复制行动清单") {
+    Button {
       _ = copy()
+    } label: {
+      Label("复制行动清单", systemImage: "doc.on.doc")
+        .labelStyle(.titleAndIcon)
+        .frame(maxWidth: fillsWidth ? .infinity : nil)
     }
     .disabled(!isEnabled)
     .runtimeAccessibilityIdentifier("library.copy-actions")
@@ -126,12 +135,12 @@ struct ImportRecordingForm: View {
           .labelsHidden()
       }
       LabeledContent("会议语言") {
-        Picker("", selection: $language) {
-          Text("中文").tag(MeetingLanguage.chinese)
-          Text("英文").tag(MeetingLanguage.english)
-        }
-        .pickerStyle(.segmented)
-        .frame(width: 160)
+        // 用词和首页、驾驶舱统一为 中 / 英(owner 2026-09-21);导入没有 Auto 这一档。
+        V1SegmentedPicker(
+          "会议语言", selection: $language,
+          options: [.init(MeetingLanguage.chinese, "中"), .init(MeetingLanguage.english, "英")]
+        )
+        .fixedSize()
       }
 
       Group {

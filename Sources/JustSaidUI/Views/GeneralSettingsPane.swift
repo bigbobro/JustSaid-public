@@ -7,37 +7,48 @@ public struct GeneralSettingsPane: View {
   let settingsStore: ProviderSettingsStore?
   let nameAlertPreferences: NameAlertPreferencesStore?
   let appUpdates: AppUpdatesModel?
+  let displayTimeZone: DisplayTimeZone?
 
   public init(
     settingsStore: ProviderSettingsStore? = nil,
     nameAlertPreferences: NameAlertPreferencesStore? = nil,
-    appUpdates: AppUpdatesModel? = nil
+    appUpdates: AppUpdatesModel? = nil,
+    displayTimeZone: DisplayTimeZone? = nil
   ) {
     self.settingsStore = settingsStore
     self.nameAlertPreferences = nameAlertPreferences
     self.appUpdates = appUpdates
+    self.displayTimeZone = displayTimeZone
   }
 
   public var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: Tokens.Spacing.xl) {
-        Text("应用级采集与使用偏好放在这里；不会改变任何模型或渠道选择。")
-          .font(.system(size: Tokens.FontSize.bodyMinimum))
-          .foregroundStyle(Tokens.Color.ink3)
-          .fixedSize(horizontal: false, vertical: true)
+    SettingsPage(title: "通用", subtitle: "外观、录音与日常使用偏好。") {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
         AppearanceSettingsCard()
-        if let appUpdates {
-          AppUpdateSettingsCard(model: appUpdates)
+        GlobalHotkeySettingsCard()
+        if let displayTimeZone {
+          TimeZoneSettingsCard(displayTimeZone: displayTimeZone)
         }
-        if let nameAlertPreferences {
-          NameAlertSettingsCard(preferences: nameAlertPreferences)
-        }
+
         MicrophoneAECSettingsCard()
         AudioRetentionSettingsCard()
-        GlobalHotkeySettingsCard()
+        if let appUpdates {
+          AppUpdateSettingsCard(model: appUpdates)
+        } else {
+          SettingsFormGroup(
+            "应用更新", hint: "从公开正式版获取新版本。"
+          ) {
+            SettingsFormRow("状态", isFirst: true) {
+              Text("本地构建，应用内更新未启用")
+                .font(Tokens.V1.Text.meta.font)
+                .foregroundStyle(Tokens.V1.Color.ink3)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+          .runtimeAccessibilityIdentifier("settings.app-updates.disabled")
+        }
         DiagnosticsExportCard(settingsStore: settingsStore)
       }
-      .padding(Tokens.Spacing.lg)
     }
     .runtimeAccessibilityIdentifier("settings.general")
   }
@@ -50,22 +61,32 @@ public struct GeneralSettingsPane: View {
 private struct AppearanceSettingsCard: View {
   @AppStorage(AppAppearance.defaultsKey) private var appearanceRawValue =
     AppAppearance.system.rawValue
+  // 阅读缩放是全局持久化的(justsaid.textScale),按性质就该和外观在一起。
+  // 会中顶栏那颗留着:那是读的时候临时调,这里是你会去找它的地方
+  // (macOS 自己也是两处:设置里有字号,控制中心也能调)。
+  @AppStorage(TextScale.defaultsKey) private var textScaleRawValue = TextScale.standard.rawValue
 
   var body: some View {
-    RoleCardShell(title: "外观", subtitle: "选择 JustSaid 的界面显示方式") {
-      Picker("外观", selection: $appearanceRawValue) {
-        ForEach(AppAppearance.allCases) { appearance in
-          Text(appearance.displayName).tag(appearance.rawValue)
-        }
+    SettingsFormGroup(
+      "外观", hint: "选择界面外观与会议正文的阅读大小。"
+    ) {
+      SettingsFormRow("界面", labelDetail: "跟随系统，或为 JustSaid 单独选择。", isFirst: true) {
+        V1SegmentedPicker(
+          "外观", selection: $appearanceRawValue,
+          options: AppAppearance.allCases.map { .init($0.rawValue, $0.displayName) }
+        )
+        .fixedSize()
+        .runtimeAccessibilityIdentifier("settings.appearance.picker")
       }
-      .labelsHidden()
-      .pickerStyle(.segmented)
-      .runtimeAccessibilityIdentifier("settings.appearance.picker")
-
-      Text("跟随系统会随 macOS 的浅色/深色模式变化；浅色和深色会立即应用到 JustSaid。")
-        .font(.system(size: Tokens.FontSize.ui))
-        .foregroundStyle(Tokens.Color.ink3)
-        .fixedSize(horizontal: false, vertical: true)
+      // 只缩放会议正文(转写、纪要),首页与列表按设计系统的字阶不动,标签照实写(owner 2026-09-22)。
+      SettingsFormRow("字号", labelDetail: "只调整转写与纪要的正文。") {
+        V1SegmentedPicker(
+          "字号", selection: $textScaleRawValue,
+          options: TextScale.allCases.map { .init($0.rawValue, $0.displayName) }
+        )
+        .fixedSize()
+        .runtimeAccessibilityIdentifier("settings.text-scale.picker")
+      }
     }
     .runtimeAccessibilityIdentifier("settings.appearance")
   }
@@ -79,17 +100,20 @@ private struct MicrophoneAECSettingsCard: View {
   @AppStorage(MicrophoneAECSettings.defaultsKey) private var aecEnabled = false
 
   var body: some View {
-    RoleCardShell(title: "麦克风采集", subtitle: "回声消除 · 外放会议") {
-      Toggle("麦克风回声消除", isOn: $aecEnabled)
-        .toggleStyle(.switch)
-        .runtimeAccessibilityIdentifier("settings.microphone-aec")
+    SettingsFormGroup(
+      "麦克风采集", hint: "设置录制时的麦克风采集方式。"
+    ) {
+      // 「实验性功能」走 labelDetail(标签下的小字),不要并进标签本身——
+      // 标签列定宽 112,「回声消除（实验性功能）」会折成两行,
+      // 而那正是 owner 一开始就指出的毛病(2026-09-21)。
+      SettingsFormRow("回声消除", labelDetail: "实验性功能", isFirst: true) {
+        Toggle("回声消除", isOn: $aecEnabled)
+          .toggleStyle(.v1Switch)
+          .labelsHidden()
+          .help("开了它，别的会议软件里对方可能听不到你")
+          .runtimeAccessibilityIdentifier("settings.microphone-aec")
+      }
 
-      Text(
-        "开启后用系统语音处理（VPIO）从麦克风里去掉扬声器回声；关闭、蓝牙耳机通话，或 VPIO 启动失败时自动回落原采集路径。注意：开启可能影响其他正在使用麦克风的应用（线上会议对方可能听不到你），仅建议独自外放、且不开其他会议软件时开启。"
-      )
-      .font(.system(size: Tokens.FontSize.ui))
-      .foregroundStyle(Tokens.Color.ink3)
-      .fixedSize(horizontal: false, vertical: true)
     }
     .runtimeAccessibilityIdentifier("settings.microphone")
   }
@@ -102,32 +126,32 @@ private struct AudioRetentionSettingsCard: View {
     AudioRetentionPolicy.never.rawValue
 
   var body: some View {
-    RoleCardShell(title: "音频保留期", subtitle: "到期自动删除已精转会议的音频，转写和纪要留下") {
-      Picker("音频保留期", selection: $policyRaw) {
-        ForEach(AudioRetentionPolicy.allCases) { policy in
-          Text(policy.displayName).tag(policy.rawValue)
+    SettingsFormGroup(
+      "音频保留期", hint: "到期删除已精转会议的音频，转写和纪要留下。"
+    ) {
+      SettingsFormRow("保留录音", isFirst: true) {
+        V1Dropdown(
+          value: (AudioRetentionPolicy(rawValue: policyRaw) ?? .never).displayName,
+          identifier: "settings.audio-retention.picker"
+        ) {
+          ForEach(AudioRetentionPolicy.allCases) { policy in
+            Button(policy.displayName) { policyRaw = policy.rawValue }
+          }
+        }
+        .frame(width: Tokens.V1.Size.settingsModelField)
+        .onChange(of: policyRaw) { _, _ in
+          DispatchQueue.global(qos: .utility).async {
+            AudioRetentionScheduler.shared.sweepIfNeeded(
+              meetingsRoot: MeetingStore.defaultRootDirectory(),
+              diagnosticsRoot: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("JustSaid", isDirectory: true)
+                .appendingPathComponent("diagnostics", isDirectory: true),
+              defaults: .standard,
+              force: true
+            )
+          }
         }
       }
-      .pickerStyle(.menu)
-      .labelsHidden()
-      .runtimeAccessibilityIdentifier("settings.audio-retention.picker")
-      .onChange(of: policyRaw) { _, _ in
-        DispatchQueue.global(qos: .utility).async {
-          AudioRetentionScheduler.shared.sweepIfNeeded(
-            meetingsRoot: MeetingStore.defaultRootDirectory(),
-            diagnosticsRoot: FileManager.default.homeDirectoryForCurrentUser
-              .appendingPathComponent("JustSaid", isDirectory: true)
-              .appendingPathComponent("diagnostics", isDirectory: true),
-            defaults: .standard,
-            force: true
-          )
-        }
-      }
-
-      Text("默认不删除。只有你选了保留期、且该场已经完成精转，超期后才会删 m4a。")
-        .font(.system(size: Tokens.FontSize.ui))
-        .foregroundStyle(Tokens.Color.ink3)
-        .fixedSize(horizontal: false, vertical: true)
     }
     .runtimeAccessibilityIdentifier("settings.audio-retention")
   }
@@ -139,16 +163,11 @@ private struct GlobalHotkeySettingsCard: View {
   @ObservedObject private var manager = GlobalHotkeyManager.shared
 
   var body: some View {
-    RoleCardShell(title: "全局热键", subtitle: "录制中在其他应用前台也能用") {
-      Text("默认与应用内快捷键一致。走系统全局热键接口，不需要辅助功能权限。仅录制中生效。")
-        .font(.system(size: Tokens.FontSize.ui))
-        .foregroundStyle(Tokens.Color.ink3)
-        .fixedSize(horizontal: false, vertical: true)
-
-      VStack(alignment: .leading, spacing: Tokens.Spacing.lg) {
-        ForEach(GlobalHotkeyAction.allCases) { action in
-          GlobalHotkeyRow(action: action, manager: manager)
-        }
+    SettingsFormGroup(
+      "全局热键", hint: "录制中，在其他应用前台也能用。"
+    ) {
+      ForEach(Array(GlobalHotkeyAction.allCases.enumerated()), id: \.element) { index, action in
+        GlobalHotkeyRow(action: action, manager: manager, isFirst: index == 0)
       }
     }
     .runtimeAccessibilityIdentifier("settings.global-hotkeys")
@@ -161,22 +180,21 @@ private struct GlobalHotkeySettingsCard: View {
 private struct GlobalHotkeyRow: View {
   let action: GlobalHotkeyAction
   @ObservedObject var manager: GlobalHotkeyManager
+  var isFirst = false
 
   private var isCapturingThis: Bool { manager.capturingAction == action }
   private var chord: MarkHotkeyChord { manager.configuration(for: action) }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
-      HStack(spacing: Tokens.Spacing.xs) {
-        Text(action.title)
-          .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-          .foregroundStyle(Tokens.Color.ink2)
-        Text("默认 \(action.defaultLabel)")
-          .font(.system(size: Tokens.FontSize.ui))
-          .foregroundStyle(Tokens.Color.ink3)
-      }
-
-      HStack(spacing: Tokens.Spacing.sm) {
+    // 没改过键时,原来同一件事说四遍:标签下「默认 ⌥⌘M」、键帽「⌥⌘M」、
+    // 「点击改键」、还有一颗「恢复默认」。「默认 X」只在**你改过**之后才有信息
+    // (它回答「本来是什么」);没改过时它和键帽一字不差(owner 2026-09-21)。
+    SettingsFormRow(
+      action.title,
+      labelDetail: chord == action.defaultChord ? nil : "默认 \(action.defaultLabel)",
+      isFirst: isFirst
+    ) {
+      HStack(spacing: Tokens.V1.Space.sm) {
         Button {
           if isCapturingThis {
             manager.cancelCapture()
@@ -184,61 +202,38 @@ private struct GlobalHotkeyRow: View {
             manager.beginCapture(action)
           }
         } label: {
-          HStack(spacing: Tokens.Spacing.xs) {
-            if isCapturingThis {
-              Text("按下新的组合键…")
-                .font(.system(size: Tokens.FontSize.body, weight: .medium))
-                .foregroundStyle(Tokens.Color.ac)
-            } else if chord.isEnabled {
-              KeycapView(label: chord.displayLabel)
-              Text("点击改键")
-                .font(.system(size: Tokens.FontSize.ui))
-                .foregroundStyle(Tokens.Color.ink3)
-            } else {
-              Text("已停用")
-                .font(.system(size: Tokens.FontSize.body))
-                .foregroundStyle(Tokens.Color.ink3)
-            }
-            Spacer(minLength: 0)
-          }
-          .padding(.horizontal, Tokens.Spacing.sm)
-          .padding(.vertical, Tokens.Spacing.xs)
-          .background(
-            RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-              .fill(Tokens.Color.surface2)
-          )
-          .overlay(
-            RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-              .stroke(
-                isCapturingThis ? Tokens.Color.ac : Tokens.Color.surface2Line,
-                lineWidth: 1
-              )
-          )
+          Text(isCapturingThis ? "按下新的组合键…" : (chord.isEnabled ? chord.displayLabel : "已停用"))
+            .font(Tokens.V1.Text.body.font.monospaced())
+            .foregroundStyle(isCapturingThis ? Tokens.V1.Color.accent : Tokens.V1.Color.ink2)
+            .fixedSize()
+            .frame(minWidth: Tokens.V1.Size.settingsLabel - Tokens.V1.Space.sm * 2)
         }
-        .buttonStyle(.plain)
-        // 整块可点(点了开始录键),此前无任何悬停反馈(走查 P-7g)。
-        .hoverStrokeOutline(cornerRadius: Tokens.Radius.widget)
+        .buttonStyle(.v1Outline)
+        .runtimeAccessibilityIdentifier("\(action.accessibilityPrefix).keycap")
+        .help(chord.isEnabled ? "点击改键" : "点击设置快捷键")
         .runtimeAccessibilityIdentifier("\(action.accessibilityPrefix).recorder")
 
-        Button("恢复默认") {
-          manager.restoreDefault(action)
+        Menu {
+          Button("恢复默认") { manager.restoreDefault(action) }
+            .disabled(chord == action.defaultChord)
+            .runtimeAccessibilityIdentifier("\(action.accessibilityPrefix).restore")
+          Button("停用") { manager.disable(action) }
+            .disabled(!chord.isEnabled)
+            .runtimeAccessibilityIdentifier("\(action.accessibilityPrefix).disable")
+        } label: {
+          Image(systemName: "ellipsis")
+            .frame(width: Tokens.V1.Space.sm)
         }
-        .buttonStyle(.textAction)
-        .disabled(chord == action.defaultChord)
-        .runtimeAccessibilityIdentifier("\(action.accessibilityPrefix).restore")
-
-        Button("停用") {
-          manager.disable(action)
-        }
-        .buttonStyle(.textAction)
-        .disabled(!chord.isEnabled)
-        .runtimeAccessibilityIdentifier("\(action.accessibilityPrefix).disable")
+        .menuStyle(.button).menuIndicator(.hidden)
+        .buttonStyle(.v1Outline)
+        .accessibilityLabel("\(action.title)选项")
+        .runtimeAccessibilityIdentifier("\(action.accessibilityPrefix).menu")
       }
 
       if isCapturingThis, let hint = manager.captureHint {
         Text(hint)
-          .font(.system(size: Tokens.FontSize.ui))
-          .foregroundStyle(Tokens.Color.warn)
+          .font(.system(size: Tokens.V1.Text.meta.size))
+          .foregroundStyle(Tokens.V1.Color.warn)
           .fixedSize(horizontal: false, vertical: true)
       }
 
@@ -248,8 +243,8 @@ private struct GlobalHotkeyRow: View {
             HintText(text: status)
           } else {
             Text(status)
-              .font(.system(size: Tokens.FontSize.ui))
-              .foregroundStyle(Tokens.Color.ink3)
+              .font(.system(size: Tokens.V1.Text.meta.size))
+              .foregroundStyle(Tokens.V1.Color.ink3)
           }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -268,30 +263,24 @@ private struct DiagnosticsExportCard: View {
   @State private var statusIsError = false
 
   var body: some View {
-    RoleCardShell(title: "诊断", subtitle: "出问题时把现场发回来，不含会议内容与密钥") {
-      Text(ProviderSettingsView.buildLabel)
-        .font(.system(size: Tokens.FontSize.ui, design: .monospaced))
-        .foregroundStyle(Tokens.Color.ink3)
-        .textSelection(.enabled)
-        .accessibilityLabel("构建标识 \(ProviderSettingsView.buildLabel)")
-
-      Button("导出诊断包") {
-        exportPackage()
-      }
-      .buttonStyle(.toolbarPill)
-      .runtimeAccessibilityIdentifier("settings.diagnostics-export")
-
-      Text("包内只有哨兵日志、构建标识、设置快照（密钥只写已配置/末四位）和本机系统信息。")
-        .font(.system(size: Tokens.FontSize.ui))
-        .foregroundStyle(Tokens.Color.ink3)
-        .fixedSize(horizontal: false, vertical: true)
-
-      if let statusMessage {
-        Text(statusMessage)
-          .font(.system(size: Tokens.FontSize.ui))
-          .foregroundStyle(statusIsError ? Tokens.Color.warn : Tokens.Color.ink3)
-          .fixedSize(horizontal: false, vertical: true)
-          .runtimeAccessibilityIdentifier("settings.diagnostics-export.status")
+    SettingsFormGroup(
+      "诊断", hint: "导出诊断包，帮助定位问题。"
+    ) {
+      SettingsFormRow("诊断包", labelDetail: "不含会议内容与密钥。", isFirst: true) {
+        Button("导出…") {
+          exportPackage()
+        }
+        .buttonStyle(.v1Outline)
+        .help("包内只有哨兵日志、构建标识、设置快照（密钥只写已配置/末四位）和本机系统信息。")
+        .runtimeAccessibilityIdentifier("settings.diagnostics-export")
+        // 导出结果贴在按钮旁边,不另起一行:它是这次点击的回执,不是一条常驻状态。
+        if let statusMessage {
+          Text(statusMessage)
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(statusIsError ? Tokens.V1.Color.warn : Tokens.V1.Color.ink3)
+            .fixedSize(horizontal: false, vertical: true)
+            .runtimeAccessibilityIdentifier("settings.diagnostics-export.status")
+        }
       }
     }
     .runtimeAccessibilityIdentifier("settings.diagnostics")

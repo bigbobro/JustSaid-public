@@ -15,17 +15,36 @@ struct SummaryTopicCardsDocumentView: View {
   @State private var openSourceBulletID: UUID?
 
   private var cardsStack: some View {
-    LazyVStack(alignment: .leading, spacing: Tokens.Spacing.hairline) {
-      ForEach(Array(topics.enumerated()), id: \.element.id) { index, topic in
+    LazyVStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
+      ForEach(topics) { topic in
+        // 外框与「这场会」的块同款:细边 + paper-2 + 大圆角,标题在块内。
+        // 用 background(_:in:) + strokeBorder 而不是 background + clipShape——后者会把
+        // 这一块推到离屏图层,文字的次像素抗锯齿被关掉,看着发糊(owner 2026-09-20)。
         SummaryTopicCardView(
           topic: topic,
-          accent: Tokens.Color.chapterAccent(index),
+          // 原来每个话题一个色相(chapterAccent(index))。色相在这里不承载任何含义——
+          // 话题的先后顺序不是语义;而且超过六个就开始撞色,色盲看不出,暗色下饱和度也塌。
+          // 同完整转写的说话人配色 2026-09-20 一起退役。这道竖条只留一个区分:
+          // 「还在聊」用强调色,已沉淀的用中性灰。
+          accent: Tokens.V1.Color.ink4,
           isHighlighted: false,
           fontSize: textScale.size(Tokens.FontSize.body),
           openSourceBulletID: $openSourceBulletID,
           onSaveSourceAsNote: nil,
-          onJumpToTranscript: onJumpToTranscript
+          onJumpToTranscript: onJumpToTranscript,
+          chromeless: true
         )
+        .padding(Tokens.V1.Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+          Tokens.V1.Color.paper2,
+          in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg))
+        .overlay {
+          RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg)
+            .strokeBorder(
+              topic.isInProgress ? Tokens.V1.Color.accent : Tokens.V1.Color.rule,
+              lineWidth: Tokens.V1.Size.controlRuleWidth)
+        }
       }
     }
     // 会中记录是整栏工作区：可视化需要利用详情栏的剩余宽度，避免在明明放得下时
@@ -34,7 +53,7 @@ struct SummaryTopicCardsDocumentView: View {
       maxWidth: embedded ? .infinity : Tokens.Layout.typedSummaryContentWidth,
       alignment: .leading
     )
-    .padding(Tokens.Spacing.lg)
+    .padding(.horizontal, Tokens.V1.Space.lg)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 

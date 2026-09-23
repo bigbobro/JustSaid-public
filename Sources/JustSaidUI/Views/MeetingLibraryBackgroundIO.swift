@@ -78,6 +78,7 @@ private enum MeetingLibraryDiskSnapshot {
       items.append(
         MeetingLibraryItem(
           id: paths.directory.standardizedFileURL.path,
+          meetingID: record.metadata.id,
           paths: paths,
           title: record.metadata.title,
           startedAt: record.metadata.startedAt,
@@ -114,6 +115,7 @@ private enum MeetingLibraryDiskSnapshot {
           channelStats: record.metadata.speakerChannelStats,
           client: record.metadata.client,
           project: record.metadata.project,
+          completedActionItems: record.metadata.completedActionItems ?? [],
           effectiveCompleteness: completeness,
           completenessAcks: completenessAcks,
           shortCoveredSeconds: shortCoveredSeconds

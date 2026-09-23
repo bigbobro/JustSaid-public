@@ -7,17 +7,21 @@ extension MainWorkspaceView {
 
   // MARK: - Toolbar
 
-  /// 驾驶舱顶栏(2026-08-19 A+C 混搭):只留**会议身份与终止动作**——会名、语言、
-  /// 阅读缩放、废弃/结束会议。会话开关(计时/麦克风/闲聊/暂停/章节/转写/会议库/设置)
-  /// 全部迁到左侧控制轨;计时随红点一起在轨上,所以这里的会名不再带计时器。
+  /// 驾驶舱顶栏。2026-08-19 定的是「顶栏=会议身份与终止,左轨=会话开关」;
+  /// 2026-09-21 owner 按设计稿 `live.html` 改成「左轨=状态,顶栏=动作」:
+  /// 闲聊与暂停麦克风从轨上搬到这里,点名提醒从这里搬到轨上(它带一盏指示灯,
+  /// 和录制块的红点是同一类东西)。这一条也和会议页「右上角 ⋯ = 对这场会做什么」对齐。
+  ///
+  /// 计时仍随红点在轨上,所以这里的会名不带计时器。
+  /// 闲聊 ⌥⌘X / 暂停 ⌥⌘P 的全局热键不受位置变动影响。
   var cockpitToolbar: some View {
     HStack(spacing: Tokens.Spacing.xsm) {
       meetingIdentity
 
       Spacer()
 
-      nameAlertToolbarMenu
-        .runtimeAccessibilityIdentifier("toolbar.name-alerts")
+      chatToolbarButton
+      microphonePauseToolbarButton
       languageControl
       ContentScaleControl(selection: textScaleSelection)
       primaryActionButton
@@ -49,15 +53,11 @@ extension MainWorkspaceView {
             Tokens.Color.line, lineWidth: 1))
     } else {
       // R2':隐藏 Picker 标签(原来「说话语言」在工具栏被截成「说…」),只留三个 segment。
-      Picker("说话语言", selection: languageSelection) {
-        ForEach(MeetingLanguage.allCases) { language in
-          Text(shortLabel(for: language)).tag(language)
-        }
-      }
-      .labelsHidden()
-      .pickerStyle(.segmented)
-      .frame(width: 148)
-      .accessibilityLabel("说话语言")
+      V1SegmentedPicker(
+        "说话语言", selection: languageSelection,
+        options: MeetingLanguage.allCases.map { .init($0, shortLabel(for: $0)) }
+      )
+      .fixedSize()
       .disabled(recordingSession.phase.isBusy)
     }
   }
@@ -66,50 +66,78 @@ extension MainWorkspaceView {
   /// 闲聊/暂停/章节/转写/micStatus 随舱走;语言/缩放平铺顶栏(有状态、常切换,
   /// 状态要一眼可见、一步可调),导入/重扫进 ⋯ popover(无状态、低频动作)。
   var libraryToolbar: some View {
-    HStack(spacing: Tokens.Spacing.xsm) {
-      libraryContextTitle
-      Spacer()
-      if isReturnToCockpit {
-        libraryRecordingCapsule
+    WorkspaceTopBar("会议库", detail: "\(libraryMeetingCount) 场") {
+      if isReturnToCockpit { libraryRecordingCapsule }
+      Button("导入录音") { libraryImportAction?() }
+        .buttonStyle(.v1Outline)
+        .runtimeAccessibilityIdentifier("library.toolbar.import")
+      if !isReturnToCockpit { libraryPrimaryAction }
+      // 面板常驻之后这颗只是开关,原来看不出当前是展开还是收起(owner 2026-09-20)。
+      // 展开时用 outline 压住,收起时回到 quiet,一眼分得出状态。
+      Button { libraryFilterAction?() } label: {
+        Label("筛选", systemImage: "line.3.horizontal.decrease")
       }
-      nameAlertToolbarMenu
-        .runtimeAccessibilityIdentifier("library.toolbar.name-alerts")
-      languageControl
-        .runtimeAccessibilityIdentifier("library.toolbar.language")
-      ContentScaleControl(selection: textScaleSelection)
-        .runtimeAccessibilityIdentifier("library.toolbar.scale")
-      libraryOverflowMenu
-      Button {
-        isShowingSettings = true
-      } label: {
-        Image(systemName: "gearshape")
-      }
-      .buttonStyle(.iconHover)
-      .accessibilityLabel("打开设置")
-      .runtimeAccessibilityIdentifier("library.toolbar.settings")
-      if !isReturnToCockpit {
-        libraryPrimaryAction
-      }
+      .buttonStyle(
+        libraryFilterPanelShown ? V1ButtonStyle.v1Outline : V1ButtonStyle.v1Quiet)
+      .accessibilityAddTraits(libraryFilterPanelShown ? [.isSelected] : [])
+      .runtimeAccessibilityIdentifier("library.toolbar.filter")
     }
-    .padding(.horizontal, Tokens.Spacing.md)
-    .frame(height: Tokens.Layout.toolbarHeight)
-    .background(
-      LinearGradient(
-        colors: [Tokens.Color.toolbarTop, Tokens.Color.toolbarBottom],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-    )
     .runtimeAccessibilityIdentifier("library.toolbar")
   }
 
-  /// 点名提醒会中开关:驾驶舱与会议库顶栏各一份,读写同一偏好;录制中浏览会议库也可操作。
-  private var nameAlertToolbarMenu: some View {
-    NameAlertToolbarMenu(
-      preferences: appCoordinator.nameAlertPreferences,
-      session: appCoordinator.meetingPresence?.nameAlerts,
-      onOpenSettings: { isShowingSettings = true }
-    )
+  /// 闲聊。轨上原来那一格搬过来的,判定与文案一字不改——
+  /// ⌥⌘X 的唯一 owner 仍在 app 菜单命令(批1),按钮只管点击。
+  @ViewBuilder
+  private var chatToolbarButton: some View {
+    if isCockpitSessionActive {
+      Button {
+        toggleChatExclusion()
+      } label: {
+        Label(openChatRange != nil ? "结束闲聊" : "闲聊", systemImage: "bubble.left.and.exclamationmark.bubble.right")
+      }
+      .buttonStyle(openChatRange != nil ? V1ButtonStyle.v1Outline : V1ButtonStyle.v1Quiet)
+      .disabled(recordingSession.startedAt == nil || recordingSession.phase != .recording)
+      .help(
+        openChatRange != nil
+          ? "结束闲聊：从这里起的内容重新进纪要"
+          : "标记闲聊开始：之后的内容不进纪要，再按一次结束"
+      )
+      .accessibilityLabel(openChatRange != nil ? "结束闲聊" : "标记闲聊开始")
+      .runtimeAccessibilityIdentifier("toolbar.chat")
+    }
+  }
+
+  /// 暂停麦克风。同上,从轨上搬来,判定与文案不变;⌥⌘P 的 owner 仍在菜单命令。
+  @ViewBuilder
+  private var microphonePauseToolbarButton: some View {
+    if isCockpitSessionActive {
+      Button {
+        if recordingSession.isMicrophonePaused {
+          recordingSession.resumeMicrophone()
+        } else {
+          recordingSession.pauseMicrophone()
+        }
+      } label: {
+        Label(
+          recordingSession.isMicrophonePaused ? "恢复麦克风" : "暂停麦克风",
+          systemImage: "mic.slash.fill")
+      }
+      .buttonStyle(
+        recordingSession.isMicrophonePaused ? V1ButtonStyle.v1Outline : V1ButtonStyle.v1Quiet)
+      .disabled(recordingSession.phase != .recording)
+      .help(
+        recordingSession.isMicrophonePaused
+          ? "恢复麦克风：本侧重新开始收音"
+          : "暂停麦克风：本侧不再收音（对方/系统声仍在录），再按一次恢复"
+      )
+      .accessibilityLabel(recordingSession.isMicrophonePaused ? "恢复麦克风" : "暂停麦克风")
+      .runtimeAccessibilityIdentifier("toolbar.mic-pause")
+    }
+  }
+
+  /// 与轨上同一判定(recording/stopping)。
+  private var isCockpitSessionActive: Bool {
+    recordingSession.phase == .recording || recordingSession.phase == .stopping
   }
 
   private var libraryContextTitle: some View {
@@ -150,14 +178,14 @@ extension MainWorkspaceView {
           .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .bold, design: .monospaced))
         }
         .fixedSize()
-        Text("返回驾驶舱")
+        Text("返回会中")
           .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .semibold))
         KeycapView(label: "⌘L")
       }
     }
     .buttonStyle(.toolbarPillRecording)
-    .help("返回会中驾驶舱，录制仍在进行")
-    .accessibilityLabel("返回会中驾驶舱，录制仍在进行")
+    .help("返回会中，录制仍在进行")
+    .accessibilityLabel("返回会中，录制仍在进行")
     .runtimeAccessibilityIdentifier("library.toolbar.recording-capsule")
   }
 
@@ -201,10 +229,13 @@ extension MainWorkspaceView {
         .buttonStyle(.toolbarPillAccent)
         .disabled(true)
     case .idle, .completed, .failed:
+      // 与首页那颗同款主按钮(v1Primary,近黑)。原来用 .toolbarPillAccent 画成墨绿实心,
+      // 同一颗「开始记录」在两个页面两个样;而且 accent 在设计系统里只落在记号和点上,
+      // 不做主按钮底色。
       Button("开始记录") {
         startMeeting()
       }
-      .buttonStyle(.toolbarPillAccent)
+      .buttonStyle(V1ButtonStyle.v1Primary)
       .runtimeAccessibilityIdentifier("library.toolbar.start-recording")
     case .recording:
       EmptyView()
@@ -217,38 +248,8 @@ extension MainWorkspaceView {
   private var meetingIdentity: some View {
     switch recordingSession.phase {
     case .recording, .stopping:
-      HStack(spacing: Tokens.Spacing.xsm) {
-        TextField(
-          "会议名称",
-          text: Binding(
-            get: { meetingTitle },
-            set: { meetingTitle = $0 }
-          )
-        )
-        .textFieldStyle(.plain)
-        .font(.system(size: Tokens.FontSize.body, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink)
-        .frame(width: 180)
-        .padding(.horizontal, Tokens.Spacing.xs)
-        .padding(.vertical, Tokens.Spacing.hairline)
-        .background(Tokens.Color.pane, in: RoundedRectangle(cornerRadius: Tokens.Radius.chipLarge))
-        .overlay(
-          RoundedRectangle(cornerRadius: Tokens.Radius.chipLarge)
-            .stroke(
-              isMeetingTitleFocused ? Tokens.Color.ac : Tokens.Color.line,
-              lineWidth: 1
-            )
-        )
-        .focused($isMeetingTitleFocused)
-        .onSubmit(commitCurrentMeetingTitle)
-        .onChange(of: isMeetingTitleFocused) { _, focused in
-          if !focused {
-            commitCurrentMeetingTitle()
-          }
-        }
+      CurrentMeetingTitleField(session: recordingSession, title: $meetingTitle)
         .disabled(recordingSession.phase == .stopping)
-        .accessibilityLabel("当前会议名称，可编辑")
-      }
     default:
       TextField("会议名称", text: $meetingTitleDraft)
         .textFieldStyle(.plain)
@@ -259,7 +260,10 @@ extension MainWorkspaceView {
         .background(
           RoundedRectangle(cornerRadius: Tokens.Radius.chipLarge).fill(Tokens.Color.pane)
         )
-        .overlay(RoundedRectangle(cornerRadius: Tokens.Radius.chipLarge).stroke(Tokens.Color.line, lineWidth: 1))
+        .overlay(
+          RoundedRectangle(cornerRadius: Tokens.Radius.chipLarge)
+            .stroke(Tokens.Color.line, lineWidth: 1)
+        )
         .disabled(recordingSession.phase.isBusy)
         .accessibilityLabel("会议名称，未填写时默认使用“会议”")
     }
@@ -289,14 +293,7 @@ extension MainWorkspaceView {
         .disabled(true)
 
     case .idle, .completed, .failed:
-      // 驾驶舱内「开始记录」的**唯一入口**(2026-08-19 用户拍板收敛):
-      // G4 曾在舞台与整理区空态各摆一颗,舞台升格后与这颗贴脸,同屏三处同名按钮。
-      // 标识用于运行时数「恰好一个」,与 `notes.mark` 同款钉法。
-      Button("开始记录") {
-        startMeeting()
-      }
-      .buttonStyle(.toolbarPillAccent)
-      .runtimeAccessibilityIdentifier("cockpit.start-recording")
+      EmptyView()
     }
   }
 }
