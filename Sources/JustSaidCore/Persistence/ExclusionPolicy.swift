@@ -6,6 +6,8 @@ public struct ExcludedRange: Codable, Equatable, Sendable, Identifiable {
   public var start: TimeInterval
   /// nil 表示会中仍未封口；执行过滤时按开区间处理到正无穷。
   public var end: TimeInterval?
+  /// nil 保留时间语义；非 nil 时转写只匹配原文行键（时间戳 + 行序）。
+  public var transcriptLineKeys: [String]?
   public var reason: String?
   public var origin: String
   public let createdAt: Date
@@ -16,7 +18,8 @@ public struct ExcludedRange: Codable, Equatable, Sendable, Identifiable {
     end: TimeInterval? = nil,
     reason: String? = nil,
     origin: String,
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    transcriptLineKeys: [String]? = nil
   ) {
     self.id = id
     self.start = start
@@ -24,14 +27,17 @@ public struct ExcludedRange: Codable, Equatable, Sendable, Identifiable {
     self.reason = reason
     self.origin = origin
     self.createdAt = createdAt
+    self.transcriptLineKeys = transcriptLineKeys
   }
 }
 
-/// `meeting.json` 排除记录的纯值投影。三个执行入口共用这一份确定性判定。
+/// `meeting.json` 排除记录的纯值投影。执行入口共用这一份确定性判定。
 public struct ExclusionPolicy: Equatable, Sendable {
   public static let none = ExclusionPolicy()
 
   public let normalizedRanges: [ClosedRange<TimeInterval>]
+  private let transcriptTimeRanges: [ClosedRange<TimeInterval>]
+  private let transcriptLineKeys: Set<String>
   private let excludedSpeakerLabels: Set<String>
 
   public init(
@@ -39,6 +45,8 @@ public struct ExclusionPolicy: Equatable, Sendable {
     excludedSpeakers: [String] = []
   ) {
     normalizedRanges = Self.normalized(excludedRanges)
+    transcriptTimeRanges = Self.normalized(excludedRanges.filter { $0.transcriptLineKeys == nil })
+    transcriptLineKeys = Set(excludedRanges.flatMap { $0.transcriptLineKeys ?? [] })
     excludedSpeakerLabels = Set(
       excludedSpeakers.compactMap { label in
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -67,26 +75,43 @@ public struct ExclusionPolicy: Equatable, Sendable {
 
   /// 只删能由固定行格式确定归属的发言；普通行与解析失败的行逐字保留。
   public func filterTranscript(_ content: String) -> String {
-    guard !normalizedRanges.isEmpty || !excludedSpeakerLabels.isEmpty else {
-      return content
+    filterTranscriptWithLineIndices(content).text
+  }
+
+  /// 输出行对应的原文行序；省略占位行没有原文行序，供复制出口保留逐句改名。
+  public func filterTranscriptWithLineIndices(
+    _ content: String
+  ) -> (text: String, originalLineIndices: [Int?]) {
+    guard
+      !transcriptTimeRanges.isEmpty || !transcriptLineKeys.isEmpty
+        || !excludedSpeakerLabels.isEmpty
+    else {
+      return (content, content.components(separatedBy: "\n").indices.map { Optional($0) })
     }
 
     let rawLines = content.components(separatedBy: "\n")
     let rows = TranscriptSpeakerNaming.rows(in: content)
     var output: [String] = []
+    var originalLineIndices: [Int?] = []
     var omittedStart: String?
     var omittedEnd: String?
 
     func flushOmission() {
       guard let omittedStart, let omittedEnd else { return }
       output.append("[已省略闲聊 \(omittedStart)–\(omittedEnd)]")
+      originalLineIndices.append(nil)
     }
 
-    for (rawLine, row) in zip(rawLines, rows) {
+    for (index, (rawLine, row)) in zip(rawLines, rows).enumerated() {
       if case .speech(let line) = row {
         let seconds = TranscriptAnchor(timecode: line.timestamp).seconds
-        let excludedByTime = seconds.map(isExcluded(time:)) ?? false
-        if excludedByTime || isExcluded(speakerLabel: line.originalSpeaker) {
+        let excludedByTime =
+          seconds.map { time in
+            transcriptTimeRanges.contains { $0.contains(time) }
+          } ?? false
+        if excludedByTime || transcriptLineKeys.contains(line.overrideKey)
+          || isExcluded(speakerLabel: line.originalSpeaker)
+        {
           omittedStart = omittedStart ?? line.timestamp
           omittedEnd = line.timestamp
           continue
@@ -99,9 +124,10 @@ public struct ExclusionPolicy: Equatable, Sendable {
         omittedEnd = nil
       }
       output.append(rawLine)
+      originalLineIndices.append(index)
     }
     flushOmission()
-    return output.joined(separator: "\n")
+    return (output.joined(separator: "\n"), originalLineIndices)
   }
 
   /// 章节视图只按可靠锚点删除；无锚点要点保守保留，整块时间完全命中时才删。

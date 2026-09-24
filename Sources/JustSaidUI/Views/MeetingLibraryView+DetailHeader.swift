@@ -225,8 +225,7 @@ extension MeetingLibraryView {
           .disabled(!model.canGenerateMinutes(for: item) || model.minutesGenerationStage(for: item).isRunning)
         Divider()
         Button("复制当前页全文") {
-          let document = model.document(for: item, tab: model.tab)
-          guard let text = document.body else { return }
+          guard let text = model.textForCopy(for: item, tab: model.tab) else { return }
           NSPasteboard.general.clearContents()
           if NSPasteboard.general.setString(text, forType: .string) {
             model.reportCopySuccess("已复制当前页全文")

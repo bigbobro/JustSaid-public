@@ -17,6 +17,16 @@ public enum TranscriptTextKitDiagnostics {
   public private(set) static var maximumAttributedConstructionDuration: TimeInterval = 0
   public private(set) static var maximumTextStorageInstallDuration: TimeInterval = 0
 
+  /// 定向探针复用灰显、右键与徽章撤销的实际覆盖判定。
+  public static func excludedRangeID(
+    for line: TranscriptSpeechLine, in ranges: [ExcludedRange]
+  ) -> UUID? {
+    guard let seconds = TranscriptAnchor(timecode: line.timestamp).seconds else { return nil }
+    return ExclusionUI.coveringRange(
+      at: seconds, in: ranges, transcriptLineKey: line.overrideKey
+    )?.id
+  }
+
   public static func reset() {
     attributedRebuildCount = 0
     scrollCommitCount = 0
@@ -942,9 +952,12 @@ private final class InteractiveTranscriptTextView: NSTextView {
     let point = convert(event.locationInWindow, from: nil)
     if let onRemoveExclusion = actions.onRemoveExclusion,
       let hit = badgeRects.first(where: { $0.value.contains(point) }),
-      let rendered = visibleDecorations.first(where: { $0.rendered.line.index == hit.key })?.rendered,
+      let rendered = visibleDecorations.first(where: { $0.rendered.line.index == hit.key })?
+        .rendered,
       let seconds = rendered.seconds,
-      let covering = ExclusionUI.coveringRange(at: seconds, in: styleSnapshot.excludedRanges)
+      let covering = ExclusionUI.coveringRange(
+        at: seconds, in: styleSnapshot.excludedRanges, transcriptLineKey: rendered.line.overrideKey
+      )
     {
       onRemoveExclusion(covering.id)
       return
@@ -1055,7 +1068,9 @@ private final class InteractiveTranscriptTextView: NSTextView {
     let menu = NSMenu()
     let line = rendered.line
     let coveringRange = rendered.seconds.flatMap {
-      ExclusionUI.coveringRange(at: $0, in: styleSnapshot.excludedRanges)
+      ExclusionUI.coveringRange(
+        at: $0, in: styleSnapshot.excludedRanges, transcriptLineKey: line.overrideKey
+      )
     }
     let isSpeakerExcluded = styleSnapshot.excludedSpeakers.contains(line.originalSpeaker)
 
@@ -1266,7 +1281,9 @@ private final class InteractiveTranscriptTextView: NSTextView {
   ) -> Bool {
     snapshot.excludedSpeakers.contains(range.line.originalSpeaker)
       || range.seconds.map {
-        ExclusionUI.coveringRange(at: $0, in: snapshot.excludedRanges) != nil
+        ExclusionUI.coveringRange(
+          at: $0, in: snapshot.excludedRanges, transcriptLineKey: range.line.overrideKey
+        ) != nil
       } == true
   }
 

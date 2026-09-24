@@ -143,7 +143,7 @@ extension MeetingLibraryModel {
 
   // MARK: - 排除时间段(08-14)
 
-  /// 会后选段排除(postSelect):起点取该行时间戳,终点取到下一条发言行**之前**;
+  /// 会后选段排除(postSelect):转写按原文行键精确匹配，时间范围仍供话题过滤使用;
   /// 已是最后一条时兜底 +30 秒(与会中 bullet 排除同一口径)。
   /// 只写 `meeting.json` 的排除记录,`transcript.md` 一个字节都不碰。
   public func excludeTranscriptLine(_ line: TranscriptSpeechLine, of item: MeetingLibraryItem) {
@@ -157,7 +157,7 @@ extension MeetingLibraryModel {
     }.min()
     // Core 按闭区间 + 行首锚点判归属:end 恰等于下一行锚点会把下一行也吞掉。
     // 时间戳分辨率 1 秒,退 1 秒正好盖住本行到下一行之间的所有锚点;
-    // 下一行与本行同秒时退成点区间 [start, start](同秒本就无法区分)。
+    // 同秒时保留点时间范围，转写的精确归属由 transcriptLineKeys 决定。
     let end = nextSpeechStart.map { max(start, $0 - 1) } ?? start + 30
     do {
       let fingerprint = try requireTranscriptEditContext(for: item)
@@ -166,7 +166,8 @@ extension MeetingLibraryModel {
         end: end,
         origin: ExclusionUI.Origin.postSelect,
         at: item.paths,
-        expectedTranscriptFingerprint: fingerprint
+        expectedTranscriptFingerprint: fingerprint,
+        transcriptLineKeys: [line.overrideKey]
       )
       // add 只回区间不回整份 metadata;按 MeetingStore 的追加语义本地补齐,
       // 与 `setSpeakerOverride` 的局部更新同款,不整表 reload。
@@ -181,8 +182,8 @@ extension MeetingLibraryModel {
   /// 批量选段排除(08-14 exclusion-batch-select):把 [first, last] 闭区间(按行序,
   /// 乱序传入会先归一)写成**一条** postSelect 记录——撤销一次整段恢复,不用新机制。
   /// start = 首行锚点;end 遵守 exclusion-ranges-contract 的相邻行陷阱:取末行之后
-  /// 第一条发言行锚点 − 1 秒(直接取下一行锚点会把下一行吞进过滤;同秒退化成点区间,
-  /// 时间戳分辨率 1 秒,同秒本就无法区分)。末行已是全文最后一条发言时兜底 +30 秒:
+  /// 第一条发言行锚点 − 1 秒。转写按选中行键匹配，不受同秒首尾邻行影响。
+  /// 末行已是全文最后一条发言时兜底 +30 秒:
   /// `TranscriptSpeechLine` 没有 t1,段落真实结束时刻不可得,与 `excludeTranscriptLine`
   /// 的末条兜底保持同一口径。写成功后清选区——灰显由既有排除渲染自动接管;
   /// 写失败保留选区,原因走既有 exclusionError。
@@ -198,7 +199,14 @@ extension MeetingLibraryModel {
       let start = TranscriptAnchor(timecode: ordered.0.timestamp).seconds,
       let lastStart = TranscriptAnchor(timecode: ordered.1.timestamp).seconds
     else { return }
-    let nextSpeechStart = transcriptRows(for: item).compactMap { row -> TimeInterval? in
+    let rows = transcriptRows(for: item)
+    let selectedKeys = rows.compactMap { row -> String? in
+      guard case .speech(let line) = row,
+        (ordered.0.index...ordered.1.index).contains(line.index)
+      else { return nil }
+      return line.overrideKey
+    }
+    let nextSpeechStart = rows.compactMap { row -> TimeInterval? in
       guard case .speech(let other) = row, other.index > ordered.1.index else { return nil }
       return TranscriptAnchor(timecode: other.timestamp).seconds
     }.min()
@@ -210,7 +218,8 @@ extension MeetingLibraryModel {
         end: end,
         origin: ExclusionUI.Origin.postSelect,
         at: item.paths,
-        expectedTranscriptFingerprint: fingerprint
+        expectedTranscriptFingerprint: fingerprint,
+        transcriptLineKeys: selectedKeys
       )
       // 与 excludeTranscriptLine 同款:按 MeetingStore 追加语义本地补齐,不整表 reload。
       meetings[index].excludedRanges.append(range)
@@ -266,6 +275,29 @@ extension MeetingLibraryModel {
     guard var metadata = artifactCache[item.id]?.transcript.metadata else { return }
     metadata.excludedRanges = (metadata.excludedRanges ?? []) + [range]
     updateTranscriptMetadata(metadata, for: item)
+  }
+
+  public func textForCopy(for item: MeetingLibraryItem, tab: MeetingDetailTab) -> String? {
+    guard tab == .transcript else { return document(for: item, tab: tab).body }
+    _ = artifacts(for: item)
+    guard let snapshot = artifactCache[item.id]?.transcript,
+      let transcript = snapshot.transcript
+    else { return nil }
+    let filtered = ExclusionPolicy(metadata: snapshot.metadata)
+      .filterTranscriptWithLineIndices(transcript)
+    let originalRows = TranscriptSpeakerNaming.rows(in: transcript)
+    var overrides: [String: String] = [:]
+    for (index, originalIndex) in filtered.originalLineIndices.enumerated() {
+      guard let originalIndex, case .speech(let line) = originalRows[originalIndex],
+        let name = snapshot.metadata.speakerOverrides?[line.overrideKey]
+      else { continue }
+      overrides[TranscriptSpeakerNaming.overrideKey(timestamp: line.timestamp, index: index)] = name
+    }
+    return TranscriptSpeakerNaming.applyingNames(
+      snapshot.metadata.speakerNames ?? [:],
+      overrides: overrides,
+      to: filtered.text
+    )
   }
 
   func document(for item: MeetingLibraryItem, tab: MeetingDetailTab) -> MeetingDocument {

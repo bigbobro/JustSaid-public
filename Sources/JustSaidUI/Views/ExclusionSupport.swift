@@ -15,16 +15,21 @@ enum ExclusionUI {
     static let postSelect = "postSelect"
   }
 
-  /// 某时刻落在哪条排除区间里。必须用**原始** excludedRanges 自己判:
+  /// 转写传原文行键以精确匹配；会中无行键继续按时间判定。
+  /// 必须用原始 excludedRanges 自己判:
   /// `ExclusionPolicy` 把区间归并了,按 id 撤销时拿不到归并前的记录。
   /// 多条同时覆盖(会中开区间压住会前已封口的段)时,优先撤会中标记
   /// (liveRetro/liveToggle),再撤最短区间——误标的通常是更具体的那条。
   static func coveringRange(
     at time: TimeInterval,
-    in ranges: [ExcludedRange]
+    in ranges: [ExcludedRange],
+    transcriptLineKey: String? = nil
   ) -> ExcludedRange? {
     let covering = ranges.filter { range in
-      range.start <= time && time <= (range.end ?? .infinity)
+      if let keys = range.transcriptLineKeys, let transcriptLineKey {
+        return keys.contains(transcriptLineKey)
+      }
+      return range.start <= time && time <= (range.end ?? .infinity)
     }
     let live = covering.filter {
       $0.origin == Origin.liveRetro || $0.origin == Origin.liveToggle

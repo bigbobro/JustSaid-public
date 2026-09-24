@@ -354,13 +354,15 @@ public struct OpenAICompatibleLLMClient: LLMClient {
       "Bearer \(configuration.apiKey)",
       forHTTPHeaderField: "Authorization"
     )
+    var messages: [Message] = []
+    if !request.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      messages.append(Message(role: "system", content: request.systemPrompt))
+    }
+    messages.append(Message(role: "user", content: request.userPrompt))
     urlRequest.httpBody = try JSONEncoder().encode(
       ChatCompletionRequest(
         model: configuration.model,
-        messages: [
-          Message(role: "system", content: request.systemPrompt),
-          Message(role: "user", content: request.userPrompt),
-        ],
+        messages: messages,
         stream: true,
         // 流式默认不返回 usage;不显式索要就等于从此丢掉花销账本(既有红线)。
         streamOptions: StreamOptions(includeUsage: true),

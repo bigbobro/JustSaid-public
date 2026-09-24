@@ -591,13 +591,15 @@ public final class MeetingStore: @unchecked Sendable {
     reason: String? = nil,
     origin: String,
     at paths: MeetingPaths,
-    expectedTranscriptFingerprint: String? = nil
+    expectedTranscriptFingerprint: String? = nil,
+    transcriptLineKeys: [String]? = nil
   ) throws -> ExcludedRange {
     let excludedRange = ExcludedRange(
       start: start,
       end: end,
       reason: reason,
-      origin: origin
+      origin: origin,
+      transcriptLineKeys: transcriptLineKeys
     )
     _ = try mutateMetadata(at: paths) {
       try requireTranscriptFingerprint(expectedTranscriptFingerprint, at: paths)
@@ -1298,6 +1300,7 @@ public final class MeetingStore: @unchecked Sendable {
         || !(metadata.dismissedSpeakerSuggestions ?? []).isEmpty
         || !(metadata.speakerChannelStats ?? [:]).isEmpty
         || !(metadata.speakerAcousticObservations ?? [:]).isEmpty
+        || (metadata.excludedRanges ?? []).contains { $0.transcriptLineKeys != nil }
       if previous != nil || hasOldAssociations || suggestions != nil {
         try history.archive(transcript: previous, metadata: oldMetadata, suggestions: suggestions)
       }
@@ -1307,6 +1310,12 @@ public final class MeetingStore: @unchecked Sendable {
       metadata.dismissedSpeakerSuggestions = nil
       metadata.speakerChannelStats = nil
       metadata.speakerAcousticObservations = nil
+      // 新正文不复用旧行序；保留排除意图，降级为原有时间范围。
+      metadata.excludedRanges = metadata.excludedRanges?.map { range in
+        var preserved = range
+        preserved.transcriptLineKeys = nil
+        return preserved
+      }
       let encoder = JSONEncoder()
       encoder.dateEncodingStrategy = .iso8601
       encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
