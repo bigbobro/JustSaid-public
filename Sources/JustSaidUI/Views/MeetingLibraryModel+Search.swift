@@ -236,7 +236,7 @@ extension MeetingLibraryModel {
       return "正在读取会议内容…"
     }
     if MeetingArtifactProjection.onePager(from: artifacts) == nil {
-      return "暂不能导出，还缺：一页纸"
+      return "暂不能导出，还缺：这场会的结构"
     }
     return nil
   }

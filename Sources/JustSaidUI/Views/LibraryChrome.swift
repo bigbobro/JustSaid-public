@@ -166,10 +166,14 @@ struct ImportRecordingForm: View {
       .font(.system(size: Tokens.FontSize.ui))
       .foregroundStyle(Tokens.Color.ink3)
 
-      if probe.exceedsVolumeGate {
-        Text("文件超过 \(ExternalRecordingImport.volumeGateBytes / (1_024 * 1_024)) MB，确认导入后会再提示直传风险。")
-          .font(.system(size: Tokens.FontSize.ui))
-          .foregroundStyle(Tokens.Color.warn)
+      // 与确认弹窗同一条件:超过体积闸门且本机压不了。能压的不论多大都会先压再传,不提示。
+      if probe.needsDirectUploadConfirmation {
+        Text(
+          "文件超过 \(ExternalRecordingImport.volumeGateBytes / (1_024 * 1_024)) MB 且本机无法压缩，将直接上传原文件；确认导入后会再提示一次风险。"
+        )
+        .font(.system(size: Tokens.FontSize.ui))
+        .foregroundStyle(Tokens.Color.warn)
+        .runtimeAccessibilityIdentifier("import.direct-upload-risk")
       }
 
       HStack {

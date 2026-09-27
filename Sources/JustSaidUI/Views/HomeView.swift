@@ -109,7 +109,7 @@ struct HomeView<Notices: View>: View {
         })
     }
     .confirmationDialog(
-      "这份录音较大且本机压不了",
+      "这份录音较大，本机无法压缩",
       isPresented: Binding(
         get: { model.importVolumeRiskMessage != nil },
         set: { if !$0 { model.cancelVolumeRisk() } }), titleVisibility: .visible

@@ -1163,7 +1163,13 @@ public struct PostMeetingPipeline: Sendable {
         throw CancellationError()
       } catch {
         // 压缩是跨境下载超时的减风险手段，不是转写正确性的前置条件；
-        // 本机转码失败时保留原始录音并直接上传原文件。
+        // 本机转码失败时保留原始录音并直接上传原文件。导入时读得出音频轨就不提示直传风险,
+        // 真到这里压不了是界面看不见的残余情况,日志必须留一条可定位的记录。
+        let originalBytes =
+          (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+        Self.storageLogger.error(
+          "上传副本转码失败,改传原文件 meeting=\(context.meetingShortID, privacy: .public) key=\(objectName, privacy: .public) bytes=\(originalBytes, privacy: .public) error=\(String(describing: type(of: error)), privacy: .public) detail=\(error.localizedDescription, privacy: .private)"
+        )
         uploadFileURL = fileURL
       }
     } else {

@@ -35,9 +35,19 @@ enum PostMeetingAudioCompressor {
   private static let sampleRate = 16_000
   private static let bitRate = 32_000
 
+  /// 压缩的前置条件:AVFoundation 能从文件头读出音频轨。只读容器头,不解码、不转码。
+  /// 导入探测(要不要提示直传风险)与真正压缩共用这一条,两边不会各说各话。
+  static func firstAudioTrack(of asset: AVURLAsset) async throws -> AVAssetTrack? {
+    try await asset.loadTracks(withMediaType: .audio).first
+  }
+
+  static func hasReadableAudioTrack(at url: URL) async -> Bool {
+    (try? await firstAudioTrack(of: AVURLAsset(url: url))) != nil
+  }
+
   static func makeUploadCopy(of sourceURL: URL) async throws -> URL {
     let asset = AVURLAsset(url: sourceURL)
-    guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
+    guard let track = try await firstAudioTrack(of: asset) else {
       throw PostMeetingAudioCompressorError.noAudioTrack
     }
 

@@ -494,7 +494,7 @@ extension MeetingLibraryModel {
             document: $0
           )
         },
-        emptyHint: "一页纸会在中文版纪要生成后出现；拿不准会议骨架时会直接显示要点列表。"
+        emptyHint: "这场会的结构会在中文版纪要生成后出现；拿不准会议骨架时会直接显示要点列表。"
       )
     case .minutes:
       // AC13:正在生成的那一版直接铺实时正文,让用户看见"在生成什么"。
@@ -709,11 +709,11 @@ extension MeetingLibraryModel {
     else {
       return
     }
-    // AC13:正文马上就要往外写了,把用户带到能看见它的地方。
+    // AC13:正文马上就要往外写了,把用户带到能看见它的地方——「这场会」的正式纪要看法。
     // 生成一律从中文起(中文是主产物),所以变体也复位到中文、版本回到「最新」;
     // 原始数据开关也复位——新一轮默认先看排版投影。
     // 导航留在这里(按钮按下的当场),协调者完成时不得改动用户当前选择的会议。
-    tab = .minutes
+    land(on: .minutes)
     minutesVariant = .chinese
     minutesRevisionID = nil
     showsRawLiveMinutes = false

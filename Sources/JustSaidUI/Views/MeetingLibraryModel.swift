@@ -51,9 +51,10 @@ public enum MeetingDetailTab: String, CaseIterable, Identifiable, Hashable, Send
     }
   }
 
-  /// ⌘1-⌘4 与界面页签顺序同一套,不另开编号。
+  /// ⌘1-⌘3 与界面页签顺序同一套,不另开编号。
   /// 界面上只剩三个页签:纪要合进「这场会」,不再单独成签。
-  /// `.minutes` 作为文档口径保留(复制当前页全文、导出、G3 恢复的旧值都还走它)。
+  /// `.minutes` 作为文档口径保留(复制当前页全文、导出、G3 恢复的旧值都还走它),
+  /// 不是可落的页签:要「带去看纪要」一律经 `MeetingLibraryModel.land(on:)` 换算。
   public static let visibleCases: [MeetingDetailTab] = [.onePage, .transcript, .inMeeting]
 
   public var keyboardEquivalent: KeyEquivalent {
@@ -65,14 +66,8 @@ public enum MeetingDetailTab: String, CaseIterable, Identifiable, Hashable, Send
     }
   }
 
-  var keycapLabel: String {
-    switch self {
-    case .onePage: return "⌘1"
-    case .minutes: return "⌘2"
-    case .transcript: return "⌘3"
-    case .inMeeting: return "⌘4"
-    }
-  }
+  /// 悬停与无障碍提示里的键帽,从实际绑定推出,两处不会再各写一套(四签时代的 ⌘2/⌘3/⌘4 残留)。
+  var keycapLabel: String { "⌘\(keyboardEquivalent.character)" }
 }
 
 /// ⏱/溯源跳转后的临时回程。只记来源页签;滚动态走 AppCoordinator 的四页签记忆。
@@ -705,12 +700,9 @@ public final class MeetingLibraryModel: ObservableObject {
     let restoresSameMeeting =
       restoredSelectedID != nil
       && (focus == nil || focus?.standardizedFileURL.path == restoredSelectedID)
-    if restoresSameMeeting, restoredTab == .minutes {
-      tab = .onePage
-      showsFormalMinutes = true
-    } else {
-      tab = restoredTab
-    }
+    // 与 `land(on:)` 同一换算(init 里还不能调实例方法):`.minutes` 不落成页签。
+    tab = restoredTab == .minutes ? .onePage : restoredTab
+    showsFormalMinutes = restoresSameMeeting && restoredTab == .minutes
     // 记住它:`select(_:)` 里会按会议事实算一个「默认落签」,把这里恢复的值盖掉。
     // 那条规则是给**新打开一场会**用的;会话恢复时用户上次停在哪一签,就该回到哪一签
     // (2026-09-20:退出时停在完整转写,重开落回「这场会」)。只认第一次选中。
@@ -1195,6 +1187,9 @@ public final class MeetingLibraryModel: ObservableObject {
     snapshotID = nil
     minutesRevisionID = nil
     minutesVariant = .chinese
+    // 看法和中/EN 一样按场复位:上一场被自动带到正式纪要,不该漏到下一场;
+    // 需要正式纪要的落签由下面的 `land(on:)` 再打开。
+    showsFormalMinutes = false
     showsRawLiveMinutes = false
     showsCheckWorkbench = false
     speakerNameError = nil
@@ -1217,9 +1212,9 @@ public final class MeetingLibraryModel: ObservableObject {
     // 会话恢复的页签优先:它是用户上次停的地方,不该被「这场会该落在哪一签」盖掉。
     if let restored = pendingRestoredTab {
       pendingRestoredTab = nil
-      tab = restored == .minutes ? .onePage : restored
+      land(on: restored)
     } else {
-      tab = preferredLandingTab(for: item)
+      land(on: preferredLandingTab(for: item))
     }
     if item.hasEnglishMinutes, !item.hasChineseMinutes {
       minutesVariant = .english
@@ -1227,8 +1222,8 @@ public final class MeetingLibraryModel: ObservableObject {
       minutesVariant = .chinese
     }
     scheduleArtifactLoad(for: item)
-    // 英文版局部失败:同一场同一失败首次选中时落到纪要·EN,否则提示条藏在未选中的
-    // 页签里等于静默吞掉(D2/R2);后续选中不再强拉,新失败(以 failedAt 区分)再提示一次。
+    // 英文版局部失败:同一场同一失败首次选中时落到这场会·正式纪要·EN,否则提示条藏在
+    // 没打开的看法里等于静默吞掉(D2/R2);后续选中不再强拉,新失败(以 failedAt 区分)再提示一次。
     if let failure = item.englishMinutesPartialFailure {
       let navigationKey = EnglishFailureNavigationKey(
         meetingID: item.id,
@@ -1238,14 +1233,38 @@ public final class MeetingLibraryModel: ObservableObject {
       guard presentedEnglishFailureNavigations.insert(navigationKey).inserted else {
         return
       }
-      tab = .minutes
+      land(on: .minutes)
       minutesVariant = .english
     }
   }
 
+  /// 落签的唯一换算。`.minutes` 已不是可见页签(纪要合进「这场会」,owner 2026-09-20),
+  /// 凡是要「带去看纪要」的路径(旧值恢复、默认落签、英文局部失败、开始生成纪要)都落到
+  /// 「这场会」的正式纪要看法:页签栏有选中项,「结构 / 正式纪要」切换也在。
+  func land(on target: MeetingDetailTab) {
+    if target == .minutes {
+      tab = .onePage
+      showsFormalMinutes = true
+    } else {
+      tab = target
+    }
+  }
+
+  /// 「这场会」能不能停在正式纪要看法:盘上有纪要;英文版局部失败(提示条与重试只挂在
+  /// 正式纪要·EN,中文那轮也没成时同样要打开);或这一轮纪要正在生成/已有实时草稿
+  /// (第一次生成时盘上还没有,草稿也要等第一段正文才出现)。都没有时一律画结构视图,
+  /// 切换也不画——不把人留在一块没有出口的空纪要里。
+  func hasFormalMinutesView(for item: MeetingLibraryItem) -> Bool {
+    item.hasFormalMinutes
+      || hasEnglishMinutes(for: item)
+      || minutesGenerationStage(for: item).isRunning
+      || postMeetingTasks.liveMinutesDraft(for: item.paths.directory) != nil
+  }
+
   func hasContent(for item: MeetingLibraryItem, tab: MeetingDetailTab) -> Bool {
     switch tab {
-    case .onePage: return item.hasChineseMinutes
+    // 「这场会」装着结构与正式纪要两种看法,任一版纪要在就不是空的。
+    case .onePage: return item.hasFormalMinutes
     case .minutes: return item.hasChineseMinutes || item.hasEnglishMinutes
     case .transcript: return item.hasAuthoritativeTranscript
     case .inMeeting: return item.hasSummaryHistory || item.hasNotes
@@ -1253,6 +1272,7 @@ public final class MeetingLibraryModel: ObservableObject {
   }
 
   /// 选中落签使用列表快照中的轻量事实，不为了决定页签同步读取完整正文。
+  /// 返回 `.minutes` 表示「正式纪要看法」,由 `land(on:)` 换算成「这场会」。
   public func preferredLandingTab(for item: MeetingLibraryItem) -> MeetingDetailTab {
     if item.hasChineseMinutes { return .onePage }
     if item.hasSummaryHistory { return .inMeeting }
@@ -1632,7 +1652,7 @@ public final class MeetingLibraryModel: ObservableObject {
       language: language,
       acceptVolumeRisk: acceptVolumeRisk
     )
-    if sheet.probe.exceedsVolumeGate, !acceptVolumeRisk {
+    if sheet.probe.needsDirectUploadConfirmation, !acceptVolumeRisk {
       importVolumeRiskMessage =
         ExternalRecordingImport.ImportError.volumeRiskRequiresConfirmation(
           bytes: sheet.probe.fileSizeBytes

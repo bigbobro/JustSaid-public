@@ -133,7 +133,10 @@ private struct RecoveryNoticeContents: View {
           if advice.channelIssue, services != nil {
             Button("修改本次使用的渠道配置") { perform(.editKey) }.buttonStyle(.v1Quiet)
           }
-          if let retry { Button("重试…", action: retry).buttonStyle(.v1Quiet) }
+          if let retry {
+            Button("重试…", action: retry).buttonStyle(.v1Quiet)
+              .runtimeAccessibilityIdentifier("recovery.retry")
+          }
           Text(supportText).textSelection(.enabled).font(Tokens.V1.Text.meta.font)
           HStack {
             Button(copied ? "已复制" : advice.channelIssue ? "复制渠道排查信息" : "复制排查信息") { copy() }

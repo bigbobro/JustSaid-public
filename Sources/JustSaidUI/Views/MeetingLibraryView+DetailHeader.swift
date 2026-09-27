@@ -4,20 +4,18 @@ import SwiftUI
 extension MeetingLibraryView {
   /// 只留一枚箭头。原来是「‹ 会议库」文字按钮,和会名抢同一行,而图标轨上「会议库」
   /// 本来就亮着——你在哪已经说过一遍了(owner 2026-09-20「感觉跟整个 app 不自然」)。
-  /// 见 docs/design-system/README.md「往里走一层」。
+  /// 见 docs/design-system/README.md「往里走一层」。从待办进入时同样只留箭头,
+  /// 上一层是谁写在提示里(2026-09-27 去掉「‹ 我的待办」这个例外)。
   var meetingBackButton: some View {
     Group {
       if returnsToTodos {
         Button {
           onReturnToTodos?()
         } label: {
-          HStack(spacing: Tokens.V1.Space.s2xs) {
-            Image(systemName: "chevron.left")
-            Text("我的待办")
-          }
+          Image(systemName: "chevron.left")
         }
-        .buttonStyle(.v1Quiet)
-        .help("返回我的待办")
+        .buttonStyle(.v1Icon)
+        .help("返回我的待办 ⌘[")
         .accessibilityLabel("返回我的待办")
         .keyboardShortcut("[", modifiers: .command)
         .runtimeAccessibilityIdentifier("meeting.back-to-todos")

@@ -5,6 +5,7 @@ import Foundation
 /// 顺序即安全边界——`listMeetings` 只认有 meeting.json 的目录,拷到一半崩溃的残目录不可见。
 public enum ExternalRecordingImport {
   /// 体积闸门(字节)。超过且无法用 AVFoundation 压缩时弹窗告知风险(D1)。
+  /// 能压的不论多大都不提示:上传前会压成 32 kbps(50 分钟约 12 MB)。
   public static let volumeGateBytes: Int64 = 30 * 1_024 * 1_024
 
   public struct ProbeResult: Equatable, Sendable {
@@ -12,19 +13,24 @@ public enum ExternalRecordingImport {
     public let fileSizeBytes: Int64
     /// 火山 `audio.format` 用的短码(m4a/mp3/wav/…)。
     public let audioFormat: String
-    /// 是否超过体积闸门(导入 UI 决定是否弹风险确认)。
-    public let exceedsVolumeGate: Bool
+    /// 本机能不能压:AVFoundation 读得出音频轨(与上传前压缩同一前置条件,只读文件头)。
+    public let hasReadableAudioTrack: Bool
 
     public init(
       durationSeconds: TimeInterval?,
       fileSizeBytes: Int64,
       audioFormat: String,
-      exceedsVolumeGate: Bool
+      hasReadableAudioTrack: Bool
     ) {
       self.durationSeconds = durationSeconds
       self.fileSizeBytes = fileSizeBytes
       self.audioFormat = audioFormat
-      self.exceedsVolumeGate = exceedsVolumeGate
+      self.hasReadableAudioTrack = hasReadableAudioTrack
+    }
+
+    /// 要不要先确认直传风险:超过体积闸门且本机压不了,才会直接上传原文件。
+    public var needsDirectUploadConfirmation: Bool {
+      fileSizeBytes > ExternalRecordingImport.volumeGateBytes && !hasReadableAudioTrack
     }
   }
 
@@ -66,7 +72,7 @@ public enum ExternalRecordingImport {
       case .volumeRiskRequiresConfirmation(let bytes):
         let mb = Double(bytes) / (1_024 * 1_024)
         return String(
-          format: "这份录音约 %.0f MB 且本机压不了,直传有失败风险且失败也计费。确认后才会导入。",
+          format: "本机无法压缩这份录音（约 %.0f MB），将直接上传原文件；文件较大时可能上传或识别失败，失败也计费。确认后才会导入。",
           mb
         )
       case .copyFailed(let detail):
@@ -89,7 +95,8 @@ public enum ExternalRecordingImport {
       durationSeconds: duration,
       fileSizeBytes: Int64(size),
       audioFormat: format,
-      exceedsVolumeGate: Int64(size) > volumeGateBytes
+      hasReadableAudioTrack: await PostMeetingAudioCompressor.hasReadableAudioTrack(
+        at: sourceFileURL)
     )
   }
 
@@ -108,7 +115,7 @@ public enum ExternalRecordingImport {
     else {
       throw ImportError.emptySource
     }
-    if probe.exceedsVolumeGate, !request.acceptVolumeRisk {
+    if probe.needsDirectUploadConfirmation, !request.acceptVolumeRisk {
       throw ImportError.volumeRiskRequiresConfirmation(bytes: probe.fileSizeBytes)
     }
 

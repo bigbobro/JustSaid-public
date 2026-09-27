@@ -42,9 +42,6 @@ extension MeetingLibraryView {
         Divider()
         minutesGenerationBanner(selected)
         tabBar(selected)
-        if model.tab == .minutes, hasMinutesToolContent(selected) {
-          minutesToolRow(selected)
-        }
         if model.tab == .transcript {
           transcriptToolRow(selected)
         }
@@ -67,13 +64,21 @@ extension MeetingLibraryView {
           // 是「找那句话」(owner 2026-09-20 走查完整转写)。
           transcriptFilterRow(selected)
         }
-        if model.tab == .onePage, model.showsFormalMinutes {
-          // 正式纪要:自带滚动区,所以是整块换,不嵌进一页纸的滚动区。
+        if model.tab == .onePage, model.showsFormalMinutes,
+          model.hasFormalMinutesView(for: selected)
+        {
+          // 正式纪要:自带滚动区,所以是整块换,不嵌进结构视图的滚动区。
           // 中/EN 与历史版本都只管这一块,挂在它头上。
           formalMinutesSwitch(selected)
           if hasMinutesToolContent(selected) {
             minutesToolRow(selected)
           }
+          // 附加产物局部失败:只在正式纪要·EN 提示 + 重试,不惊动全局状态(D2)。
+          if model.minutesVariant == .english, selected.englishMinutesPartialFailure != nil {
+            partialEnglishMinutesBanner(selected)
+          }
+          // 无条件实例化(红线 6):生成中投影/原始数据/盘上产物三态的
+          // 显隐判断全部收在 `MinutesDocumentPane` 内部。
           minutesPane(selected)
         } else if model.tab == .onePage, let onePager = model.onePager(for: selected) {
           formalMinutesSwitch(selected)
@@ -156,25 +161,15 @@ extension MeetingLibraryView {
         } else if model.tab == .inMeeting {
           inMeetingPage(selected)
         } else {
-          VStack(alignment: .leading, spacing: 0) {
-            // 附加产物局部失败:只在纪要·英文版页签内提示 + 重试,不惊动全局状态(D2)。
-            if model.tab == .minutes,
-              model.minutesVariant == .english,
-              selected.englishMinutesPartialFailure != nil
-            {
-              partialEnglishMinutesBanner(selected)
-            }
-            if model.tab == .minutes {
-              // 无条件实例化(红线 6):生成中投影/原始数据/盘上产物三态的
-              // 显隐判断全部收在 `MinutesDocumentPane` 内部。
-              minutesPane(selected)
-            } else {
-              MeetingDocumentView(
-                document: model.document(for: selected, tab: model.tab),
-                scrollOffset: tabScrollBinding(for: model.tab)
-              )
-            }
+          if model.tab == .onePage {
+            // 结构视图还画不出来(只有英文纪要、或结构化投影缺)时,切换照样给:
+            // 否则正式纪要在「这场会」里就没有入口了。
+            formalMinutesSwitch(selected)
           }
+          MeetingDocumentView(
+            document: model.document(for: selected, tab: model.tab),
+            scrollOffset: tabScrollBinding(for: model.tab)
+          )
         }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -669,7 +664,7 @@ extension MeetingLibraryView {
   /// 它们是同一份结构化纪要,不是两份产物,所以不该是两个页签(owner 2026-09-20)。
   @ViewBuilder
   func formalMinutesSwitch(_ item: MeetingLibraryItem) -> some View {
-    if item.hasFormalMinutes {
+    if model.hasFormalMinutesView(for: item) {
       HStack(spacing: Tokens.V1.Space.xs) {
         Spacer(minLength: .zero)
         V1SegmentedPicker(
