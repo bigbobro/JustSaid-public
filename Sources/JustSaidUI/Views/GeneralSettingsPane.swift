@@ -263,22 +263,37 @@ private struct DiagnosticsExportCard: View {
 
   var body: some View {
     SettingsFormGroup("诊断", hint: "导出诊断包，帮助定位问题。") {
-      Button(diagnostics.isExporting ? "正在收集诊断资料" : "导出…") {
-        let services = LLMRecoveryServices(settings: settingsStore, navigate: { _ in })
-        diagnostics.chooseDestination(paths: nil, settings: services.safeSettings, advice: nil)
-      }
-      .buttonStyle(.v1Outline)
-      .disabled(diagnostics.isExporting)
-      .runtimeAccessibilityIdentifier("settings.diagnostics-export")
-      if let result = diagnostics.result {
-        Text("已导出到 \(result.url.path)。请将此诊断包发送给 JustSaid 开发者。")
-          .textSelection(.enabled).font(Tokens.V1.Text.meta.font)
-        ForEach(result.notes, id: \.self) { Text($0).font(Tokens.V1.Text.meta.font) }
-        Button("在 Finder 中显示") { diagnostics.reveal() }.buttonStyle(.v1Quiet)
-      }
-      if let failure = diagnostics.failure {
-        Text(failure).font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.warn)
+      // 必须包在标准行里:裸按钮直接进组卡会贴着卡片左沿,读成「按钮粘在一根空长条上」。
+      SettingsFormRow("诊断包", labelDetail: "不含会议内容与密钥。", isFirst: true) {
+        Button(diagnostics.isExporting ? "正在收集诊断资料" : "导出…") {
+          let services = LLMRecoveryServices(settings: settingsStore, navigate: { _ in })
+          diagnostics.chooseDestination(paths: nil, settings: services.safeSettings, advice: nil)
+        }
+        .buttonStyle(.v1Outline)
+        .disabled(diagnostics.isExporting)
+        .help("包内只有哨兵日志、构建标识、设置快照（不读取密钥，地址与标识只留指纹）和本机系统信息。")
+        .runtimeAccessibilityIdentifier("settings.diagnostics-export")
+        // 导出结果贴在按钮旁边,不另起一行:它是这次点击的回执,不是一条常驻状态。
+        // 行内容是横排,路径与附注必须并成一段文字,拆成多个 Text 会排成并列的几栏。
+        if let result = diagnostics.result {
+          Text(
+            (["已导出到 \(result.url.path)。请将此诊断包发送给 JustSaid 开发者。"] + result.notes)
+              .joined(separator: "\n")
+          )
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
           .runtimeAccessibilityIdentifier("settings.diagnostics-export.status")
+          Button("在 Finder 中显示") { diagnostics.reveal() }.buttonStyle(.v1Quiet)
+        }
+        if let failure = diagnostics.failure {
+          Text(failure)
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.warn)
+            .fixedSize(horizontal: false, vertical: true)
+            .runtimeAccessibilityIdentifier("settings.diagnostics-export.status")
+        }
       }
     }
     .runtimeAccessibilityIdentifier("settings.diagnostics")

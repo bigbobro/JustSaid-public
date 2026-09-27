@@ -22,7 +22,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "bd16d34f3cfffca1ee86bd8c20aa9f1e8d7127f3f97b1ff1df952169496a8000"
+      "sha256": "6ddbbfa5a05febfdbc202077a5b458d8b405b6d2776eac18058822886a665fdf"
     },
     {
       "path": "LICENSE",
@@ -602,7 +602,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/GeneralSettingsPane.swift",
-      "sha256": "28d917f2d1d0758146959f5663071f4a02c7d6b0fc88c0cb0887c3aeb57ca344"
+      "sha256": "33ad3c16d50006501ff96ed1ce8894bb530459c4181405ec7ab63a040d7c8e78"
     },
     {
       "path": "Sources/JustSaidUI/Views/HistoryPaneView.swift",
@@ -982,7 +982,7 @@
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "bd16d34f3cfffca1ee86bd8c20aa9f1e8d7127f3f97b1ff1df952169496a8000"
+      "sha256": "6ddbbfa5a05febfdbc202077a5b458d8b405b6d2776eac18058822886a665fdf"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -1060,6 +1060,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "ec84551ef59b1133243034b95f5eb979a0b504d3",
+  "source_sha": "1996345a508b89be0ed3667a9aeec5eb08d675e8",
   "source_status": "clean"
 }
