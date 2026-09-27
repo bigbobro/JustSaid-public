@@ -16,6 +16,7 @@ extension MeetingLibraryView {
     // (包括「我」的段落)。只靠命名行报错,通篇都是「我」的会议就会静默失败——
     // 那正是 speakerNameError 存在要防的事。
     let overrideError = model.speakerNameError
+    let contextRevision = model.transcriptContextRevision
     let normalizedQuery = normalizedTranscriptSearchQuery
     let transcriptRows = model.transcriptRows(for: item)
     let filteredCount = TranscriptDocumentView.filtering(
@@ -34,7 +35,7 @@ extension MeetingLibraryView {
       || model.speakerHighlight != nil
       || model.pendingSpeakerOverride != nil
       || model.exclusionError != nil
-      || (overrideError != nil && model.speakerLabels(for: item).isEmpty)
+      || overrideError != nil
     {
       VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
         if isTranscriptSearchPresented {
@@ -121,7 +122,7 @@ extension MeetingLibraryView {
             .foregroundStyle(Tokens.Color.warn)
             .fixedSize(horizontal: false, vertical: true)
         }
-        if let overrideError, model.speakerLabels(for: item).isEmpty {
+        if let overrideError {
           Text(overrideError)
             .font(.system(size: Tokens.FontSize.secondary))
             .foregroundStyle(Tokens.Color.warn)
@@ -163,6 +164,8 @@ extension MeetingLibraryView {
         }
         if let pending = model.pendingSpeakerOverride {
           NewSpeakerNameField(line: pending.line) { name in
+            guard model.isCurrentTranscriptUIContext(for: pending.item, revision: contextRevision)
+            else { return }
             model.setSpeakerOverride(name, for: pending.line, of: pending.item)
           } onCancel: {
             model.pendingSpeakerOverride = nil

@@ -1005,6 +1005,7 @@ public struct SummaryDegradationIssue: Equatable, Sendable {
   public let retryState: SummaryRetryState
   /// 连续失败次数，成功即清零。用来把「一直失败」与「抖了一下」分开。
   public let consecutiveFailures: Int
+  public let recoveryAdvice: LLMRecoveryAdvice?
 
   public init(
     source: SummaryDegradationSource,
@@ -1012,7 +1013,8 @@ public struct SummaryDegradationIssue: Equatable, Sendable {
     lastUpdatedLabel: String?,
     detail: String? = nil,
     retryState: SummaryRetryState,
-    consecutiveFailures: Int
+    consecutiveFailures: Int,
+    recoveryAdvice: LLMRecoveryAdvice? = nil
   ) {
     self.source = source
     self.cause = cause
@@ -1020,6 +1022,7 @@ public struct SummaryDegradationIssue: Equatable, Sendable {
     self.detail = detail
     self.retryState = retryState
     self.consecutiveFailures = consecutiveFailures
+    self.recoveryAdvice = recoveryAdvice
   }
 
   public var text: String {

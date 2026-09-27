@@ -224,14 +224,16 @@ extension MeetingLibraryView {
         Button("重新生成纪要…") { model.pendingMinutesGeneration = item }
           .disabled(!model.canGenerateMinutes(for: item) || model.minutesGenerationStage(for: item).isRunning)
         Divider()
-        Button("复制当前页全文") {
+        Button(model.tab == .transcript ? "复制整理后全文" : "复制当前页全文") {
           guard let text = model.textForCopy(for: item, tab: model.tab) else { return }
           NSPasteboard.general.clearContents()
           if NSPasteboard.general.setString(text, forType: .string) {
-            model.reportCopySuccess("已复制当前页全文")
+            model.reportCopySuccess(model.tab == .transcript ? "已复制整理后全文" : "已复制当前页全文")
           }
         }
         .disabled(model.document(for: item, tab: model.tab).body == nil)
+        .help(model.tab == .transcript ? "复制整份应用人名和排除规则的转写，不受当前搜索或只看范围限制" : "复制当前页全文")
+        .runtimeAccessibilityIdentifier("library.copy-transcript")
         Button("在 Finder 中显示") {
           NSWorkspace.shared.activateFileViewerSelecting([item.paths.directory])
         }

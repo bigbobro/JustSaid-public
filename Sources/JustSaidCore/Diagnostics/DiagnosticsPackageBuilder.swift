@@ -64,6 +64,7 @@ public struct DiagnosticsPackageBuilder {
   public var osLogWindow: String
   public var fileManager: FileManager
   public var now: Date
+  public var recoveryAdvice: LLMRecoveryAdvice?
 
   public init(
     homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -72,7 +73,8 @@ public struct DiagnosticsPackageBuilder {
     osLogTimeout: TimeInterval = 60,
     osLogWindow: String = "4h",
     fileManager: FileManager = .default,
-    now: Date = Date()
+    now: Date = Date(),
+    recoveryAdvice: LLMRecoveryAdvice? = nil
   ) {
     self.homeDirectory = homeDirectory
     self.applicationBundle = applicationBundle
@@ -81,6 +83,7 @@ public struct DiagnosticsPackageBuilder {
     self.osLogWindow = osLogWindow
     self.fileManager = fileManager
     self.now = now
+    self.recoveryAdvice = recoveryAdvice
   }
 
   /// `log show` 参数,独立成可测函数供参数级断言钉红线:
@@ -137,6 +140,14 @@ public struct DiagnosticsPackageBuilder {
       encoding: .utf8
     )
     included.append("settings.txt")
+    if let recoveryAdvice {
+      let version =
+        applicationBundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "本地构建"
+      try recoveryAdvice.supportText(version: version).write(
+        to: staging.appendingPathComponent("current-failure.txt"), atomically: true, encoding: .utf8
+      )
+      included.append("current-failure.txt")
+    }
 
     try writeSystemInfo(to: staging)
     included.append("system.txt")
@@ -375,6 +386,7 @@ public struct DiagnosticsPackageBuilder {
   /// 收集失败返回原因写进 manifest(既有行为,不得静默化);
   /// 即使这一路彻底失败,包里仍有 diagnostics/ 下的 start-failures-*.log 落盘证据。
   private func collectOSLog(to staging: URL) -> String? {
+    guard osLogTimeout > 0 else { return "OSLog 收集已禁用，资料不完整" }
     let result = runCommand(
       executable: "/usr/bin/log",
       arguments: Self.osLogArguments(window: osLogWindow),
@@ -482,7 +494,7 @@ public struct DiagnosticsPackageBuilder {
   }
 }
 
-// MARK: - 设置快照(不含密钥本体)
+// MARK: - 安全设置快照（不读取凭证或任意文本）
 
 @MainActor
 public enum DiagnosticsSettingsSnapshot {
@@ -492,72 +504,79 @@ public enum DiagnosticsSettingsSnapshot {
     store: ProviderSettingsStore,
     defaults: UserDefaults = .standard
   ) -> String {
-    var lines: [String] = ["# 设置快照（密钥只写已配置/未配置 + 末四位）"]
-    lines.append("渠道:")
-    if store.configuration.channels.isEmpty {
-      lines.append("- （无）")
-    }
+    var lines = ["# 设置快照（自定义标识与地址仅保留指纹；密钥未读取）", "渠道:"]
+    if store.configuration.channels.isEmpty { lines.append("- （无）") }
     for channel in store.configuration.channels {
-      let slots = secretSlots(for: channel)
-      let secretBits = slots.map { slot in
-        if store.hasSecret(slot: slot, forChannel: channel) {
-          let suffix = store.secretSuffix(slot: slot, forChannel: channel) ?? "????"
-          return "\(slot.rawValue)=已配置 ····\(suffix)"
-        }
-        return "\(slot.rawValue)=未配置"
-      }.joined(separator: ", ")
       lines.append(
-        "- \(channel.name) [\(channel.providerID)] \(channel.baseURL) 密钥:\(secretBits)"
-      )
+        "- 渠道指纹=\(fingerprint(channel.id)) 供应商=\(provider(channel.providerID, store: store))"
+          + " 端点指纹=\(fingerprint(channel.baseURL)) 密钥=未读取")
     }
 
     lines.append("角色选择:")
     for role in ProviderRole.allCases {
       let binding = store.binding(for: role)
+      let selection = store.configuration.selection(for: role)
       lines.append(
-        "- \(role.displayName): 渠道/供应商=\(binding.providerID) 模型=\(binding.model)"
-      )
+        "- \(role.displayName): 渠道指纹=\(fingerprint(selection?.channelID))"
+          + " 供应商=\(provider(binding.providerID, store: store)) 模型指纹=\(fingerprint(binding.model))")
     }
 
     let storage = store.configuration.storage
     lines.append(
-      "对象存储: kind=\(storage.kind?.rawValue ?? "nil") tosBucket=\(storage.tosBucket) r2Bucket=\(storage.r2Bucket ?? "")"
+      "对象存储: kind=\(storage.kind?.rawValue ?? "nil") effectiveKind=\(storage.selectedKind.rawValue)"
+        + " tosBucket指纹=\(fingerprint(storage.tosBucket)) r2Bucket指纹=\(fingerprint(storage.r2Bucket))"
     )
-    let storageSlots: [ProviderSecretSlot] = [
-      .tosAccessKey, .tosSecretKey, .r2AccessKey, .r2SecretKey, .azureAccountKey,
-    ]
-    let storageSecrets = storageSlots.map { slot -> String in
-      let binding = store.binding(for: .batchASR)
-      if store.hasSecret(slot: slot, for: binding) {
-        let suffix = store.secretSuffix(slot: slot, for: binding) ?? "????"
-        return "\(slot.rawValue)=已配置 ····\(suffix)"
-      }
-      return "\(slot.rawValue)=未配置"
-    }.joined(separator: ", ")
-    lines.append("存储密钥: \(storageSecrets)")
-
-    let aec = MicrophoneAECSettings.isEnabled(in: defaults)
-    let language =
-      defaults.string(forKey: "justsaid.meeting.language") ?? MeetingLanguage.auto.rawValue
-    let retention = AudioRetentionPolicy.current(in: defaults).displayName
-    let hotkey = defaults.string(forKey: "justsaid.hotkey.mark") ?? "默认"
-    let chatHotkey = defaults.string(forKey: "justsaid.hotkey.chat") ?? "默认"
-    let pauseHotkey = defaults.string(forKey: "justsaid.hotkey.pause") ?? "默认"
-    let textScale = defaults.string(forKey: "justsaid.textScale") ?? "未设置"
-    lines.append("麦克风回声消除: \(aec ? "开" : "关")")
+    lines.append("存储密钥: 未读取")
+    lines.append("麦克风回声消除: \(MicrophoneAECSettings.isEnabled(in: defaults) ? "开" : "关")")
+    let language = preference(
+      defaults.string(forKey: "justsaid.meeting.language"),
+      allowed: MeetingLanguage.allCases.map(\.rawValue), fallback: MeetingLanguage.auto.rawValue)
     lines.append("语言路由: \(language)")
-    lines.append("音频保留期: \(retention)")
-    lines.append("标记热键: \(hotkey)")
-    lines.append("闲聊热键: \(chatHotkey)")
-    lines.append("暂停麦克风热键: \(pauseHotkey)")
-    lines.append("阅读缩放: \(textScale)")
+    lines.append("音频保留期: \(AudioRetentionPolicy.current(in: defaults).displayName)")
+    for (label, key) in [
+      ("标记热键", "justsaid.hotkey.mark"), ("闲聊热键", "justsaid.hotkey.chat"),
+      ("暂停麦克风热键", "justsaid.hotkey.pause"),
+    ] {
+      lines.append("\(label): \(hotkey(defaults: defaults, key: key))")
+    }
+    // The persisted TextScale values belong to UI; only these closed scalar values are exported.
+    let scale = preference(
+      defaults.string(forKey: "justsaid.textScale"),
+      allowed: ["standard", "110", "large", "130", "140"], fallback: "未设置")
+    lines.append("阅读缩放: \(scale)")
     return lines.joined(separator: "\n") + "\n"
   }
 
-  private static func secretSlots(for channel: ProviderChannel) -> [ProviderSecretSlot] {
-    if channel.providerID.contains("volc") || channel.providerID.contains("seed") {
-      return [.accessToken]
+  private static func fingerprint(_ value: String?) -> String {
+    guard let value, !value.isEmpty else { return "未配置" }
+    return LLMFailureContext.fingerprint(value)
+  }
+
+  private static func provider(_ value: String, store: ProviderSettingsStore) -> String {
+    guard store.registry.providers.contains(where: { $0.id == value }) else {
+      return "自定义指纹=\(fingerprint(value))"
     }
-    return [.apiKey]
+    return DiagnosticSanitizer.token(value, fallback: "unknown")
+  }
+
+  private static func preference(_ value: String?, allowed: [String], fallback: String) -> String {
+    guard let value else { return fallback }
+    return allowed.contains(value) ? value : "未知值（指纹=\(fingerprint(value))）"
+  }
+
+  // MarkHotkeyChord is a UI type. Decode only its safe persisted scalar fields, never free text.
+  private struct HotkeyFields: Decodable {
+    let isEnabled: Bool
+    let keyCode: UInt32
+    let carbonModifiers: UInt32
+  }
+
+  private static func hotkey(defaults: UserDefaults, key: String) -> String {
+    guard defaults.object(forKey: key) != nil else { return "默认" }
+    guard let data = defaults.data(forKey: key),
+      let fields = try? JSONDecoder().decode(HotkeyFields.self, from: data)
+    else { return "配置无法解析（使用默认）" }
+    return
+      "enabled=\(fields.isEnabled) keyCode=\(fields.keyCode) modifiers=\(fields.carbonModifiers)"
   }
 }

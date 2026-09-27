@@ -72,32 +72,6 @@ public struct TodoReconciliation: Equatable, Sendable {
   }
 }
 
-public enum TodoSourceNotice: Equatable, Sendable {
-  case minutesUpdatedItemGone(candidateID: UUID)
-}
-
-public enum TodoSourceNotices {
-  public static func notices(
-    for todo: TodoItem,
-    ledgers: [UUID: MeetingCandidateLedger]
-  ) -> [TodoSourceNotice] {
-    todo.sources.compactMap { source in
-      guard let candidateID = source.candidateID,
-        let ledger = ledgers[source.meetingID],
-        let record = ledger.candidates.first(where: { $0.id == candidateID }),
-        case .added = record.disposition,
-        record.snapshotIndex == nil,
-        !isHinted(record, in: ledger)
-      else { return nil }
-      return .minutesUpdatedItemGone(candidateID: candidateID)
-    }
-  }
-
-  private static func isHinted(_ record: CandidateRecord, in ledger: MeetingCandidateLedger) -> Bool {
-    ledger.candidates.contains { $0.suspectedCandidateIDs.contains(record.id) }
-  }
-}
-
 public enum TodoCandidateSignature {
   public static func normalizedText(_ text: String) -> String {
     text.precomposedStringWithCanonicalMapping

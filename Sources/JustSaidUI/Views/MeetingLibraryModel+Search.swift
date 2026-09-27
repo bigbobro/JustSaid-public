@@ -360,6 +360,7 @@ extension MeetingLibraryModel {
   /// (owner 2026-09-20「根本不知道看到哪里去了」)。所以换之前记下视口最上面
   /// 那一句的时间,换完发一次跳转落回同一处——那一句被筛掉了就落到最近的一句。
   public func toggleSpeakerFilter(_ speaker: String) {
+    cancelTranscriptBatch()
     let anchor = transcriptViewportSeconds
     if speakerFilters.contains(speaker) {
       speakerFilters.remove(speaker)
@@ -375,6 +376,7 @@ extension MeetingLibraryModel {
 
   /// 全部看回来,同样落回原处。
   public func clearSpeakerFilters() {
+    cancelTranscriptBatch()
     guard !speakerFilters.isEmpty else { return }
     let anchor = transcriptViewportSeconds
     speakerFilters = []

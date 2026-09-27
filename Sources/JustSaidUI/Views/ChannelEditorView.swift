@@ -48,6 +48,11 @@ public struct ChannelEditorView: View {
   @State private var newModelDraft = ""
   @State private var apiKeyDraft = ""
   @State private var accessTokenDraft = ""
+  @State private var probeGeneration = UUID()
+  @State private var keyFocusRequest: UUID?
+  @FocusState private var isConfigurationFocused: Bool
+  @FocusState private var isModelFocused: Bool
+  private var initialRecoveryAction: LLMRecoveryAdvice.Action? = nil
   @State private var connectionState: ConnectionTestState = .idle
   @State private var isFetchingModels = false
   @State private var modelsHint: String?
@@ -94,6 +99,7 @@ public struct ChannelEditorView: View {
       settingsStore: settingsStore,
       secretDigest: secretDigest
     )
+    self.initialRecoveryAction = request.recoveryAction
   }
 
   /// 已落盘的渠道:新建模式保存成功后就是它,编辑模式一开始就是传入的那个。
@@ -183,6 +189,7 @@ public struct ChannelEditorView: View {
           if showsBaseURL {
             LabeledField(label: "Base URL") {
               TextField("如 https://api.example.com/v1", text: $baseURL)
+                .focused($isConfigurationFocused)
             }
             .runtimeAccessibilityIdentifier("settings.channel.editor.base-url")
             if showsBaseURLWarning {
@@ -236,6 +243,23 @@ public struct ChannelEditorView: View {
     .padding(Tokens.Spacing.xl)
     .background(Tokens.Color.bg)
     .runtimeAccessibilityIdentifier("settings.channel.editor")
+    .onAppear {
+      if initialRecoveryAction == .editKey { keyFocusRequest = UUID() }
+      if initialRecoveryAction == .editModel { isModelFocused = true }
+      if initialRecoveryAction == .editConfiguration { isConfigurationFocused = true }
+    }
+    .onDisappear { probeGeneration = UUID() }
+    .environment(
+      \.llmRecoveryServices,
+      LLMRecoveryServices(settings: settingsStore) { request in
+        if request.action == .editKey {
+          keyFocusRequest = UUID()
+        } else if request.action == .editModel {
+          isModelFocused = true
+        } else {
+          isConfigurationFocused = true
+        }
+      })
   }
 
   /// 能力角色勾选:只列这家供应商声明支持的角色;已被引用仍试图取消时,
@@ -320,6 +344,7 @@ public struct ChannelEditorView: View {
 
       HStack(spacing: Tokens.Spacing.xs) {
         TextField("手动添加模型名(注意大小写)", text: $newModelDraft)
+          .focused($isModelFocused)
           .textFieldStyle(.plain)
           .padding(.horizontal, Tokens.Spacing.xsm)
           .padding(.vertical, Tokens.Spacing.xs)
@@ -365,7 +390,8 @@ public struct ChannelEditorView: View {
           draft: $apiKeyDraft,
           onSave: {
             try settingsStore.saveSecret(apiKeyDraft, slot: .apiKey, forChannel: channel)
-          }
+          },
+          focusRequest: keyFocusRequest
         )
         .runtimeAccessibilityIdentifier("settings.channel.editor.apikey")
         if isVolcengineASR {
@@ -502,26 +528,25 @@ public struct ChannelEditorView: View {
   }
 
   /// 真发一次最短的对话请求:能不能连通、是不是那个模型在答话、慢不慢,一次说清。
-  /// 失败原样呈现服务端说法;凭证值不写进任何日志与界面文案。
+  /// 失败只呈现类型化安全建议；凭证与响应正文不进入建议。
   /// 渠道未落盘时按钮本身禁用;这里再守一次,避免草稿钥匙 `channel.draft` 去探针。
   private func runConnectionTest() {
     guard persistedChannel != nil else { return }
     connectionState = .running
+    let generation = UUID()
+    probeGeneration = generation
+    let capturedChannel = probeChannel
+    let capturedModel = testModel
+    let context = LLMFailureContext(
+      feature: .connectionTest, channelID: capturedChannel.id,
+      providerID: capturedChannel.providerID, model: capturedModel, baseURL: capturedChannel.baseURL
+    )
     Task { @MainActor in
-      let startedAt = Date()
-      do {
-        let client = try settingsStore.makeLLMClient(
-          forChannel: probeChannel,
-          model: testModel
-        )
-        let response = try await ConnectionProbe.run(client)
-        connectionState = .succeeded(
-          latencyMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1_000),
-          replyPreview: ConnectionProbe.preview(of: response.text)
-        )
-      } catch {
-        connectionState = .failed(message: error.localizedDescription)
+      let result = await ConnectionTestRunner.run(context: context) {
+        try settingsStore.makeLLMClient(forChannel: capturedChannel, model: capturedModel)
       }
+      guard probeGeneration == generation, !Task.isCancelled else { return }
+      connectionState = result
     }
   }
 }

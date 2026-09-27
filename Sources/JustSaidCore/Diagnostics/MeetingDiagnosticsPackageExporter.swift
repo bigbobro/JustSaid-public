@@ -79,7 +79,8 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
   @discardableResult
   public func export(
     paths: MeetingPaths,
-    to destinationDirectory: URL
+    to destinationDirectory: URL,
+    recoveryAdvice: LLMRecoveryAdvice? = nil
   ) throws -> URL {
     let exportLedger = DiagnosticEventLedger(rootDirectory: diagnosticsRoot)
     let exportCorrelationID = UUID().uuidString.lowercased()
@@ -167,6 +168,13 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
         notes.append("没有找到与本场 hash 关联的统一全局事件；未伪造事件")
       }
 
+      if let recoveryAdvice {
+        let version =
+          applicationBundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "本地构建"
+        try recoveryAdvice.supportText(version: version).write(
+          to: stagingDirectory.appendingPathComponent("current-failure.txt"), atomically: true,
+          encoding: .utf8)
+      }
       let manifest = makeManifest(
         metadata: metadata,
         meetingHash: meetingHash,
@@ -545,8 +553,16 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
   }
 
   private func category(from detail: String) -> String {
-    if detail.localizedCaseInsensitiveContains("HTTP 400") { return "http4xx" }
-    if detail.localizedCaseInsensitiveContains("HTTP 5") { return "http5xx" }
+    if detail.range(of: "HTTP 4[0-9]{2}(?![0-9])", options: [.regularExpression, .caseInsensitive])
+      != nil
+    {
+      return "http4xx"
+    }
+    if detail.range(of: "HTTP 5[0-9]{2}(?![0-9])", options: [.regularExpression, .caseInsensitive])
+      != nil
+    {
+      return "http5xx"
+    }
     if detail.localizedCaseInsensitiveContains("超时") { return "timeout" }
     return "unknown"
   }

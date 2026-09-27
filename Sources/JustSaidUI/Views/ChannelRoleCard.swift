@@ -27,6 +27,7 @@ public struct ChannelRoleCard<Extra: View>: View {
   @ViewBuilder private let extraRows: () -> Extra
 
   @State private var lastSavedAt: Date?
+  @State private var probeGeneration = UUID()
   @State private var connectionState: ConnectionTestState
 
   public init(
@@ -146,11 +147,14 @@ public struct ChannelRoleCard<Extra: View>: View {
       }
 
       // 连接测试的**结果**整行宽:出错时是一段带原因的长文,塞不进控件行。
-      if role.isLLMRole, let detail = connectionState.settingsNote {
+      if case .recovery(let advice) = connectionState {
+        LLMRecoveryNotice(advice: advice)
+      } else if role.isLLMRole, let detail = connectionState.settingsNote {
         SettingsFormNote(detail, tone: connectionState.isFailure ? .warn : .meta)
       }
     }
     .runtimeAccessibilityIdentifier("settings.role-card.\(role.rawValue)")
+    .onDisappear { probeGeneration = UUID() }
   }
 
   /// 渠道行。下拉只列**声明支持该角色**的渠道——能力不兼容的选项不该出现在界面上。
@@ -414,18 +418,15 @@ public struct ChannelRoleCard<Extra: View>: View {
   /// 高档思考在 30 秒外层硬超时内可能出不了首句,按原档发就是假超时(08-13 D3)。
   private func runRoleConnectionTest() {
     connectionState = .running
+    let generation = UUID()
+    probeGeneration = generation
+    let context = settingsStore.failureContext(feature: .connectionTest, role: role)
     Task { @MainActor in
-      let startedAt = Date()
-      do {
-        let client = try settingsStore.makeConnectionTestLLMClient(for: role)
-        let response = try await ConnectionProbe.run(client)
-        connectionState = .succeeded(
-          latencyMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1_000),
-          replyPreview: ConnectionProbe.preview(of: response.text)
-        )
-      } catch {
-        connectionState = .failed(message: error.localizedDescription)
+      let result = await ConnectionTestRunner.run(context: context) {
+        try settingsStore.makeConnectionTestLLMClient(for: role)
       }
+      guard probeGeneration == generation, !Task.isCancelled else { return }
+      connectionState = result
     }
   }
 }

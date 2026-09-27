@@ -968,7 +968,8 @@ public final class ProviderSettingsStore: ObservableObject {
         reasoningEffort: .off,
         diagnosticRole: channel.supportedRoles.first?.rawValue,
         diagnosticPurpose: "connectionProbe",
-        diagnosticOrigin: "channel"
+        diagnosticOrigin: "channel",
+        recoveryChannelID: channel.id
       ),
       transport: transport,
       // 渠道探针(连接测试/模型拉取)是设置页的即时反馈,自己卡 30 秒空闲上限;
@@ -1181,7 +1182,8 @@ public final class ProviderSettingsStore: ObservableObject {
         requestedReasoningEffort: requestedLevel,
         diagnosticRole: role.rawValue,
         diagnosticPurpose: diagnosticPurpose,
-        diagnosticOrigin: diagnosticOrigin
+        diagnosticOrigin: diagnosticOrigin,
+        recoveryChannelID: channel.id
       ),
       transport: transport,
       // 会后纪要走 SSE 流式,但 URLRequest.timeoutInterval 是**空闲**超时:推理档开着时,

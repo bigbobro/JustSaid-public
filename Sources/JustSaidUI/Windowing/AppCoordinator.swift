@@ -69,6 +69,7 @@ public final class AppCoordinator: ObservableObject {
   /// 丢掉这次请求——与 pendingEndMeetingRequest/flushPendingMenuRequests 同款先例。
   @Published public var pendingSettingsRequest = false
   /// 本次运行内记住设置分段；主窗重建不复位，也不写持久偏好。
+  @Published public var recoverySettingsRequest: RecoverySettingsRequest?
   @Published public var settingsSection: SettingsSection = .general
   /// 章节目录打开请求(批1 快捷键迁移):菜单 ⌘K 经此路由到当前 chrome 的 popover。
   /// 与 pendingSettingsRequest 同款:无主窗时命令先 openWindow,新视图 onAppear 消费。
@@ -541,6 +542,11 @@ public final class AppCoordinator: ObservableObject {
 
   /// 进设置页。记住从哪来,Esc 按原路回去——设置是一页,不是模态,
   /// 关掉它应该回到你刚才在看的东西,而不是固定弹回某一处。
+  public func showRecoverySettings(_ request: RecoverySettingsRequest) {
+    recoverySettingsRequest = request
+    showSettings(section: .providers)
+  }
+
   public func showSettings(section: SettingsSection? = nil) {
     if let section { settingsSection = section }
     if workspaceMode != .settings { modeBeforeSettings = workspaceMode }

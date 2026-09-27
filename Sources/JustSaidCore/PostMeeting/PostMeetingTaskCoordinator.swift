@@ -78,10 +78,13 @@ public final class PostMeetingTaskCoordinator {
 
   private let meetingStore: MeetingStore
   private let pipelineResolver: PipelineResolver?
+  private let failureContextResolver: (() -> LLMFailureContext)?
 
   /// identity -> 运行中的任务句柄。移除只代表"不再是当前任务",不代表取消。
   private var tasks: [String: Task<Void, Never>] = [:]
   private var snapshots: [String: PostMeetingTaskSnapshot] = [:]
+  private var recoveryAdviceByIdentity: [String: [LLMFailureContext.Feature: LLMRecoveryAdvice]] =
+    [:]
   private var liveMinutes: [String: PostMeetingLiveMinutesDraft] = [:]
   /// 运行中任务占用的会议目录,供 `reconcileInterruptedMeetings` 排除集使用。
   private var runningDirectories: [String: URL] = [:]
@@ -98,10 +101,12 @@ public final class PostMeetingTaskCoordinator {
   public init(
     meetingStore: MeetingStore = MeetingStore(),
     pipelineResolver: PipelineResolver? = nil,
+    failureContextResolver: (() -> LLMFailureContext)? = nil,
     successNoticeDelay: PostMeetingNoticeDismissalScheduler.Delay? = nil
   ) {
     self.meetingStore = meetingStore
     self.pipelineResolver = pipelineResolver
+    self.failureContextResolver = failureContextResolver
     self.noticeDismissal = PostMeetingNoticeDismissalScheduler(delay: successNoticeDelay)
   }
 
@@ -161,6 +166,12 @@ public final class PostMeetingTaskCoordinator {
     liveMinutes[Self.identity(for: directory)]
   }
 
+  public func recoveryAdvice(for directory: URL, feature: LLMFailureContext.Feature)
+    -> LLMRecoveryAdvice?
+  {
+    recoveryAdviceByIdentity[Self.identity(for: directory)]?[feature]
+  }
+
   public var isImporting: Bool {
     snapshots.contains { key, snapshot in
       snapshot.kind == .importRecording && tasks[key] != nil
@@ -191,6 +202,7 @@ public final class PostMeetingTaskCoordinator {
     for identity in dismissed {
       snapshots.removeValue(forKey: identity)
       liveMinutes.removeValue(forKey: identity)
+      recoveryAdviceByIdentity.removeValue(forKey: identity)
       noticeDismissal.cancel(identity: identity)
     }
     if lastImportError != nil, !importing {
@@ -497,6 +509,10 @@ public final class PostMeetingTaskCoordinator {
     guard let runID = beginRun(identity: identity, directory: directory, kind: kind) else {
       return false
     }
+    let capturedContext = failureContextResolver?()
+    let failureContext = capturedContext.map { context in
+      kind == .englishMinutes ? context.withFeature(.englishMinutes) : context
+    }
     tasks[identity] = Task { @MainActor in
       let channel = PostMeetingProgressChannel()
       // 单消费者有序循环:进度事件只在这里消费一次,界面读快照。
@@ -533,9 +549,21 @@ public final class PostMeetingTaskCoordinator {
         // 走通用 catch 会把 "这次自动续查已被更新的精转任务取代" 画成琥珀色横幅,
         // 旁边「重新精转」还是活的——用户信了就再付一次全时长 batch ASR。
         self.abandonRun(identity: identity, runID: runID, directory: directory)
+      } catch  where error is CancellationError || (error as? URLError)?.code == .cancelled {
+        channel.finish()
+        await progressTask.value
+        self.abandonRun(identity: identity, runID: runID, directory: directory)
       } catch {
         channel.finish()
         await progressTask.value
+        if snapshots[identity]?.runID == runID,
+          kind == .minutes || kind == .englishMinutes,
+          recoveryAdviceByIdentity[identity]?.isEmpty != false,
+          let failureContext,
+          let advice = LLMRecoveryAdvice.project(error, context: failureContext)
+        {
+          recoveryAdviceByIdentity[identity, default: [:]][failureContext.feature] = advice
+        }
         // 终态写盘先于任何身份/世代卫:孤立的失败运行不得只留下无诊断的 `.processing`。
         onFailureWriteDisk?(error.localizedDescription)
         self.completeRun(
@@ -566,6 +594,7 @@ public final class PostMeetingTaskCoordinator {
     snapshots[identity] = PostMeetingTaskSnapshot(kind: kind, stage: .running, runID: runID)
     // 新一轮开跑:上一轮失败保留的取证副本到此为止,别让旧半成品盖住新产物。
     liveMinutes[identity] = nil
+    recoveryAdviceByIdentity[identity] = nil
     if let directory {
       runningDirectories[identity] = directory.standardizedFileURL
     }
@@ -582,6 +611,11 @@ public final class PostMeetingTaskCoordinator {
       current.runID == runID,
       current.stage.isRunning
     else {
+      return
+    }
+    if case .recoveryAdvice(let advice) = progress {
+      recoveryAdviceByIdentity[identity, default: [:]][advice.context.feature] = advice
+      changes.send(.stateChanged(identity: identity))
       return
     }
     var stage = current.stage
@@ -640,6 +674,7 @@ public final class PostMeetingTaskCoordinator {
     guard snapshots[identity]?.runID == runID else { return }
     snapshots.removeValue(forKey: identity)
     liveMinutes.removeValue(forKey: identity)
+    recoveryAdviceByIdentity[identity] = nil
     noticeDismissal.cancel(identity: identity)
     // 只摘句柄,**不 cancel**;句柄留着会永久挡住这场会议后续所有启动。
     tasks[identity] = nil

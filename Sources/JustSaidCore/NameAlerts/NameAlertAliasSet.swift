@@ -86,21 +86,6 @@ public struct NameAlertAliasSet: Sendable {
     }
     return NameAlertOccurrence.group(matches)
   }
-
-  /// 诊断用:每个别名每条腿在合格窗口上的最高分(未过阈值也报告),对应 CueMeIn 的近失分。
-  public func legScores(in text: String) -> [NameAlertLegScores] {
-    let context = NameAlertMatchContext(text: text, aliases: aliases)
-    return aliases.map { alias in
-      var scores: [NameAlertMatchLeg: Double] = [:]
-      for leg in alias.legs where options.enabledLegs.contains(leg) {
-        scores[leg] = 0
-      }
-      for candidate in context.candidates(for: alias, options: options, applyThresholds: false) {
-        scores[candidate.leg] = max(scores[candidate.leg] ?? 0, candidate.score)
-      }
-      return NameAlertLegScores(aliasID: alias.id, strictness: alias.strictness, scores: scores)
-    }
-  }
 }
 
 public enum NameAlertMatchLeg: String, CaseIterable, Sendable {
@@ -183,12 +168,6 @@ public struct NameAlertAlias: Sendable, Identifiable {
   }
 
   private static let nameReadingTransform = StringTransform("Han-Latin/Names")
-}
-
-public struct NameAlertLegScores: Sendable, Equatable {
-  public let aliasID: Int
-  public let strictness: NameAlertStrictness
-  public let scores: [NameAlertMatchLeg: Double]
 }
 
 /// 一次点名在原文中的位置,以及在此处命中的全部别名。

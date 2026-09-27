@@ -193,6 +193,8 @@ struct SecretRow: View {
   @Binding var draft: String
   let onSave: () throws -> Void
 
+  var focusRequest: UUID? = nil
+  @FocusState private var isKeyFocused: Bool
   @State private var isEditing = false
   @State private var saveError: String?
 
@@ -218,6 +220,7 @@ struct SecretRow: View {
       } else {
         HStack(spacing: Tokens.Spacing.xs) {
           SecureField("粘贴密钥", text: $draft)
+            .focused($isKeyFocused)
             .textFieldStyle(.plain)
             .padding(.horizontal, Tokens.Spacing.xsm)
             .padding(.vertical, Tokens.Spacing.xs)
@@ -254,6 +257,17 @@ struct SecretRow: View {
         }
       }
     }
+    .onAppear { focusKey() }
+    .onChange(of: focusRequest) { _, _ in focusKey() }
+  }
+
+  private func focusKey() {
+    guard focusRequest != nil else { return }
+    isEditing = true
+    Task { @MainActor in
+      await Task.yield()
+      isKeyFocused = true
+    }
   }
 
   private static func saveFailureText(_ error: Error) -> String {
@@ -269,17 +283,19 @@ public enum ConnectionTestState: Equatable, Sendable {
   case running
   /// 拿到了非空回复:记下往返耗时与回复开头,让用户一眼确认「答话的确实是我选的那个模型」。
   case succeeded(latencyMilliseconds: Int, replyPreview: String)
-  /// 失败原样呈现服务端说法(含 402/403 的响应体)——用户要靠它分辨是没积分还是没权限。
+  /// Legacy/storage safe description; new LLM failures carry typed recovery advice.
   case failed(message: String)
+  case recovery(LLMRecoveryAdvice)
 
   var isRunning: Bool { self == .running }
 
   public var isFailure: Bool {
     if case .failed = self { return true }
+    if case .recovery = self { return true }
     return false
   }
 
-  /// 设置页表单里的结果整行宽:失败时是一段带服务端原文的长文,塞不进控件行。
+  /// 设置页表单里的结果整行宽:失败时是一段处理建议,塞不进控件行。
   /// 措辞与 `ConnectionTestRow` 的四态一致,只是压成一行。
   public var settingsNote: String? {
     switch self {
@@ -288,9 +304,10 @@ public enum ConnectionTestState: Equatable, Sendable {
     case .running:
       return "正在发一条最短的英文问句，等模型回话…最多等 30 秒。"
     case .succeeded(let latency, let preview):
-      return "连接成功 · \(latency) ms · 模型回话：\(preview)"
+      return "短请求通过 · \(latency) ms；不代表长输入、推理或纪要格式已验证。模型回话：\(preview)"
+    case .recovery(let advice): return advice.message
     case .failed(let message):
-      // 服务端原文照登:吞掉它等于让用户去猜自己是欠费还是没开权限。
+      // Legacy/storage descriptions keep their existing path.
       return message
     }
   }
@@ -359,18 +376,20 @@ public struct ConnectionTestRow: View {
           Text(kind == .storage ? "连接成功" : "连接成功 · \(latency) ms")
             .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
             .foregroundStyle(Tokens.Color.acDeep)
-          Text(kind == .storage ? preview : "模型回话：\(preview)")
+          Text(kind == .storage ? preview : "仅验证短请求，不代表长输入、推理或纪要格式已验证。模型回话：\(preview)")
             .font(.system(size: Tokens.FontSize.secondary))
             .foregroundStyle(Tokens.Color.ink3)
             .fixedSize(horizontal: false, vertical: true)
         }
       }
       .accessibilityElement(children: .combine)
+    case .recovery(let advice):
+      LLMRecoveryNotice(advice: advice)
     case .failed(let message):
       HStack(alignment: .top, spacing: Tokens.Spacing.xxs) {
         Image(systemName: "exclamationmark.triangle.fill")
           .font(.system(size: Tokens.FontSize.ui))
-        // 服务端原文照登、可选中复制:吞掉它等于让用户去猜自己是欠费还是没开权限。
+        // 旧描述沿用；新 LLM 失败只显示安全投影。
         Text(message)
           .font(.system(size: Tokens.FontSize.secondary))
           .fixedSize(horizontal: false, vertical: true)
@@ -426,5 +445,26 @@ enum ConnectionProbe {
       .filter { !$0.isEmpty }
       .joined(separator: " ")
     return flattened.count <= limit ? flattened : String(flattened.prefix(limit)) + "…"
+  }
+}
+
+/// The same short-request operation is used by channel and role tests. No business error state is touched.
+@MainActor
+public enum ConnectionTestRunner {
+  public static func run(
+    context: LLMFailureContext,
+    makeClient: () throws -> any LLMClient
+  ) async -> ConnectionTestState {
+    let started = Date()
+    do {
+      let response = try await ConnectionProbe.run(makeClient())
+      try Task.checkCancellation()
+      return .succeeded(
+        latencyMilliseconds: Int(Date().timeIntervalSince(started) * 1_000),
+        replyPreview: ConnectionProbe.preview(of: response.text))
+    } catch {
+      return LLMRecoveryAdvice.project(error, context: context).map(ConnectionTestState.recovery)
+        ?? .idle
+    }
   }
 }

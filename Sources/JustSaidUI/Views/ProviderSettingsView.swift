@@ -118,6 +118,8 @@ public struct ProviderSettingsView: View {
       }
     }
   }
+  private let recoveryRequest: Binding<RecoverySettingsRequest?>?
+  @State private var recoveryDestination: RecoverySettingsDestination?
   @State private var channelEditorRequest: ChannelEditorRequest?
 
   /// - Parameter secretDigest: 「这把 key 存了吗、末四位多少」的来源。
@@ -133,12 +135,14 @@ public struct ProviderSettingsView: View {
     appUpdates: AppUpdatesModel? = nil,
     initialSection: SettingsSection = .general,
     section: Binding<SettingsSection>? = nil,
+    recoveryRequest: Binding<RecoverySettingsRequest?>? = nil,
     /// 壳里的一页用它回上一页;仍以弹窗出现时留空,走 `dismiss`。
     onDone: (() -> Void)? = nil
   ) {
     self.onDone = onDone
     _localSection = State(initialValue: initialSection)
     externalSection = section
+    self.recoveryRequest = recoveryRequest
     self.nameAlertPreferences = nameAlertPreferences
     self.displayTimeZone = displayTimeZone
     self.appUpdates = appUpdates
@@ -180,6 +184,8 @@ public struct ProviderSettingsView: View {
     .background(Tokens.V1.Color.paper)
     // Esc 回到进来之前那一页——「完成」按钮拿掉后留一个键盘出口(输入框里的 Esc 先由输入框处理)。
     .onExitCommand { onDone?() }
+    .onAppear { consumeRecoveryRequest() }
+    .onChange(of: recoveryRequest?.wrappedValue?.id) { _, _ in consumeRecoveryRequest() }
     .sheet(item: $channelEditorRequest) { request in
       ChannelEditorView(
         request: request,
@@ -215,29 +221,73 @@ public struct ProviderSettingsView: View {
   }
 
   private var providerPane: some View {
-    SettingsPage(title: "模型与服务", subtitle: "先配置渠道，再为每个阶段选择模型。") {
-      VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
-        ChannelManagementCard(
-          registry: registry, settingsStore: settingsStore, secretDigest: secretDigest,
-          onEdit: { channelEditorRequest = ChannelEditorRequest(channel: $0) },
-          onCreate: { channelEditorRequest = ChannelEditorRequest(channel: nil) })
+    ScrollViewReader { proxy in
+      SettingsPage(title: "模型与服务", subtitle: "先配置渠道，再为每个阶段选择模型。") {
+        VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
+          recoveryContextNotice(for: nil)
+          ChannelManagementCard(
+            registry: registry, settingsStore: settingsStore, secretDigest: secretDigest,
+            onEdit: { channelEditorRequest = ChannelEditorRequest(channel: $0) },
+            onCreate: { channelEditorRequest = ChannelEditorRequest(channel: nil) })
 
-        ChannelRoleCard(
-          role: .liveTranscriber, registry: registry, settingsStore: settingsStore,
-          secretDigest: secretDigest, modelAssetManager: modelAssetManager
-        ) { LocalModelsSettingsRow(manager: modelAssetManager) }
-        ChannelRoleCard(
-          role: .liveSummaryLLM, registry: registry, settingsStore: settingsStore,
-          secretDigest: secretDigest)
-        ChannelRoleCard(
-          role: .batchASR, registry: registry, settingsStore: settingsStore,
-          secretDigest: secretDigest
-        ) { StorageSettingsRow(settingsStore: settingsStore, secretDigest: secretDigest) }
-        ChannelRoleCard(
-          role: .minutesLLM, registry: registry, settingsStore: settingsStore,
-          secretDigest: secretDigest)
+          ChannelRoleCard(
+            role: .liveTranscriber, registry: registry, settingsStore: settingsStore,
+            secretDigest: secretDigest, modelAssetManager: modelAssetManager
+          ) { LocalModelsSettingsRow(manager: modelAssetManager) }
+          VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
+            recoveryContextNotice(for: .liveSummaryLLM)
+            ChannelRoleCard(
+              role: .liveSummaryLLM, registry: registry, settingsStore: settingsStore,
+              secretDigest: secretDigest
+            )
+          }
+          .id(ProviderRole.liveSummaryLLM)
+          ChannelRoleCard(
+            role: .batchASR, registry: registry, settingsStore: settingsStore,
+            secretDigest: secretDigest
+          ) { StorageSettingsRow(settingsStore: settingsStore, secretDigest: secretDigest) }
+          VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
+            recoveryContextNotice(for: .minutesLLM)
+            ChannelRoleCard(
+              role: .minutesLLM, registry: registry, settingsStore: settingsStore,
+              secretDigest: secretDigest
+            )
+          }
+          .id(ProviderRole.minutesLLM)
+        }
+      }
+      .onChange(of: recoveryDestination) { _, destination in
+        if let role = destination?.role { proxy.scrollTo(role, anchor: .top) }
+      }
+      .onAppear {
+        if let role = recoveryDestination?.role { proxy.scrollTo(role, anchor: .top) }
       }
     }
+  }
+
+  @ViewBuilder
+  private func recoveryContextNotice(for role: ProviderRole?) -> some View {
+    if let destination = recoveryDestination, destination.role == role {
+      Text(
+        destination.changed
+          ? "本次失败使用的是原渠道；配置已改变或渠道已删除，请核对对应角色的当前选择。"
+          : "正在查看本次失败使用的配置；修改和测试需手动操作。"
+      )
+      .font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.warn)
+      .runtimeAccessibilityIdentifier("recovery.settings.context")
+    }
+  }
+
+  private func consumeRecoveryRequest() {
+    guard let request = recoveryRequest?.wrappedValue else { return }
+    section = .providers
+    let destination = RecoverySettingsDestination.resolve(
+      request, configuration: settingsStore.configuration)
+    recoveryDestination = destination
+    if let id = destination.channelID, let channel = settingsStore.configuration.channel(id: id) {
+      channelEditorRequest = ChannelEditorRequest(channel: channel, recoveryAction: request.action)
+    }
+    recoveryRequest?.wrappedValue = nil
   }
 }
 
@@ -247,6 +297,7 @@ public struct ProviderSettingsView: View {
 
 struct ChannelEditorRequest: Identifiable {
   let channel: ProviderChannel?
+  var recoveryAction: LLMRecoveryAdvice.Action? = nil
 
   var id: String { channel?.id ?? "new-channel" }
 }

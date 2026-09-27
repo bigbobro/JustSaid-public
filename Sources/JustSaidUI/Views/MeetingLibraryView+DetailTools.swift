@@ -80,28 +80,26 @@ extension MeetingLibraryView {
   }
 
   func transcriptToolRow(_ item: MeetingLibraryItem) -> some View {
-    // 状态驱动:没填名的人 + 待采纳的建议都归零时,这颗按钮消失,
-    // 读原文时工具行只剩搜索和目录(Fable 评审 2026-09-20)。
     let todo = model.namingTodoCount(for: item)
-    return HStack(spacing: Tokens.Spacing.xs) {
-      if todo > 0 || showsSpeakerNaming {
-        Button {
-          showsSpeakerNaming = true
-        } label: {
-          HStack(spacing: Tokens.Spacing.xxs) {
-            Image(systemName: "person.text.rectangle")
-              .accessibilityHidden(true)
-            Text(todo > 0 ? "认名 \(todo)" : "认名")
-              .runtimeAccessibilityIdentifier("transcript.naming.todo.\(todo)")
-          }
-        }
-        .buttonStyle(.toolbarPill)
-        .help("给说话人填真名")
-        .runtimeAccessibilityIdentifier("transcript.naming.trigger")
-        // 面板不挂在这颗按钮上:认名要靠读正文回忆「这人说了什么」,
-        // 浮层和 sheet 都会挡住正文(owner 2026-09-20)。它去占右栏的位置,
-        // 见 MeetingLibraryView+DetailPane 的 meetingActionRail 分支。
+    return HStack(spacing: Tokens.V1.Space.xs) {
+      Button {
+        showsSpeakerNaming = true
+      } label: {
+        Label(todo > 0 ? "发言人 · 待认名 \(todo)" : "发言人", systemImage: "person.text.rectangle")
       }
+      .buttonStyle(.v1Outline)
+      .disabled(model.speakerRoster(for: item).isEmpty)
+      .help("查看发言、核对名字，并决定哪些内容不进纪要")
+      .runtimeAccessibilityIdentifier("transcript.naming.trigger")
+      Button {
+        model.beginTranscriptBatch(of: item)
+      } label: {
+        Label("选段", systemImage: "text.badge.checkmark")
+      }
+      .buttonStyle(.v1Outline)
+      .disabled(model.isTranscriptBatchSelecting || !model.canEditTranscript(for: item))
+      .help("进入选段：点击起点，滚动后点击终点，再设为不进纪要")
+      .runtimeAccessibilityIdentifier("transcript.batch.start")
       Button {
         showTranscriptSearch()
       } label: {
@@ -182,103 +180,196 @@ private struct LibraryDetailTabButton: View {
 
 
 extension MeetingLibraryView {
-  /// 认名面板。原来这三块常驻在转写首屏:说话人输入框一行、一句常驻说明、认名建议两行。
-  /// 说明那句还是无条件显示的(只有报错才被替换),纯系统自言自语占一整行。
-  /// 认名是一次性任务,做完就不再需要,所以收进这里;读原文时那一页只剩正文。
-  @ViewBuilder
   func speakerNamingPanel(_ item: MeetingLibraryItem) -> some View {
     let roster = model.speakerRoster(for: item)
-    let suggestions = model.namingSuggestionRows(for: item)
-    VStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
-      SectionHeaderRow(title: "这场会有谁", count: roster.count)
-      SpeakerNamingSuggestionBanner(
-        rows: suggestions,
-        onAdopt: { model.adoptNamingSuggestion($0, of: item) },
-        onDismiss: { model.dismissNamingSuggestion($0, of: item) },
-        onJump: model.jumpToTranscript,
-        resolve: { model.namingEvidence($0, of: item) }
-      )
-      VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-        ForEach(roster) { entry in
-          VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
-            HStack(spacing: Tokens.V1.Space.xs) {
-              // 字段自己画标签 chip 与输入框,还带高亮/只看/不参会;这里不再重复画标签。
-              // 300 宽的栏里一行放不下 chip + 输入框 + 段数,段数挪到样本那一行。
-              SpeakerNameField(
-                label: entry.label,
-                name: entry.name,
-                isHighlighted: model.speakerHighlight
-                  == (entry.name.isEmpty ? entry.label : entry.name),
-                isExcluded: item.excludedSpeakers.contains(entry.label),
-                channelHint: SpeakerChannelHint.presentation(
-                  for: item.channelStats?[entry.label]),
-                onToggleHighlight: {
-                  model.toggleSpeakerHighlight(entry.name.isEmpty ? entry.label : entry.name)
-                },
-                onToggleExcluded: {
-                  model.setSpeakerExcluded(
-                    entry.label,
-                    excluded: !item.excludedSpeakers.contains(entry.label),
-                    of: item)
-                },
-                onFilter: {
-                  model.toggleSpeakerFilter(entry.name.isEmpty ? entry.label : entry.name)
-                },
-                onCommit: { model.setSpeakerName($0, for: entry.label, of: item) }
-              )
-              Spacer(minLength: .zero)
-              // 段数留着,样本原话删了(owner 2026-09-20:「肯定要回原文去看」)。
-              // 上一轮按 Fable 的意见在每个人下面铺一句最长原话,想让人不回正文就能认出
-              // 是谁;实拍下来九个人就是九段引文,面板全是字,反而看不见建议。
-              // 段数本身当跳转入口:点它落到这个人说得最长的那一处,回正文认人。
-              Button {
-                if let seconds = entry.longestLineSeconds { model.jumpToTranscript(seconds) }
-              } label: {
-                Text("\(entry.segmentCount) 段")
-                  .font(Tokens.V1.Text.meta.font)
-                  .foregroundStyle(Tokens.V1.Color.ink3)
-                  .monospacedDigit()
-              }
-              .buttonStyle(.plain)
-              .disabled(entry.longestLineSeconds == nil)
-              .help("跳到他说得最长的那一段")
-            }
-          }
-          .padding(.vertical, Tokens.V1.Space.s2xs)
-        }
+    return VStack(alignment: .leading, spacing: Tokens.V1.Space.sm) {
+      HStack {
+        SectionHeaderRow(title: "发言人核对", count: roster.count)
+        Spacer(minLength: .zero)
+        Button("收起") { showsSpeakerNaming = false }
+          .buttonStyle(.v1Quiet)
+          .runtimeAccessibilityIdentifier("transcript.naming.collapse")
+      }
+      Text("选人，翻看发言和上下文，再填名或调整纪要取材。名字在回车或失焦时保存。")
+        .font(Tokens.V1.Text.meta.font)
+        .foregroundStyle(Tokens.V1.Color.ink3)
+        .fixedSize(horizontal: false, vertical: true)
+      ForEach(roster) { entry in
+        speakerReviewRow(entry, item: item)
+          .id(entry.label)
       }
       if let error = model.speakerNameError {
         Text(error)
           .font(Tokens.V1.Text.meta.font)
           .foregroundStyle(Tokens.V1.Color.warn)
           .fixedSize(horizontal: false, vertical: true)
+          .runtimeAccessibilityIdentifier("transcript.naming.error")
       }
-      // 填完名字任务还没完:纪要里仍是「发言人 1」。给一个出口,
-      // 但走既有的份数与计费确认弹窗,不一点就跑(Fable 评审)。
-      if model.namingTodoCount(for: item) == 0, item.hasFormalMinutes {
+      if item.hasFormalMinutes {
         Divider()
-        HStack(spacing: Tokens.V1.Space.xs) {
-          Text("纪要里还是旧名字")
-            .font(Tokens.V1.Text.meta.font)
-            .foregroundStyle(Tokens.V1.Color.ink3)
-          Spacer(minLength: .zero)
-          Button("重新生成纪要…") {
-            showsSpeakerNaming = false
-            model.pendingMinutesGeneration = item
-          }
+        Text("如果改了名字或纪要取材，已有纪要不会自动更新。")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .fixedSize(horizontal: false, vertical: true)
+        Button("重新生成纪要…") { model.pendingMinutesGeneration = item }
           .buttonStyle(.v1Outline)
           .disabled(!model.canGenerateMinutes(for: item))
-        }
-      }
-      Divider()
-      HStack(spacing: Tokens.V1.Space.xs) {
-        Spacer(minLength: .zero)
-        Button("完成") { showsSpeakerNaming = false }
-          .buttonStyle(.v1Primary)
-          .keyboardShortcut(.defaultAction)
+          .runtimeAccessibilityIdentifier("transcript.naming.regenerate")
       }
     }
     .padding(Tokens.V1.Space.md)
     .frame(width: Tokens.V1.Size.meetingRailWidth, alignment: .leading)
+  }
+
+  private func speakerReviewRow(
+    _ entry: MeetingLibraryModel.SpeakerRosterEntry, item: MeetingLibraryItem
+  ) -> some View {
+    let active = model.speakerReviewLabel == entry.label
+    let contextRevision = model.transcriptContextRevision
+    let suggestions = model.namingSuggestionRows(for: item).filter { row in
+      switch row {
+      case .prefill(let suggestion): return suggestion.label == entry.label
+      case .conflict(let label, _): return label == entry.label
+      }
+    }
+    return VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+      SpeakerNameField(
+        label: entry.label, name: entry.name,
+        isHighlighted: active,
+        isExcluded: item.excludedSpeakers.contains(entry.label),
+        channelHint: SpeakerChannelHint.presentation(for: item.channelStats?[entry.label]),
+        onToggleHighlight: {
+          closeTranscriptSearch()
+          model.beginSpeakerReview(entry.label, of: item)
+        },
+        onToggleExcluded: {
+          guard model.isCurrentTranscriptUIContext(for: item, revision: contextRevision)
+          else { return }
+          model.setSpeakerExcluded(
+            entry.label, excluded: !item.excludedSpeakers.contains(entry.label), of: item)
+        },
+        onFilter: {
+          if !active {
+            closeTranscriptSearch()
+            model.beginSpeakerReview(entry.label, of: item)
+          }
+          model.showOnlyReviewedSpeaker(of: item)
+        },
+        focusRequest: active ? model.speakerReviewFocusRequest : nil,
+        savedDraft: model.speakerReviewDrafts[entry.label],
+        canCommit: model.canEditTranscript(for: item),
+        onDraftChange: { draft in
+          guard model.isCurrentTranscriptUIContext(for: item, revision: contextRevision)
+          else { return }
+          model.speakerReviewDrafts[entry.label] = draft
+        },
+        onCommit: { value in
+          guard model.isCurrentTranscriptUIContext(for: item, revision: contextRevision),
+            model.canEditTranscript(for: item)
+          else { return false }
+          model.setSpeakerName(value, for: entry.label, of: item)
+          return model.speakerNameError == nil
+        }
+      )
+      .id("\(item.id):\(item.transcriptFingerprint ?? ""):\(entry.label)")
+      Button("\(entry.segmentCount) 段") {
+        if let seconds = entry.longestLineSeconds { model.jumpToTranscript(seconds) }
+      }
+      .buttonStyle(.v1Quiet)
+      .disabled(entry.longestLineSeconds == nil)
+      .help("跳到他说得最长的那一段")
+      .runtimeAccessibilityIdentifier("transcript.naming.longest.\(entry.label)")
+      if active {
+        speakerReviewActions(entry, item: item)
+      }
+      SpeakerNamingSuggestionBanner(
+        rows: suggestions,
+        onAdopt: {
+          guard model.isCurrentTranscriptUIContext(for: item, revision: contextRevision)
+          else { return }
+          if !active {
+            closeTranscriptSearch()
+            model.beginSpeakerReview(entry.label, of: item)
+          }
+          model.adoptNamingSuggestion($0, of: item)
+        },
+        onDismiss: { suggestion in
+          guard model.isCurrentTranscriptUIContext(for: item, revision: contextRevision)
+          else { return }
+          model.dismissNamingSuggestion(suggestion, of: item)
+        },
+        onJump: { seconds in
+          // Evidence may be spoken by someone else; keep the selected original-label target.
+          if !active { model.beginSpeakerReview(entry.label, of: item) }
+          closeTranscriptSearch()
+          model.jumpToTranscript(seconds)
+        },
+        resolve: { model.namingEvidence($0, of: item) }
+      )
+      .disabled(!model.canEditTranscript(for: item))
+    }
+    .padding(.vertical, Tokens.V1.Space.xs)
+  }
+
+  private func speakerReviewActions(
+    _ entry: MeetingLibraryModel.SpeakerRosterEntry, item: MeetingLibraryItem
+  ) -> some View {
+    let excluded = item.excludedSpeakers.contains(entry.label)
+    let contextRevision = model.transcriptContextRevision
+    let name = entry.name.isEmpty ? entry.label : entry.name
+    let shared = model.speakerRoster(for: item).filter {
+      ($0.name.isEmpty ? $0.label : $0.name) == name
+    }.count
+    return VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+      Text("当前核对：\(entry.label) · \(entry.segmentCount) 段")
+        .font(Tokens.V1.Text.meta.font)
+        .foregroundStyle(Tokens.V1.Color.accent)
+        .runtimeAccessibilityIdentifier("transcript.naming.current")
+      HStack(spacing: Tokens.V1.Space.xs) {
+        Button("只看此人") { model.showOnlyReviewedSpeaker(of: item) }
+          .buttonStyle(.v1Outline)
+          .runtimeAccessibilityIdentifier("transcript.naming.only")
+        Button("看上下文") {
+          closeTranscriptSearch()
+          model.showSpeakerReviewContext(of: item)
+        }
+        .buttonStyle(.v1Outline)
+        .runtimeAccessibilityIdentifier("transcript.naming.context")
+      }
+      if let progress = model.speakerHighlightProgress(for: item), model.speakerHighlight == name {
+        HStack(spacing: Tokens.V1.Space.xs) {
+          Button("上一处") { model.stepSpeakerHighlight(by: -1, of: item) }
+            .runtimeAccessibilityIdentifier("transcript.naming.previous")
+          Text("\(progress.index + 1)/\(progress.count)")
+            .monospacedDigit()
+          Button("下一处") { model.stepSpeakerHighlight(by: 1, of: item) }
+            .runtimeAccessibilityIdentifier("transcript.naming.next")
+        }
+        .font(Tokens.V1.Text.meta.font)
+        .buttonStyle(.v1Quiet)
+      } else {
+        Text(model.speakerFilters.isEmpty ? "暂无可跟读发言" : "只看中；点“看上下文”逐处核对")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+      }
+      if shared > 1 {
+        Text("阅读包含 \(shared) 个同名分组；以下操作只针对 \(entry.label)。")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Button(excluded ? "恢复这一组的纪要参与" : "这一组不进纪要") {
+        guard model.isCurrentTranscriptUIContext(for: item, revision: contextRevision)
+        else { return }
+        model.setSpeakerExcluded(entry.label, excluded: !excluded, of: item)
+      }
+      .buttonStyle(.v1Outline)
+      .disabled(!model.canEditTranscript(for: item))
+      .runtimeAccessibilityIdentifier("transcript.naming.exclude")
+      Text("作用于原始 \(entry.label) 的全部 \(entry.segmentCount) 段，含单段更正给他人的发言；原文保留。")
+        .font(Tokens.V1.Text.micro.font)
+        .foregroundStyle(Tokens.V1.Color.ink3)
+        .fixedSize(horizontal: false, vertical: true)
+    }
   }
 }

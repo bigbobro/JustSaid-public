@@ -23,6 +23,10 @@ public struct TranscriptDocumentView: View {
   var onRemoveExclusion: ((UUID) -> Void)? = nil
   var onSetSpeakerExcluded: ((String, Bool) -> Void)? = nil
   var onRequestNaming: ((String) -> Void)? = nil
+  var onRequestNamingLine: ((TranscriptSpeechLine) -> Void)? = nil
+  var isBatchSelecting = false
+  var onCancelBatch: (() -> Void)? = nil
+  var onViewportLine: ((TranscriptSpeechLine?) -> Void)? = nil
   var onToggleSpeakerHighlight: ((String) -> Void)? = nil
   var highlightedSpeaker: String? = nil
   var selection: Binding<TranscriptLineSelection?>? = nil
@@ -49,6 +53,10 @@ public struct TranscriptDocumentView: View {
     onRemoveExclusion: ((UUID) -> Void)? = nil,
     onSetSpeakerExcluded: ((String, Bool) -> Void)? = nil,
     onRequestNaming: ((String) -> Void)? = nil,
+    onRequestNamingLine: ((TranscriptSpeechLine) -> Void)? = nil,
+    isBatchSelecting: Bool = false,
+    onCancelBatch: (() -> Void)? = nil,
+    onViewportLine: ((TranscriptSpeechLine?) -> Void)? = nil,
     onToggleSpeakerHighlight: ((String) -> Void)? = nil,
     highlightedSpeaker: String? = nil,
     selection: Binding<TranscriptLineSelection?>? = nil,
@@ -72,6 +80,10 @@ public struct TranscriptDocumentView: View {
     self.onRemoveExclusion = onRemoveExclusion
     self.onSetSpeakerExcluded = onSetSpeakerExcluded
     self.onRequestNaming = onRequestNaming
+    self.onRequestNamingLine = onRequestNamingLine
+    self.isBatchSelecting = isBatchSelecting
+    self.onCancelBatch = onCancelBatch
+    self.onViewportLine = onViewportLine
     self.onToggleSpeakerHighlight = onToggleSpeakerHighlight
     self.highlightedSpeaker = highlightedSpeaker
     self.selection = selection
@@ -119,13 +131,30 @@ public struct TranscriptDocumentView: View {
           onSetSpeakerExcluded: onSetSpeakerExcluded,
           onRequestNaming: onRequestNaming,
           onToggleSpeakerHighlight: onToggleSpeakerHighlight,
-          onViewportAnchor: onViewportAnchor
+          onViewportAnchor: onViewportAnchor,
+          onRequestNamingLine: onRequestNamingLine,
+          isBatchSelecting: isBatchSelecting,
+          onSelectBatchEndpoint: { selectTimestamp($0, shiftPressed: true) },
+          onCancelBatch: onCancelBatch,
+          onViewportLine: onViewportLine
         )
       }
       TranscriptSelectionBar(
         count: onExcludeRange != nil && !selectedIndexes.isEmpty ? selectedIndexes.count : nil,
         onApply: applySelection,
-        onClear: { selection?.wrappedValue = nil }
+        onClear: {
+          selection?.wrappedValue = nil
+          onCancelBatch?()
+        },
+        isBatchSelecting: isBatchSelecting,
+        hiddenCount: selectedIndexes.subtracting(
+          Set(
+            visibleRows.compactMap { row in
+              guard case .speech(let line) = row else { return nil }
+              return line.index
+            })
+        ).count,
+        onReselect: { selection?.wrappedValue = nil }
       )
     }
     .onChange(of: rows) { _, newRows in
@@ -279,36 +308,58 @@ struct TranscriptSelectionBar: View {
   let count: Int?
   let onApply: () -> Void
   let onClear: () -> Void
+  var isBatchSelecting = false
+  var hiddenCount = 0
+  var onReselect: (() -> Void)?
 
   var body: some View {
-    if let count {
-      HStack(spacing: Tokens.Spacing.xs) {
-        // 三个词说的是同一条排除记录:标为闲聊 / 不进纪要(排除) / 已选入闲聊段
-        // (Fable 评审 2026-09-20)。这一页统一成「不进纪要」——闲聊是原因,
-        // 用户要看的是效果。会中那颗 ⌥⌘X「闲聊」不动:在那里它是你正处的模式。
-        Button("不进纪要（\(count) 段）", action: onApply)
-          .buttonStyle(.textAction)
-          .fontWeight(.semibold)
-          .help("这一整段写成一条排除记录，不进纪要；在排除行上右键可一次撤销整段")
-          .runtimeAccessibilityIdentifier("transcript.selection-bar.apply")
-        Button(action: onClear) {
-          Image(systemName: "xmark")
-            .font(.system(size: Tokens.FontSize.glyphTiny, weight: .bold))
+    if count != nil || isBatchSelecting {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+        Text(count == nil ? "点一段设起点，滚动后点另一段设终点" : "已选原文连续 \(count ?? 0) 段")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink2)
+        if hiddenCount > 0 {
+          Text("包含当前筛选隐藏的 \(hiddenCount) 段，也会不进纪要")
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.warn)
+            .runtimeAccessibilityIdentifier("transcript.selection-bar.hidden-count")
         }
-        .buttonStyle(.textAction)
-        .accessibilityLabel("清除选段")
-        .runtimeAccessibilityIdentifier("transcript.selection-bar.clear")
-        Text("只影响之后生成的纪要，转写原文不动；Esc 取消")
-          .font(.system(size: Tokens.FontSize.secondary))
-          .foregroundStyle(Tokens.Color.ink4)
+        HStack(spacing: Tokens.V1.Space.xs) {
+          Button("不进纪要（\(count ?? 0) 段）", action: onApply)
+            .buttonStyle(.v1Primary)
+            .disabled(count == nil)
+            .help("保存一条排除记录；撤销时恢复该记录涉及的整个范围")
+            .runtimeAccessibilityIdentifier("transcript.selection-bar.apply")
+          if isBatchSelecting {
+            Button("重选") { onReselect?() }
+              .buttonStyle(.v1Outline)
+              .disabled(count == nil)
+              .runtimeAccessibilityIdentifier("transcript.batch.reselect")
+            Button("取消", action: onClear)
+              .buttonStyle(.v1Quiet)
+              .runtimeAccessibilityIdentifier("transcript.batch.cancel")
+          } else {
+            Button("清除选段", action: onClear)
+              .buttonStyle(.v1Quiet)
+              .runtimeAccessibilityIdentifier("transcript.selection-bar.clear")
+          }
+        }
+        Text(
+          isBatchSelecting
+            ? "↑ ↓ 移动候选，空格设首尾，Tab 到操作，Esc 取消。原文保留。"
+            : "只影响之后生成的纪要，原文保留；Esc 取消"
+        )
+        .font(Tokens.V1.Text.micro.font)
+        .foregroundStyle(Tokens.V1.Color.ink3)
+        .fixedSize(horizontal: false, vertical: true)
       }
-      .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-      .foregroundStyle(Tokens.Color.acDeep)
-      .padding(.horizontal, Tokens.Spacing.sm)
-      .padding(.vertical, Tokens.Spacing.xs)
-      .insetPanel()
-      .tokenShadow(Tokens.Shadow.sh2)
-      .padding(.bottom, Tokens.Spacing.sm)
+      .padding(Tokens.V1.Space.sm)
+      .background(Tokens.V1.Color.raised, in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.md))
+      .overlay(
+        RoundedRectangle(cornerRadius: Tokens.V1.Radius.md)
+          .stroke(Tokens.V1.Color.rule, lineWidth: Tokens.V1.Size.controlRuleWidth)
+      )
+      .padding(Tokens.V1.Space.sm)
       .runtimeAccessibilityIdentifier("transcript.selection-bar")
     }
   }

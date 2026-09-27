@@ -216,6 +216,7 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       appUpdates: appCoordinator.appUpdates,
       initialSection: appCoordinator.settingsSection,
       section: $appCoordinator.settingsSection,
+      recoveryRequest: $appCoordinator.recoverySettingsRequest,
       onDone: { appCoordinator.leaveSettings() }
     )
   }
@@ -283,6 +284,12 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     }
     .onChange(of: appCoordinator.workspaceMode) { _, _ in dictionaryPane.reload() }
     .environment(\.textScale, textScale)
+    .environment(
+      \.llmRecoveryServices,
+      LLMRecoveryServices(settings: providerSettings) { request in
+        appCoordinator.showRecoverySettings(request)
+      }
+    )
     .background(
       WindowAccessor { window in
         // 会中呈现宿主在 AppCoordinator 上,登记窗口时一并更新前后台观察。

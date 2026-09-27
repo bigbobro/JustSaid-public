@@ -15,6 +15,7 @@ public struct LLMClientConfiguration: Equatable, Sendable {
   public let diagnosticPurpose: String?
   public let diagnosticOrigin: String?
   public let diagnosticMeetingHash: String?
+  public let recoveryChannelID: String?
 
   public var thinkingEnabled: Bool {
     reasoningEffort != .off
@@ -30,7 +31,8 @@ public struct LLMClientConfiguration: Equatable, Sendable {
     diagnosticRole: String? = nil,
     diagnosticPurpose: String? = nil,
     diagnosticOrigin: String? = nil,
-    diagnosticMeetingHash: String? = nil
+    diagnosticMeetingHash: String? = nil,
+    recoveryChannelID: String? = nil
   ) {
     self.providerID = providerID
     self.baseURL = baseURL
@@ -42,6 +44,7 @@ public struct LLMClientConfiguration: Equatable, Sendable {
     self.diagnosticPurpose = diagnosticPurpose
     self.diagnosticOrigin = diagnosticOrigin
     self.diagnosticMeetingHash = diagnosticMeetingHash
+    self.recoveryChannelID = recoveryChannelID
   }
 }
 

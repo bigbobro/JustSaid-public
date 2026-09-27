@@ -62,7 +62,10 @@ public struct MinutesTransportExhaustedError: LocalizedError, Sendable {
   /// 最后一跳的底层错误描述(日志/排查用,不进用户文案)。
   public let underlyingDescription: String
 
-  public init(underlying: Error) {
+  public let recoveryAdvice: LLMRecoveryAdvice?
+
+  public init(underlying: Error, recoveryAdvice: LLMRecoveryAdvice? = nil) {
+    self.recoveryAdvice = recoveryAdvice
     underlyingDescription = underlying.localizedDescription
   }
 

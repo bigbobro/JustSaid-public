@@ -94,12 +94,25 @@ struct SummaryDegradedBanner: View {
 
   var body: some View {
     if case .unavailable(let degradation) = status {
-      DegradedBanner(
-        text: degradation.bannerText,
-        retryAction: degradation.canRetry ? onRetry : nil,
-        retryIdentifier: "dashboard.summary-degraded.retry",
-        trailingNote: degradation.isRetryInFlight ? "重试中…" : nil
-      )
+      VStack(spacing: Tokens.V1.Space.xs) {
+        ForEach(Array(degradation.issues.enumerated()), id: \.offset) { _, issue in
+          if let advice = issue.recoveryAdvice {
+            LLMRecoveryNotice(
+              advice: advice,
+              recovering: issue.retryState.displayText,
+              affectedArea: "\(issue.source.displayName)未更新",
+              retry: degradation.canRetry ? onRetry : nil)
+          }
+        }
+        if degradation.issues.contains(where: { $0.recoveryAdvice == nil }) {
+          DegradedBanner(
+            text: degradation.bannerText,
+            retryAction: degradation.canRetry ? onRetry : nil,
+            retryIdentifier: "dashboard.summary-degraded.retry",
+            trailingNote: degradation.isRetryInFlight ? "重试中…" : nil
+          )
+        }
+      }
       .background(
         ZStack {
           ForEach(Self.probeIdentifiers(for: degradation), id: \.self) { identifier in

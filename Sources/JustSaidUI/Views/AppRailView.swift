@@ -67,16 +67,8 @@ struct AppRailView<SessionControls: View>: View {
   /// 28 的画框上线后:「不是说了比其他图标都大吗？现在这么小」。
   /// 原来放在设置分区栏底部。它是静态的,不是按钮:没有目的地,做成可点就是一个假入口。
   /// 版本号写进悬停提示与无障碍标签;要复制版本号去设置页底部那一行。
-  /// macOS 应用图标栅格:1024 画布里圆角方块只占 824,四周是透明边,
-  /// `applicationIconImage` 带着这圈边。画框按 rail-brand 等比放大,露出来的方块才是 rail-brand。
-  /// 28 的画框实际只露出约 22,和 20 点的房子字形一样大,就是这个原因。
-  private static var brandCanvas: CGFloat { Tokens.V1.Size.railBrand * 1024 / 824 }
-
   private var brand: some View {
-    Image(nsImage: NSApplication.shared.applicationIconImage)
-      .resizable()
-      .scaledToFit()
-      .frame(width: Self.brandCanvas, height: Self.brandCanvas)
+    BrandMark()
       .frame(width: Tokens.V1.Size.railItem.width, height: Tokens.V1.Size.railItem.height)
       // 图标格下再空 8,加上栈间距 4 共 12,再往下才是「首页」。
       .padding(.bottom, Tokens.V1.Space.xs)

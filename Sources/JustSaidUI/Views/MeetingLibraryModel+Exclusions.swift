@@ -6,61 +6,229 @@ import SwiftUI
 // 2026-08-20 批3 拆分:自 MeetingLibraryModel.swift 按 MARK 边界机械迁出,零行为变更;
 // 存储属性依 Swift 约束全部留在主文件(恰好锁死零行为)。
 extension MeetingLibraryModel {
-  // MARK: - 高亮通读(08-14 chip 交互单)
+  // MARK: - Transcript review context (ephemeral, fingerprint bound)
 
-  /// chip 单击:进入该显示名的高亮通读;同人再点退出。
-  /// 进入时清掉「只看」(互斥),并自动滚到此人的首次发言。
-  /// 显示名口径 = `speakerNames[label]` 非空 ? 真名 : 原始标签(与 `displaySpeakers`
-  /// 的主映射一致;单段 override 属少数,不按它建桶)。
+  public func beginTranscriptBatch(of item: MeetingLibraryItem) {
+    guard canEditTranscript(for: item) else {
+      exclusionError = "正在更新会议内容，请读取完成后再选段"
+      return
+    }
+    transcriptSelection = nil
+    transcriptBatchIntentID = UUID()
+    transcriptBatchItem = item
+    exclusionError = nil
+    HangSentinel.shared.note("transcript:batch-start")
+  }
+
+  public func cancelTranscriptBatch() {
+    transcriptSelection = nil
+    transcriptBatchIntentID = nil
+    transcriptBatchItem = nil
+  }
+
+  public func applyTranscriptBatch(
+    from first: TranscriptSpeechLine, to last: TranscriptSpeechLine,
+    of captured: MeetingLibraryItem, intentID: UUID
+  ) {
+    guard transcriptBatchIntentID == intentID,
+      let active = transcriptBatchItem, active.id == captured.id,
+      active.transcriptFingerprint == captured.transcriptFingerprint
+    else { return }
+    let keys = Set(
+      transcriptRows(for: captured).compactMap { row -> String? in
+        guard case .speech(let line) = row else { return nil }
+        return line.overrideKey
+      })
+    guard selectedID == captured.id, keys.contains(first.overrideKey),
+      keys.contains(last.overrideKey)
+    else {
+      cancelTranscriptBatch()
+      exclusionError = "内容已更新，请重新选段"
+      return
+    }
+    excludeTranscriptRange(from: first, to: last, of: captured)
+  }
+
+  /// Opening from the body preserves reading filters; selecting a roster row explicitly follows it.
+  public func beginSpeakerReview(
+    _ label: String, at line: TranscriptSpeechLine? = nil, of item: MeetingLibraryItem
+  ) {
+    guard label != TranscriptSpeakerNaming.selfSpeakerLabel,
+      speakerLabels(for: item).contains(label), item.transcriptFingerprint != nil
+    else { return }
+    cancelTranscriptBatch()
+    if line == nil, speakerReviewLabel != label {
+      speakerReviewLineKey = transcriptViewportLineKey
+    }
+    speakerReviewItem = item
+    speakerReviewLabel = label
+    if let line { speakerReviewLineKey = line.overrideKey }
+    speakerReviewFocusRequest = UUID()
+    if line == nil { showSpeakerReviewContext(of: item) }
+  }
+
+  public func showSpeakerReviewContext(of item: MeetingLibraryItem) {
+    guard let label = speakerReviewLabel, speakerReviewItem?.id == item.id,
+      speakerReviewItem?.transcriptFingerprint == item.transcriptFingerprint
+    else { return }
+    cancelTranscriptBatch()
+    speakerHighlight = item.speakerNames[label].flatMap { $0.isEmpty ? nil : $0 } ?? label
+    speakerFilters = []
+    alignSpeakerHighlight(of: item, jump: true)
+  }
+
+  public func showOnlyReviewedSpeaker(of item: MeetingLibraryItem) {
+    guard let label = speakerReviewLabel, speakerReviewItem?.id == item.id,
+      speakerReviewItem?.transcriptFingerprint == item.transcriptFingerprint
+    else { return }
+    cancelTranscriptBatch()
+    let name = item.speakerNames[label].flatMap { $0.isEmpty ? nil : $0 } ?? label
+    speakerFilters = [name]
+    clearSpeakerHighlight()
+    restoreReviewAnchor(of: item)
+  }
+
+  func clearSpeakerReview() {
+    transcriptContextRevision &+= 1
+    speakerReviewLabel = nil
+    speakerReviewItem = nil
+    speakerReviewLineKey = nil
+    speakerReviewFocusRequest = nil
+    speakerReviewDrafts = [:]
+    suspendedTranscriptReview = nil
+  }
+
+  /// UI callbacks retain their rendering context; Store edits remain independently versioned.
+  func isCurrentTranscriptUIContext(for item: MeetingLibraryItem, revision: Int) -> Bool {
+    selectedID == item.id && tab == .transcript && transcriptContextRevision == revision
+  }
+
+  func suspendTranscriptReviewForReload() {
+    cancelTranscriptBatch()
+    guard suspendedTranscriptReview == nil, let item = selectedItem,
+      item.transcriptFingerprint != nil, tab == .transcript
+    else { return }
+    let lines = highlightedLines(for: item)
+    let key =
+      speakerReviewLineKey
+      ?? (lines.indices.contains(speakerHighlightIndex)
+        ? lines[speakerHighlightIndex].overrideKey : nil)
+    suspendedTranscriptReview = SuspendedTranscriptReview(
+      item: item, highlight: speakerHighlight, filters: speakerFilters,
+      lineKey: key, seconds: transcriptViewportSeconds)
+  }
+
+  func restoreTranscriptReviewAfterReload(for itemID: String) {
+    guard let suspended = suspendedTranscriptReview, suspended.item.id == itemID else { return }
+    suspendedTranscriptReview = nil
+    guard selectedID == itemID, tab == .transcript, let item = selectedItem,
+      item.transcriptFingerprint == suspended.item.transcriptFingerprint
+    else {
+      clearSpeakerReview()
+      speakerNameError = "内容已更新，请重新核对发言人"
+      return
+    }
+    speakerReviewItem = speakerReviewLabel == nil ? nil : item
+    speakerReviewLineKey = suspended.lineKey
+    transcriptViewportSeconds = suspended.seconds
+    speakerHighlight = suspended.highlight
+    speakerFilters = suspended.filters
+    alignSpeakerHighlight(of: item, jump: true)
+    if speakerHighlight == nil { restoreReviewAnchor(of: item) }
+  }
+
+  /// Called only with an actual viewport anchor; it does not switch the naming target.
+  func recordTranscriptViewport(_ line: TranscriptSpeechLine?) {
+    transcriptViewportSeconds = line.flatMap { TranscriptAnchor(timecode: $0.timestamp).seconds }
+    transcriptViewportLineKey = line?.overrideKey
+  }
+
+  func restoreReviewAnchor(of item: MeetingLibraryItem) {
+    let rows = TranscriptDocumentView.filtering(
+      transcriptRows(for: item), to: speakerFilters, matching: "")
+    let lines = rows.compactMap { row -> TranscriptSpeechLine? in
+      guard case .speech(let line) = row else { return nil }
+      return line
+    }
+    let line =
+      lines.first { $0.overrideKey == speakerReviewLineKey }
+      ?? nearestReviewLine(in: lines)
+    if let line { jumpToReviewLine(line) }
+  }
+
+  private func nearestReviewLine(in lines: [TranscriptSpeechLine]) -> TranscriptSpeechLine? {
+    if let key = speakerReviewLineKey, let index = Int(key.split(separator: "#").last ?? "") {
+      return lines.min { abs($0.index - index) < abs($1.index - index) }
+    }
+    if let seconds = transcriptViewportSeconds {
+      return lines.min {
+        abs((TranscriptAnchor(timecode: $0.timestamp).seconds ?? 0) - seconds)
+          < abs((TranscriptAnchor(timecode: $1.timestamp).seconds ?? 0) - seconds)
+      }
+    }
+    return lines.first
+  }
+
+  private func jumpToReviewLine(_ line: TranscriptSpeechLine) {
+    guard let seconds = TranscriptAnchor(timecode: line.timestamp).seconds else { return }
+    speakerReviewLineKey = line.overrideKey
+    transcriptJumpRequest = TranscriptJumpRequest(seconds: seconds, lineKey: line.overrideKey)
+  }
+
+  func alignSpeakerHighlight(of item: MeetingLibraryItem, jump: Bool) {
+    let lines = highlightedLines(for: item)
+    guard
+      let line = lines.first(where: { $0.overrideKey == speakerReviewLineKey })
+        ?? nearestReviewLine(in: lines),
+      let index = lines.firstIndex(where: { $0.overrideKey == line.overrideKey })
+    else {
+      speakerHighlightIndex = 0
+      return
+    }
+    speakerHighlightIndex = index
+    speakerReviewLineKey = line.overrideKey
+    if jump { jumpToReviewLine(line) }
+  }
+
+  private func highlightedLines(for item: MeetingLibraryItem) -> [TranscriptSpeechLine] {
+    guard let speakerHighlight else { return [] }
+    return transcriptRows(for: item).compactMap { row in
+      guard case .speech(let line) = row, line.speaker == speakerHighlight else { return nil }
+      return line
+    }
+  }
+
+  // MARK: - Follow the effective display-name bucket; storage still uses the original label.
+
   public func toggleSpeakerHighlight(_ speaker: String) {
+    cancelTranscriptBatch()
     if speakerHighlight == speaker {
       clearSpeakerHighlight()
       return
     }
     speakerHighlight = speaker
-    speakerHighlightIndex = 0
     speakerFilters = []
-    guard let selectedItem,
-      let first = highlightAnchors(for: selectedItem).first
-    else { return }
+    guard let selectedItem else { return }
     tab = .transcript
-    transcriptJumpRequest = TranscriptJumpRequest(seconds: first)
+    alignSpeakerHighlight(of: selectedItem, jump: true)
   }
 
-  /// ✕ / Esc / 再点 chip 三条退出路径都落到这一处。
   public func clearSpeakerHighlight() {
     speakerHighlight = nil
     speakerHighlightIndex = 0
   }
 
-  /// 「上一处/下一处」:**循环遍历**(末尾再下一条回首条)——通读是反复对照的场景,
-  /// 停在末条还得自己手动滚回首段,比环回更别扭。跳转复用 `transcriptJumpRequest`,
-  /// 不为高亮新铺管道。
   public func stepSpeakerHighlight(by delta: Int, of item: MeetingLibraryItem) {
-    guard speakerHighlight != nil else { return }
-    let anchors = highlightAnchors(for: item)
-    guard !anchors.isEmpty else { return }
-    speakerHighlightIndex =
-      (speakerHighlightIndex + delta + anchors.count) % anchors.count
-    transcriptJumpRequest = TranscriptJumpRequest(seconds: anchors[speakerHighlightIndex])
+    let lines = highlightedLines(for: item)
+    guard !lines.isEmpty else { return }
+    speakerHighlightIndex = (speakerHighlightIndex + delta + lines.count) % lines.count
+    jumpToReviewLine(lines[speakerHighlightIndex])
   }
 
-  /// 「第 k/n 处」的展示口径:k 随导航走,n 从当前行集现算(改名/单段更正会改桶大小)。
-  /// index 越界(桶变小)时收进范围内——展示层不该看见 17/16。
   func speakerHighlightProgress(for item: MeetingLibraryItem) -> (index: Int, count: Int)? {
-    guard speakerHighlight != nil else { return nil }
-    let anchors = highlightAnchors(for: item)
-    guard !anchors.isEmpty else { return nil }
-    return (min(speakerHighlightIndex, anchors.count - 1), anchors.count)
-  }
-
-  /// 高亮对象各行发言的锚点(秒),按行序——跳转目标与 k/n 计数同一份事实。
-  private func highlightAnchors(for item: MeetingLibraryItem) -> [TimeInterval] {
-    guard let speakerHighlight else { return [] }
-    return TranscriptDocumentView.highlightAnchors(
-      in: transcriptRows(for: item),
-      of: speakerHighlight
-    )
+    let lines = highlightedLines(for: item)
+    guard !lines.isEmpty else { return nil }
+    return (min(speakerHighlightIndex, lines.count - 1), lines.count)
   }
 
   /// 单段更正(N2)。`name` 为空即撤销这一段的覆盖,回到全局映射结算的结果。
@@ -83,12 +251,14 @@ extension MeetingLibraryModel {
       updateTranscriptMetadata(metadata, for: item)
       invalidateTranscriptPresentation(forMeetingID: item.id)
       speakerNameError = nil
+      alignSpeakerHighlight(of: detailItem(for: item), jump: false)
+      if !speakerFilters.isEmpty { restoreReviewAnchor(of: detailItem(for: item)) }
+      pendingSpeakerOverride = nil
       // 刻意不让筛选跟着改后的人跑:典型动作是「只看张三 → 挑出不是他的那几段改掉」,
       // 每改一段就把视图甩到另一个人身上,等于每次都把人从复核队列里踢出去。
     } catch {
       speakerNameError = "这一段的更正没能存进 meeting.json:\(error.localizedDescription)"
     }
-    pendingSpeakerOverride = nil
   }
 
   /// A delayed context-menu action must retain the item from the menu that created it.
@@ -114,7 +284,11 @@ extension MeetingLibraryModel {
       let fingerprint = try requireTranscriptEditContext(for: item)
       let current = detailItem(for: item)
       let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard trimmed != (current.speakerNames[label] ?? "") else { return }
+      guard trimmed != (current.speakerNames[label] ?? "") else {
+        speakerNameError = nil
+        speakerReviewDrafts.removeValue(forKey: label)
+        return
+      }
       // Follow the renamed display bucket without changing the transcript version.
       let oldDisplayName = current.speakerNames[label].flatMap { $0.isEmpty ? nil : $0 } ?? label
       let newDisplayName = trimmed.isEmpty ? label : trimmed
@@ -129,12 +303,13 @@ extension MeetingLibraryModel {
       invalidateTranscriptPresentation(forMeetingID: item.id)
       if speakerHighlight == oldDisplayName {
         speakerHighlight = newDisplayName
-        speakerHighlightIndex = 0
       }
       if speakerFilters.contains(oldDisplayName) {
         speakerFilters.remove(oldDisplayName)
         speakerFilters.insert(newDisplayName)
       }
+      alignSpeakerHighlight(of: detailItem(for: item), jump: false)
+      speakerReviewDrafts.removeValue(forKey: label)
       speakerNameError = nil
     } catch {
       speakerNameError = "这个名字没能存进 meeting.json:\(error.localizedDescription)"
@@ -225,15 +400,19 @@ extension MeetingLibraryModel {
       meetings[index].excludedRanges.append(range)
       appendDetailExcludedRange(range, for: item)
       exclusionError = nil
-      transcriptSelection = nil
+      cancelTranscriptBatch()
     } catch {
+      if case MeetingStoreError.transcriptChanged = error {
+        cancelTranscriptBatch()
+        clearSpeakerReview()
+      }
       exclusionError = "这段排除没能存进 meeting.json:\(error.localizedDescription)"
     }
   }
 
   /// Esc / 动作条 ✕ / 切会议 / 切页签共用的清选区入口。public:探针驱动。
   public func clearTranscriptSelection() {
-    transcriptSelection = nil
+    cancelTranscriptBatch()
   }
 
   /// 撤销一段排除(按 id)。判定「哪条区间覆盖这行」在视图侧(`ExclusionUI.coveringRange`)。
@@ -544,8 +723,8 @@ extension MeetingLibraryModel {
     if item.finalized {
       return "这场会议已定稿，英文版纪要(minutes-en.md)不会再被自动生成覆盖。"
     }
-    if let partial = item.englishMinutesPartialFailure {
-      return "英文版纪要上次没生成成功：\(partial.detail)。可点下方重试，不会重新计费精转。"
+    if item.englishMinutesPartialFailure != nil {
+      return "英文版纪要上次未生成，请查看上方处理建议。单独重试英文版不会重新精转。"
     }
     return item.status == .failed
       ? "这场会议的会后处理没跑完，所以还没有英文版纪要。重新精转会把中英两版一起再生成一次。"

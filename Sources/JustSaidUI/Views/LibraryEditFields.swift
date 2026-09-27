@@ -260,7 +260,11 @@ struct SpeakerNameField: View {
   /// 声道来源副提示(08-14);nil = 无统计/零时长,不渲染。显隐判定收在本视图内部,
   /// 调用点无条件传入计算结果(红线 6)。
   var channelHint: SpeakerChannelHint.Presentation? = nil
-  let onCommit: (String) -> Void
+  var focusRequest: UUID?
+  var savedDraft: String?
+  var canCommit: Bool
+  var onDraftChange: (String?) -> Void
+  let onCommit: (String) -> Bool
 
   @State private var draft: String
   /// 只有用户自己敲过的草稿才允许提交。
@@ -281,7 +285,11 @@ struct SpeakerNameField: View {
     onToggleHighlight: (() -> Void)? = nil,
     onToggleExcluded: (() -> Void)? = nil,
     onFilter: (() -> Void)? = nil,
-    onCommit: @escaping (String) -> Void
+    focusRequest: UUID? = nil,
+    savedDraft: String? = nil,
+    canCommit: Bool = true,
+    onDraftChange: @escaping (String?) -> Void = { _ in },
+    onCommit: @escaping (String) -> Bool
   ) {
     self.label = label
     self.name = name
@@ -292,49 +300,56 @@ struct SpeakerNameField: View {
     self.onToggleExcluded = onToggleExcluded
     self.onFilter = onFilter
     self.onCommit = onCommit
-    _draft = State(initialValue: name)
+    self.focusRequest = focusRequest
+    self.savedDraft = savedDraft
+    self.canCommit = canCommit
+    self.onDraftChange = onDraftChange
+    _draft = State(initialValue: savedDraft ?? name)
+    _userDidEdit = State(initialValue: savedDraft != nil)
   }
 
   var body: some View {
-    // 标识只在高亮中的 chip 上挂(空串会给每个 chip 都塞一个探针占位视图)。
-    if isHighlighted {
-      chip.runtimeAccessibilityIdentifier("library.speaker-chip.highlighted")
-    } else {
-      chip
-    }
+    chip
+      .task(id: focusRequest) {
+        guard focusRequest != nil, canCommit else { return }
+        isFocused = true
+      }
   }
 
   private var chip: some View {
-    HStack(spacing: Tokens.Spacing.xxs) {
+    HStack(spacing: Tokens.V1.Space.s2xs) {
       // 右键菜单只挂标签一侧:挂在整个 chip 上会吃掉 TextField 的编辑菜单
       // (剪切/拷贝/粘贴),那是既有交互,不能动。
-      HStack(spacing: Tokens.Spacing.xxs) {
+      HStack(spacing: Tokens.V1.Space.s2xs) {
         // 单击 label = 高亮通读(主路径);悬停态走 textAction 的下划线纪律。
         // 热区刻意只包 label,TextField 的失焦/回车改名行为零变化。
         if let onToggleHighlight {
           Button(action: onToggleHighlight) {
             Text(label)
-              .font(.system(size: Tokens.FontSize.secondary, weight: .semibold))
-              .foregroundStyle(Tokens.Color.others)
+              .font(Tokens.V1.Text.label.font)
+              .foregroundStyle(Tokens.V1.Color.ink2)
               .contentShape(Rectangle())
           }
-          .buttonStyle(.textAction)
-          .help("单击高亮此人的发言并逐处跳转，再点一次退出；右键可「只看」")
+          .buttonStyle(.v1Quiet)
+          .help("选择此人，查看发言并核对名字")
+          .runtimeAccessibilityIdentifier("transcript.naming.target.\(label)")
           .accessibilityLabel(
-            isHighlighted ? "退出对「\(label)」的高亮" : "高亮「\(label)」的发言"
+            "核对「\(label)」的发言"
           )
         } else {
           Text(label)
-            .font(.system(size: Tokens.FontSize.secondary, weight: .semibold))
-            .foregroundStyle(Tokens.Color.others)
+            .font(Tokens.V1.Text.label.font)
+            .foregroundStyle(Tokens.V1.Color.ink2)
         }
         if isExcluded {
-          Text("不参会")
-            .font(.system(size: Tokens.FontSize.micro, weight: .semibold))
-            .foregroundStyle(Tokens.Color.ink4)
-            .padding(.horizontal, Tokens.Spacing.xxs)
-            .padding(.vertical, Tokens.Spacing.hairline)
-            .overlay(Capsule().stroke(Tokens.Color.line, lineWidth: 1))
+          Text("不进纪要")
+            .font(Tokens.V1.Text.micro.font)
+            .foregroundStyle(Tokens.V1.Color.ink3)
+            .padding(.horizontal, Tokens.V1.Space.s2xs)
+            .padding(.vertical, Tokens.V1.Space.s3xs)
+            .overlay(
+              Capsule().stroke(Tokens.V1.Color.rule, lineWidth: Tokens.V1.Size.controlRuleWidth)
+            )
             .runtimeAccessibilityIdentifier("library.speaker-chip.excluded")
         }
       }
@@ -346,7 +361,7 @@ struct SpeakerNameField: View {
           }
         }
         if let onToggleExcluded {
-          Button(isExcluded ? "恢复此人的纪要参与" : "此人不参会，整体排除") {
+          Button(isExcluded ? "恢复这一组的纪要参与" : "这一组不进纪要") {
             onToggleExcluded()
           }
         }
@@ -355,44 +370,48 @@ struct SpeakerNameField: View {
       // 不抢改名框的戏;不进右键菜单热区,既有交互零变化。nil(旧会议无统计)整条不渲染。
       if let channelHint {
         Text(channelHint.text)
-          .font(.system(size: Tokens.FontSize.micro))
-          .foregroundStyle(Tokens.Color.ink4)
+          .font(Tokens.V1.Text.micro.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
           .help(channelHint.help)
           .runtimeAccessibilityIdentifier(channelHint.probeIdentifier)
       }
       TextField("填真名", text: $draft)
         .textFieldStyle(.plain)
-        .font(.system(size: Tokens.FontSize.uiEmphasis))
-        .frame(width: 88)
+        .font(Tokens.V1.Text.body.font)
+        .frame(maxWidth: .infinity)
+        .disabled(!canCommit)
         .focused($isFocused)
         .onChange(of: draft) { _, _ in
-          if isFocused { userDidEdit = true }
+          if isFocused {
+            userDidEdit = draft != name
+            onDraftChange(userDidEdit ? draft : nil)
+          }
         }
         .onSubmit { commitDraft() }
         .onChange(of: isFocused) { _, focused in
           if !focused { commitDraft() }
         }
         .accessibilityLabel("给\(label)填写真名")
+        .runtimeAccessibilityIdentifier("transcript.naming.field.\(label)")
     }
-    .padding(.horizontal, Tokens.Spacing.xsm)
-    .padding(.vertical, Tokens.Spacing.xxs)
+    .padding(.horizontal, Tokens.V1.Space.xs)
+    .padding(.vertical, Tokens.V1.Space.s2xs)
     .background(
-      Tokens.Color.card,
-      in: RoundedRectangle(cornerRadius: Tokens.Radius.control)
+      Tokens.V1.Color.raised,
+      in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.md)
     )
     .background {
       if isHighlighted {
-        RoundedRectangle(cornerRadius: Tokens.Radius.control).fill(Tokens.Color.acSoft)
+        RoundedRectangle(cornerRadius: Tokens.V1.Radius.md).fill(Tokens.V1.Color.accentSoft)
       }
     }
     .overlay(
-      RoundedRectangle(cornerRadius: Tokens.Radius.control)
+      RoundedRectangle(cornerRadius: Tokens.V1.Radius.md)
         .stroke(
-          isFocused || isHighlighted ? Tokens.Color.ac : Tokens.Color.line,
-          lineWidth: 1
+          isFocused || isHighlighted ? Tokens.V1.Color.accent : Tokens.V1.Color.rule,
+          lineWidth: Tokens.V1.Size.controlRuleWidth
         )
     )
-    .opacity(isExcluded ? 0.6 : 1)
     // 外部改名(换了一场会、采纳了认名建议、单段更正回写)一律把草稿拉回真值。
     // 这里不再看有没有焦点——原来带 `if !isFocused` 守卫,而面板打开时焦点正好
     // 落在第一个输入框上,于是采纳的名字同步不进来,失焦又被空草稿写回去。
@@ -410,8 +429,9 @@ struct SpeakerNameField: View {
       draft = name
       return
     }
-    onCommit(draft)
+    guard canCommit, onCommit(draft) else { return }
     userDidEdit = false
+    onDraftChange(nil)
   }
 
   /// 右键菜单里按显示名说人话(填过真名就用真名),桶口径与单击高亮一致。

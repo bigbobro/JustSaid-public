@@ -88,6 +88,12 @@ extension MeetingLibraryView {
           model.hasContent(for: selected, tab: .transcript)
         {
           let presentation = model.transcriptPresentation(for: selected)
+                let batchItem = model.transcriptBatchItem
+                let batchIntentID = model.transcriptBatchIntentID
+                let contextRevision = model.transcriptContextRevision
+                let isCurrentContext = {
+                  model.isCurrentTranscriptUIContext(for: selected, revision: contextRevision)
+                }
           TranscriptDocumentView(
             rows: presentation.rows,
             speakerFilters: model.speakerFilters,
@@ -95,23 +101,48 @@ extension MeetingLibraryView {
             speakers: presentation.displaySpeakers,
             onSelectSpeaker: { model.toggleSpeakerFilter($0) },
             onOverride: { line, name in
+                    guard isCurrentContext() else { return }
               model.setSpeakerOverride(name, for: line, of: selected)
             },
-            onRequestNewName: { model.requestSpeakerOverride(for: $0, of: selected) },
+                  onRequestNewName: { line in
+                    guard isCurrentContext() else { return }
+                    model.requestSpeakerOverride(for: line, of: selected)
+                  },
             excludedRanges: selected.excludedRanges,
             excludedSpeakers: selected.excludedSpeakers,
-            onExcludeLine: { model.excludeTranscriptLine($0, of: selected) },
-            onRemoveExclusion: { model.removeExclusion(id: $0, of: selected) },
+                  onExcludeLine: { line in
+                    guard isCurrentContext() else { return }
+                    model.excludeTranscriptLine(line, of: selected)
+                  },
+                  onRemoveExclusion: { id in
+                    guard isCurrentContext() else { return }
+                    model.removeExclusion(id: id, of: selected)
+                  },
             onSetSpeakerExcluded: { label, excluded in
+                    guard isCurrentContext() else { return }
               model.setSpeakerExcluded(label, excluded: excluded, of: selected)
             },
             // 点正文里的名字 → 右栏认名面板;⌥点仍是「只看此人」。
-            onRequestNaming: { _ in showsSpeakerNaming = true },
+                  onRequestNamingLine: { line in
+                    guard isCurrentContext() else { return }
+                    model.beginSpeakerReview(line.originalSpeaker, at: line, of: selected)
+                    showsSpeakerNaming = true
+                  },
+                  isBatchSelecting: model.isTranscriptBatchSelecting,
+                  onCancelBatch: model.cancelTranscriptBatch,
+                  onViewportLine: model.recordTranscriptViewport,
             onToggleSpeakerHighlight: { model.toggleSpeakerHighlight($0) },
             highlightedSpeaker: model.speakerHighlight,
             selection: $model.transcriptSelection,
             onExcludeRange: { first, last in
-              model.excludeTranscriptRange(from: first, to: last, of: selected)
+                    guard isCurrentContext() else { return }
+                    if let batchItem {
+                      guard let batchIntentID else { return }
+                      model.applyTranscriptBatch(
+                        from: first, to: last, of: batchItem, intentID: batchIntentID)
+                    } else {
+                      model.excludeTranscriptRange(from: first, to: last, of: selected)
+                    }
             },
             scrollOffset: tabScrollBinding(for: .transcript),
             onViewportAnchor: { model.transcriptViewportSeconds = $0 },
@@ -234,7 +265,19 @@ extension MeetingLibraryView {
   /// 独立「生成纪要」状态条:运行中 / 成功 / 失败都必须可见(F1)。
   /// 这里**不做任何显隐判断**——`.none` 收成空由 `MinutesGenerationStatusBanner` 负责,
   /// 判断点只留一处,才能被 UIHierarchy 的变异验证真正守住。
+  @ViewBuilder
   private func minutesGenerationBanner(_ item: MeetingLibraryItem) -> some View {
+    if case .failed = model.minutesGenerationStage(for: item) {
+      LLMRecoveryNotice(
+        advice: model.postMeetingTasks.recoveryAdvice(for: item.paths.directory, feature: .minutes)
+          ?? .history(feature: .minutes),
+        paths: item.paths, retry: { model.pendingMinutesGeneration = item })
+    } else {
+      minutesGenerationStatusRow(item)
+    }
+  }
+
+  private func minutesGenerationStatusRow(_ item: MeetingLibraryItem) -> some View {
     MinutesGenerationStatusBanner(stage: model.minutesGenerationStage(for: item)) {
       // 重试同样走选择弹窗:上一次选了什么不该替这一次做主,重试也是花钱的。
       model.pendingMinutesGeneration = item
@@ -244,6 +287,24 @@ extension MeetingLibraryView {
   /// 英文版纪要局部缺失提示条:主产物已成功,只缺这一份;重试不重新计费精转。
   @ViewBuilder
   private func partialEnglishMinutesBanner(_ item: MeetingLibraryItem) -> some View {
+    let stage = model.englishMinutesRetryStage(for: item)
+    let advice = model.postMeetingTasks.recoveryAdvice(
+      for: item.paths.directory, feature: .englishMinutes)
+    if !stage.isRunning, advice != nil || !isEnglishRetrySuccess(stage) {
+      LLMRecoveryNotice(
+        advice: advice
+          ?? .history(
+            feature: .englishMinutes, occurredAt: item.englishMinutesPartialFailure?.failedAt),
+        paths: item.paths,
+        retry: model.canRetryEnglishMinutes(for: item)
+          ? { model.retryEnglishMinutes(for: item) } : nil)
+    } else {
+      partialEnglishMinutesStatusRow(item)
+    }
+  }
+
+  @ViewBuilder
+  private func partialEnglishMinutesStatusRow(_ item: MeetingLibraryItem) -> some View {
     let stage = model.englishMinutesRetryStage(for: item)
     HStack(spacing: Tokens.Spacing.xsm) {
       switch stage {
@@ -363,7 +424,7 @@ extension MeetingLibraryView {
       }
     }
     .disabled(!model.canExport(item))
-    .help(model.exportDisabledReason(for: item) ?? "导出完整会议包")
+    .help(model.exportDisabledReason(for: item) ?? "包含原始转写及当前纪要等文档；原始转写保留原标签和排除内容")
     .runtimeAccessibilityIdentifier("library.export-package")
   }
 
@@ -443,10 +504,10 @@ extension MeetingLibraryView {
   func exclusionStateLabel(rangeCount: Int, speakerCount: Int) -> String {
     var parts: [String] = []
     if rangeCount > 0 {
-      parts.append("排除 \(rangeCount) 段")
+      parts.append("排除 \(rangeCount) 条记录")
     }
     if speakerCount > 0 {
-      parts.append("排除 \(speakerCount) 人")
+      parts.append("排除 \(speakerCount) 组发言")
     }
     return "排除态：\(parts.joined(separator: " · "))（灰显保留）"
   }
@@ -485,7 +546,9 @@ extension MeetingLibraryView {
   }
 
   private func handleLibraryExitCommand() {
-    if isTranscriptSearchPresented {
+    if model.isTranscriptBatchSelecting {
+      model.cancelTranscriptBatch()
+    } else if isTranscriptSearchPresented {
       closeTranscriptSearch()
     } else if model.transcriptSelection != nil {
       model.clearTranscriptSelection()
@@ -631,8 +694,16 @@ extension MeetingLibraryView {
   @ViewBuilder
   func speakerNamingRail(_ item: MeetingLibraryItem) -> some View {
     VStack(alignment: .leading, spacing: .zero) {
-      ScrollView { speakerNamingPanel(item) }
-        .scrollBounceBehavior(.basedOnSize)
+      ScrollViewReader { proxy in
+        ScrollView { speakerNamingPanel(item) }
+          .scrollBounceBehavior(.basedOnSize)
+          .onChange(of: model.speakerReviewFocusRequest) { _, _ in
+            if let label = model.speakerReviewLabel { proxy.scrollTo(label, anchor: .center) }
+          }
+          .onAppear {
+            if let label = model.speakerReviewLabel { proxy.scrollTo(label, anchor: .center) }
+          }
+      }
     }
     .frame(width: Tokens.V1.Size.meetingRailWidth, alignment: .leading)
     .frame(maxHeight: .infinity, alignment: .top)

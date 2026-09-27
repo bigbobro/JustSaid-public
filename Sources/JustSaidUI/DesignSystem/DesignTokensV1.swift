@@ -6,6 +6,12 @@ extension Tokens {
   /// Existing geometry remains in the unversioned families until each region is rebuilt.
   enum V1 {
     enum Color {
+      static let brandStart = SwiftUI.Color(light: 0x127873, dark: 0x127873)
+      static let brandEnd = SwiftUI.Color(light: 0x064e4f, dark: 0x064e4f)
+      static let brandBar = SwiftUI.Color(light: 0xeaf7f7, dark: 0xeaf7f7)
+      static let brandCenterBar = SwiftUI.Color(light: 0xfdfdfd, dark: 0xfdfdfd)
+      static let brandLine = SwiftUI.Color(light: 0xfdfdfd, dark: 0xfdfdfd)
+
       static let paper = SwiftUI.Color(light: 0xf8fafc, dark: 0x121518)
       static let paper2 = SwiftUI.Color(light: 0xeff2f5, dark: 0x191c1f)
       static let paper3 = SwiftUI.Color(light: 0xe4e8ec, dark: 0x22262a)
@@ -113,6 +119,17 @@ extension Tokens {
       static let timecode = TextStyle(size: 11, lineHeight: 14, weight: .regular, family: .mono)
     }
 
+    /// 32pt 品牌标志，几何与 docs/design-system/tokens.json 的 brand-mark 镜像。
+    enum BrandMark {
+      static let cornerRadius: CGFloat = 8
+      static let barWidth: CGFloat = 2
+      static let strokeRadius: CGFloat = 1
+      static let bars: [(centerX: CGFloat, topY: CGFloat, height: CGFloat)] = [
+        (6, 11, 6), (11, 8, 10), (16, 6, 14), (21, 8, 10), (26, 11, 6),
+      ]
+      static let line = CGRect(x: 5, y: 23, width: 22, height: 2)
+    }
+
     enum Size {
       /// Dimensionless native Todo drag-preview scale; Reduce Motion uses identity.
       static let dragPreviewScale: CGFloat = 1.02
@@ -145,7 +162,6 @@ extension Tokens {
       static let rowHome: CGFloat = 44
       static let railIcon: CGFloat = 20
       /// 轨顶应用图标露出来的圆角方块边长,红绿灯正下方,明显大于导航字形。
-      /// 系统应用图标自带透明边,画框要按 `AppRailView` 里的图标栅格比例放大。
       static let railBrand: CGFloat = 32
 
       static let controlSm: CGFloat = 24

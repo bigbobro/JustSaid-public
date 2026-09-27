@@ -472,7 +472,7 @@ public enum MicrophoneCaptureRoutePlanner {
     return .avCaptureSession
   }
 
-  /// 与 AECProbe spike 一致：Bluetooth / Bluetooth-LE 且有输入声道才判 HFP。
+  /// Bluetooth / Bluetooth-LE 且有输入声道才判 HFP。
   public static func isBluetoothHFPInput(
     transportType: UInt32,
     inputChannelCount: UInt32

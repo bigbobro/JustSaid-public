@@ -376,9 +376,11 @@ public struct MeetingDocument {
 public struct TranscriptJumpRequest: Identifiable, Equatable {
   public let id = UUID()
   public let seconds: TimeInterval
+  public let lineKey: String?
 
-  public init(seconds: TimeInterval) {
+  public init(seconds: TimeInterval, lineKey: String? = nil) {
     self.seconds = seconds
+    self.lineKey = lineKey
   }
 }
 
@@ -471,7 +473,8 @@ public final class MeetingLibraryModel: ObservableObject {
   @Published public var tab: MeetingDetailTab = .onePage {
     didSet {
       if oldValue != tab {
-        transcriptSelection = nil
+        cancelTranscriptBatch()
+        if tab != .transcript { clearSpeakerReview() }
         HangSentinel.shared.note("tab:\(tab.rawValue)")
       }
     }
@@ -501,6 +504,7 @@ public final class MeetingLibraryModel: ObservableObject {
   /// 换筛选之前视口最上面那一句的时间,换完落回同一处。
   /// 不用 @Published:它每次滚动都在变,发布出去会让整页跟着重算。
   public var transcriptViewportSeconds: TimeInterval?
+  var transcriptViewportLineKey: String?
   /// 高亮通读模式(08-14 chip 交互单):按**生效后的显示名**命中着色,全文保留可见。
   /// 与 `speakerFilter` 互斥——两者都是「盯住一个人」的隐蔽状态,同存会让人
   /// 分不清自己此刻在哪个模式里;互斥在两个 toggle 方法里结算,别处不许直接写。
@@ -519,6 +523,25 @@ public final class MeetingLibraryModel: ObservableObject {
   /// 「标为闲聊」动作条。单击时间戳设锚、Shift+单击/拖拽推进焦点,两条路径都写这里。
   /// public:探针直接预置选区驱动 model 级断言(预置不了整页 probe 的内部状态)。
   @Published public var transcriptSelection: TranscriptLineSelection?
+  /// A batch intent retains the exact loaded version; submit never substitutes a newer item.
+  @Published public internal(set) var transcriptBatchItem: MeetingLibraryItem?
+  var transcriptBatchIntentID: UUID?
+  public var isTranscriptBatchSelecting: Bool { transcriptBatchItem != nil }
+  @Published public internal(set) var speakerReviewLabel: String?
+  public internal(set) var speakerReviewLineKey: String?
+  var speakerReviewItem: MeetingLibraryItem?
+  @Published var speakerReviewFocusRequest: UUID?
+  @Published var transcriptContextRevision = 0
+  /// Unsaved, user-edited fields survive only a same-fingerprint reload. Never persisted here.
+  var speakerReviewDrafts: [String: String] = [:]
+  struct SuspendedTranscriptReview {
+    let item: MeetingLibraryItem
+    let highlight: String?
+    let filters: Set<String>
+    let lineKey: String?
+    let seconds: TimeInterval?
+  }
+  var suspendedTranscriptReview: SuspendedTranscriptReview?
   /// 待确认删除的会议(T6「整场删除」;确认框由视图层挂载,不可逆动作必须过确认)。
   @Published var pendingDeletion: MeetingLibraryItem?
   /// 待确认的「重新精转」(重跑会重新计费,入口在详情头部,过一次确认防误触)。
@@ -819,6 +842,7 @@ public final class MeetingLibraryModel: ObservableObject {
     reloadGeneration &+= 1
     let generation = reloadGeneration
     reloadTask?.cancel()
+    suspendTranscriptReviewForReload()
     invalidateArtifactLoads()
     resetReloadScopedPresentationState()
     isReloading = true
@@ -897,6 +921,7 @@ public final class MeetingLibraryModel: ObservableObject {
       if snapshot == nil { self.failedArtifactLoads.insert(itemID) }
       self.transcriptPresentationCache.removeValue(forKey: itemID)
       self.artifactLoadTasks[itemID] = nil
+      self.restoreTranscriptReviewAfterReload(for: itemID)
       self.artifactLoadRevision &+= 1
       self.applyPendingSourceJump()
     }
@@ -941,7 +966,7 @@ public final class MeetingLibraryModel: ObservableObject {
     speakerHighlight = nil
     speakerHighlightIndex = 0
     pendingSpeakerOverride = nil
-    transcriptSelection = nil
+    cancelTranscriptBatch()
     transcriptJumpRequest = nil
     copyNoticeTask?.cancel()
     exportNotice = nil
@@ -1160,6 +1185,8 @@ public final class MeetingLibraryModel: ObservableObject {
   }
 
   public func select(_ id: String?) {
+    clearSpeakerReview()
+    suspendedTranscriptReview = nil
     selectedID = id
     if pendingTranscriptJump?.directoryPath != id {
       pendingTranscriptJump = nil
@@ -1179,7 +1206,7 @@ public final class MeetingLibraryModel: ObservableObject {
     speakerHighlight = nil
     speakerHighlightIndex = 0
     pendingSpeakerOverride = nil
-    transcriptSelection = nil
+    cancelTranscriptBatch()
     transcriptJumpRequest = nil
     returnTrail = nil
     copyNoticeTask?.cancel()
@@ -1532,6 +1559,7 @@ public final class MeetingLibraryModel: ObservableObject {
   }
 
   public func jumpToTranscript(_ seconds: TimeInterval) {
+    if isTranscriptBatchSelecting { cancelTranscriptBatch() }
     if tab != .transcript {
       returnTrail = LibraryReturnTrail(sourceTab: tab)
     }

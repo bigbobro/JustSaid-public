@@ -3,6 +3,7 @@ import Foundation
 /// 会后处理的瞬时进度事件。进度状态本身不进 meeting.json;
 /// 纪要正文流式写入版本文件是**产物**,见 D1 / design §8。
 public enum PostMeetingProgress: Sendable, Equatable {
+  case recoveryAdvice(LLMRecoveryAdvice)
   case composing
   case uploading
   case submitting
@@ -39,6 +40,7 @@ public enum PostMeetingProgress: Sendable, Equatable {
   /// UI 文案。只陈述已知事实:阶段名、语种、字数、已用时长;不含百分比或预计剩余。
   public var displayText: String {
     switch self {
+    case .recoveryAdvice(let advice): return advice.context.feature.title
     case .composing:
       return "合成立体声…"
     case .uploading:
@@ -89,7 +91,7 @@ public enum PostMeetingProgress: Sendable, Equatable {
     case .awaitingTranscription: return "awaitingTranscription"
     case .writingTranscript: return "writingTranscript"
     case .cleaningRemote: return "cleaningRemote"
-    case .minutesThinking, .minutesWriting, .minutesRetrying: return nil
+    case .minutesThinking, .minutesWriting, .minutesRetrying, .recoveryAdvice: return nil
     }
   }
 

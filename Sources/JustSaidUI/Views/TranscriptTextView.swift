@@ -138,6 +138,9 @@ private struct TranscriptTextActions {
   var onRequestNaming: ((String) -> Void)?
   /// 跟读:高亮此人发言并逐处跳转。
   var onToggleSpeakerHighlight: ((String) -> Void)?
+  var onRequestNamingLine: ((TranscriptSpeechLine) -> Void)?
+  var onSelectBatchEndpoint: ((Int) -> Void)?
+  var onCancelBatch: (() -> Void)?
   var beginProgrammaticScroll: () -> Void = {}
 }
 
@@ -180,6 +183,11 @@ struct TranscriptTextView: NSViewRepresentable {
   var onToggleSpeakerHighlight: ((String) -> Void)?
   /// 视口最上面那一句的时间,换筛选时用来落回原处。
   var onViewportAnchor: ((TimeInterval?) -> Void)?
+  var onRequestNamingLine: ((TranscriptSpeechLine) -> Void)?
+  var isBatchSelecting = false
+  var onSelectBatchEndpoint: ((Int) -> Void)?
+  var onCancelBatch: (() -> Void)?
+  var onViewportLine: ((TranscriptSpeechLine?) -> Void)?
 
   func makeCoordinator() -> Coordinator {
     Coordinator()
@@ -227,6 +235,7 @@ struct TranscriptTextView: NSViewRepresentable {
     let coordinator = context.coordinator
     coordinator.updateScrollBinding(scrollOffset)
     textView.onViewportAnchor = onViewportAnchor
+    textView.onViewportLine = onViewportLine
     textView.actions = TranscriptTextActions(
       onSelectSpeaker: onSelectSpeaker,
       onSelectTimestamp: onSelectTimestamp,
@@ -239,12 +248,16 @@ struct TranscriptTextView: NSViewRepresentable {
       onSetSpeakerExcluded: onSetSpeakerExcluded,
       onRequestNaming: onRequestNaming,
       onToggleSpeakerHighlight: onToggleSpeakerHighlight,
+      onRequestNamingLine: onRequestNamingLine,
+      onSelectBatchEndpoint: onSelectBatchEndpoint,
+      onCancelBatch: onCancelBatch,
       beginProgrammaticScroll: { [weak coordinator] in
         coordinator?.beginProgrammaticScroll()
       }
     )
     textView.selectionEnabled = selectionEnabled
     textView.selectionAnchorIndex = selectionAnchorIndex
+    textView.updateBatchInput(isBatchSelecting)
 
     let documentSnapshot = TranscriptDocumentSnapshot(
       rows: rows,
@@ -511,7 +524,10 @@ struct TranscriptTextView: NSViewRepresentable {
       in textView: InteractiveTranscriptTextView,
       reduceMotion: Bool
     ) {
-      guard let target = textView.nearestSpeechRange(to: request.seconds) else { return }
+      guard
+        let target = textView.speechRange(matching: request.lineKey)
+          ?? textView.nearestSpeechRange(to: request.seconds)
+      else { return }
       jumpClear?.cancel()
       textView.setJumpLine(target.line.index)
       textView.scrollToCenter(target, animated: !reduceMotion)
@@ -672,6 +688,9 @@ private final class InteractiveTranscriptTextView: NSTextView {
   var actions = TranscriptTextActions()
   var selectionEnabled = false
   var selectionAnchorIndex: Int?
+  private var isBatchSelecting = false
+  private var batchCandidateIndex: Int?
+  private let batchAccessibilityElement = TranscriptAccessibilityActionElement()
   private(set) var jumpLineIndex: Int?
 
   private var documentSnapshot: TranscriptDocumentSnapshot?
@@ -695,6 +714,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
   /// 指向别处,于是画面直接弹走,人不知道自己刚才看到哪了(owner 2026-09-20)。
   /// 记住这个时间,换完内容再落回同一处。
   var onViewportAnchor: ((TimeInterval?) -> Void)?
+  var onViewportLine: ((TranscriptSpeechLine?) -> Void)?
   private var lastReportedAnchor: TimeInterval??
   private var markerRefreshPending = false
   private var viewportRefreshPending = false
@@ -737,6 +757,9 @@ private final class InteractiveTranscriptTextView: NSTextView {
     speakerAccessibilityElement.setAccessibilityParent(self)
     speakerAccessibilityElement.setAccessibilityRole(.button)
     speakerAccessibilityElement.setAccessibilityIdentifier("transcript.document.speaker")
+    batchAccessibilityElement.setAccessibilityParent(self)
+    batchAccessibilityElement.setAccessibilityRole(.button)
+    batchAccessibilityElement.setAccessibilityIdentifier("transcript.batch.candidate")
     timestampAccessibilityElement.setAccessibilityParent(self)
     timestampAccessibilityElement.setAccessibilityRole(.button)
     timestampAccessibilityElement.setAccessibilityIdentifier(
@@ -752,6 +775,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
   override func accessibilityChildren() -> [Any]? {
     let nativeChildren = super.accessibilityChildren() ?? []
     guard exposesAccessibilityChrome else { return nativeChildren }
+    if isBatchSelecting { return nativeChildren + [batchAccessibilityElement] }
     return nativeChildren + [speakerAccessibilityElement, timestampAccessibilityElement]
   }
 
@@ -886,6 +910,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
   }
 
   func setJumpLine(_ lineIndex: Int?) {
+    guard jumpLineIndex != lineIndex else { return }
     jumpLineIndex = lineIndex
     scheduleViewportRefresh()
   }
@@ -915,6 +940,76 @@ private final class InteractiveTranscriptTextView: NSTextView {
       self.viewportRefreshPending = false
       self.viewportRefreshInstallChromePending = false
       self.refreshViewportDecorations(installChrome: installChrome)
+    }
+  }
+
+  func speechRange(matching key: String?) -> RenderedSpeechRange? {
+    guard let key else { return nil }
+    return speechRanges.first { $0.line.overrideKey == key }
+  }
+
+  func updateBatchInput(_ enabled: Bool) {
+    guard isBatchSelecting != enabled else { return }
+    isBatchSelecting = enabled
+    lineSelectionAnchor = nil
+    batchCandidateIndex = nil
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      if self.isBatchSelecting {
+        self.window?.makeFirstResponder(self)
+        self.setBatchCandidate(self.visibleSpeechRanges().first)
+      } else {
+        self.setJumpLine(nil)
+        self.setAccessibilityHelp(nil)
+      }
+      self.refreshAccessibilityChrome()
+    }
+  }
+
+  private func setBatchCandidate(_ range: RenderedSpeechRange?) {
+    batchCandidateIndex = range?.line.index
+    setJumpLine(range?.line.index)
+    guard let range else { return }
+    batchAccessibilityElement.setAccessibilityLabel("选段候选，空格设置首尾")
+    batchAccessibilityElement.setAccessibilityValue(
+      "\(range.line.index) · \(range.line.timestamp) · \(range.line.speaker)")
+    batchAccessibilityElement.setAccessibilityHelp(range.line.text)
+    batchAccessibilityElement.onPress = { [weak self] in
+      self?.actions.onSelectBatchEndpoint?(range.line.index)
+    }
+    if let rect = localRect(for: range.bodyRange) {
+      batchAccessibilityElement.setAccessibilityFrameInParentSpace(rect)
+    }
+    setAccessibilityHelp("选段中：上下方向键移动候选，空格设置首尾，Tab 到操作，Esc 取消")
+  }
+
+  override func keyDown(with event: NSEvent) {
+    guard isBatchSelecting else {
+      super.keyDown(with: event)
+      return
+    }
+    switch event.keyCode {
+    case 53:
+      actions.onCancelBatch?()
+    case 48:
+      if event.modifierFlags.contains(.shift) {
+        window?.selectPreviousKeyView(self)
+      } else {
+        window?.selectNextKeyView(self)
+      }
+    case 125, 126:
+      guard !speechRanges.isEmpty else { return }
+      let current = speechRanges.firstIndex { $0.line.index == batchCandidateIndex } ?? 0
+      let next = min(speechRanges.count - 1, max(0, current + (event.keyCode == 125 ? 1 : -1)))
+      let range = speechRanges[next]
+      setBatchCandidate(range)
+      scrollRangeToVisible(range.bodyRange)
+    case 49:
+      if let index = batchCandidateIndex { actions.onSelectBatchEndpoint?(index) }
+    case 36, 76:
+      break  // Return in the document never commits a persistent batch operation.
+    default:
+      super.keyDown(with: event)
     }
   }
 
@@ -950,6 +1045,19 @@ private final class InteractiveTranscriptTextView: NSTextView {
 
   override func mouseDown(with event: NSEvent) {
     let point = convert(event.locationInWindow, from: nil)
+    if isBatchSelecting {
+      window?.makeFirstResponder(self)
+      let range =
+        visibleDecorations.first {
+          $0.paragraphRect.minY <= point.y && point.y <= $0.paragraphRect.maxY
+        }?.rendered
+        ?? speechRange(at: characterIndex(at: event))
+      if let range {
+        setBatchCandidate(range)
+        actions.onSelectBatchEndpoint?(range.line.index)
+      }
+      return
+    }
     if let onRemoveExclusion = actions.onRemoveExclusion,
       let hit = badgeRects.first(where: { $0.value.contains(point) }),
       let rendered = visibleDecorations.first(where: { $0.rendered.line.index == hit.key })?
@@ -1012,6 +1120,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
   }
 
   override func mouseDragged(with event: NSEvent) {
+    if isBatchSelecting { return }
     guard let anchor = lineSelectionAnchor else {
       super.mouseDragged(with: event)
       return
@@ -1052,6 +1161,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
   }
 
   override func mouseUp(with event: NSEvent) {
+    if isBatchSelecting { return }
     guard lineSelectionAnchor != nil else {
       super.mouseUp(with: event)
       return
@@ -1060,6 +1170,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {
+    if isBatchSelecting { return nil }
     let characterIndex = characterIndex(at: event)
     guard let rendered = speechRange(at: characterIndex) else {
       return copyMenu()
@@ -1133,8 +1244,12 @@ private final class InteractiveTranscriptTextView: NSTextView {
     menuActions.removeAll(keepingCapacity: true)
     let menu = NSMenu()
     addInformation("「\(speaker)」· 全部 \(total) 段", to: menu)
-    if let onRequestNaming = actions.onRequestNaming {
-      addAction("给「\(speaker)」填真名…", to: menu) { onRequestNaming(line.originalSpeaker) }
+    if line.originalSpeaker != TranscriptSpeakerNaming.selfSpeakerLabel {
+      if let onRequestNamingLine = actions.onRequestNamingLine {
+        addAction("给「\(speaker)」填真名…", to: menu) { onRequestNamingLine(line) }
+      } else if let onRequestNaming = actions.onRequestNaming {
+        addAction("给「\(speaker)」填真名…", to: menu) { onRequestNaming(line.originalSpeaker) }
+      }
     }
     if let onToggleSpeakerHighlight = actions.onToggleSpeakerHighlight {
       addAction("跟读「\(speaker)」的发言", to: menu) { onToggleSpeakerHighlight(speaker) }
@@ -1496,6 +1611,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
   }
 
   private func reportViewportAnchor() {
+    onViewportLine?(visibleDecorations.first?.rendered.line)
     guard let onViewportAnchor else { return }
     let anchor = visibleDecorations.first?.rendered.seconds
     // 视口刷新很频繁;只有最上面那一句真的换了才回传,免得每帧都推一次状态。
@@ -1531,6 +1647,11 @@ private final class InteractiveTranscriptTextView: NSTextView {
       return
     }
     exposesAccessibilityChrome = true
+    if isBatchSelecting {
+      setBatchCandidate(
+        batchCandidateIndex.flatMap { speechRangeByLineIndex[$0] } ?? first.rendered)
+      return
+    }
     let range = first.rendered
     let stateHelp = accessibilityStateHelp(for: range)
 

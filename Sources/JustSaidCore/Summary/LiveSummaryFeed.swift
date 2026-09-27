@@ -98,6 +98,7 @@ private enum SummaryRecoveryTransition: String, Sendable {
 private struct SummaryLaneFailure: Equatable, Sendable {
   let stage: SummaryFailureStage
   let category: SummaryFailureCategory
+  var recoveryAdvice: LLMRecoveryAdvice? = nil
 }
 
 private struct SummaryAttemptToken: Equatable, Sendable {
@@ -242,6 +243,7 @@ public final class LiveSummaryFeed: SummaryFeed {
     refreshStatus()
   }
 
+  private let failureContextResolver: (() -> LLMFailureContext)?
   private let clientResolver: ClientResolver
   private let cadence: SummaryCadenceConfiguration
   private let meetingStore: MeetingStore
@@ -283,6 +285,7 @@ public final class LiveSummaryFeed: SummaryFeed {
 
   public init(
     clientResolver: @escaping ClientResolver,
+    failureContextResolver: (() -> LLMFailureContext)? = nil,
     postMeetingPipelineResolver: PostMeetingPipelineResolver? = nil,
     cadence: SummaryCadenceConfiguration = SummaryCadenceConfiguration(),
     meetingStore: MeetingStore = MeetingStore(),
@@ -290,6 +293,7 @@ public final class LiveSummaryFeed: SummaryFeed {
     postMeetingTasks: PostMeetingTaskCoordinator? = nil
   ) {
     self.clientResolver = clientResolver
+    self.failureContextResolver = failureContextResolver
     self.cadence = cadence
     self.meetingStore = meetingStore
     self.dictionaryStore = dictionaryStore
@@ -422,7 +426,8 @@ public final class LiveSummaryFeed: SummaryFeed {
         // Keep the in-memory cards finalized and surface the summary lane as degraded.
         self[.slow].failure = SummaryLaneFailure(
           stage: .persistence,
-          category: .persistence
+          category: .persistence,
+          recoveryAdvice: LLMRecoveryAdvice.project(error, context: .init(feature: .liveSummary))
         )
         self[.slow].consecutiveFailures += 1
       }
@@ -756,10 +761,13 @@ public final class LiveSummaryFeed: SummaryFeed {
     }
     let previousFailure = self[.fast].failure
     var failureStage = SummaryFailureStage.request
+    var failureContext =
+      failureContextResolver?() ?? LLMFailureContext(feature: .liveSummary, role: .liveSummaryLLM)
     defer { finishAttemptIfOwned(token) }
 
     do {
       let client = try clientResolver()
+      failureContext = LLMFailureContext(feature: .liveSummary, configuration: client.configuration)
       let usagePaths = meetingPaths
       let entries = dictionaryEntries()
       let response = try await completeWithTimeout(
@@ -858,7 +866,8 @@ public final class LiveSummaryFeed: SummaryFeed {
         lane: .fast,
         stage: failureStage,
         origin: origin,
-        token: token
+        token: token,
+        context: failureContext
       )
     }
   }
@@ -910,6 +919,8 @@ public final class LiveSummaryFeed: SummaryFeed {
     }
     let previousFailure = self[.slow].failure
     var failureStage = SummaryFailureStage.request
+    var failureContext =
+      failureContextResolver?() ?? LLMFailureContext(feature: .liveSummary, role: .liveSummaryLLM)
     defer { finishAttemptIfOwned(token) }
 
     if pendingSlowCommit != nil {
@@ -922,6 +933,7 @@ public final class LiveSummaryFeed: SummaryFeed {
 
     do {
       let client = try clientResolver()
+      failureContext = LLMFailureContext(feature: .liveSummary, configuration: client.configuration)
       let usagePaths = meetingPaths
       let entries = dictionaryEntries()
       let response = try await completeWithTimeout(
@@ -1028,7 +1040,8 @@ public final class LiveSummaryFeed: SummaryFeed {
         lane: .slow,
         stage: failureStage,
         origin: origin,
-        token: token
+        token: token,
+        context: failureContext
       )
     }
   }
@@ -1173,7 +1186,8 @@ public final class LiveSummaryFeed: SummaryFeed {
       }
       self[.slow].failure = SummaryLaneFailure(
         stage: .persistence,
-        category: .persistence
+        category: .persistence,
+        recoveryAdvice: LLMRecoveryAdvice.project(error, context: .init(feature: .liveSummary))
       )
       self[.slow].consecutiveFailures += 1
       logRecovery(
@@ -1263,7 +1277,8 @@ public final class LiveSummaryFeed: SummaryFeed {
     } catch {
       self[.slow].failure = SummaryLaneFailure(
         stage: .persistence,
-        category: .persistence
+        category: .persistence,
+        recoveryAdvice: LLMRecoveryAdvice.project(error, context: .init(feature: .liveSummary))
       )
       self[.slow].consecutiveFailures += 1
       logRecovery(
@@ -1503,7 +1518,8 @@ public final class LiveSummaryFeed: SummaryFeed {
           cause: Self.degradationCause(for: failure.category),
           lastUpdatedLabel: laneCoveredLabel(lane),
           retryState: retryState(for: lane),
-          consecutiveFailures: self[lane].consecutiveFailures
+          consecutiveFailures: self[lane].consecutiveFailures,
+          recoveryAdvice: failure.recoveryAdvice
         )
       )
     }
@@ -1518,7 +1534,10 @@ public final class LiveSummaryFeed: SummaryFeed {
           // 会后管线的失败原因本来就是人话诊断,原样透传;不硬塞进闭合枚举。
           detail: postMeetingIssue,
           retryState: isRunning ? .retrying : .waiting,
-          consecutiveFailures: 1
+          consecutiveFailures: 1,
+          recoveryAdvice: meetingPaths.flatMap {
+            postMeetingTasks.recoveryAdvice(for: $0.directory, feature: .minutes)
+          }
         )
       )
     }
@@ -1780,7 +1799,8 @@ public final class LiveSummaryFeed: SummaryFeed {
     lane: SummaryLane,
     stage: SummaryFailureStage,
     origin: SummaryAttemptOrigin,
-    token: SummaryAttemptToken
+    token: SummaryAttemptToken,
+    context: LLMFailureContext
   ) -> SummaryAttemptOutcome {
     if SummaryFailurePolicy.isCancellation(error) {
       return .normalCadence
@@ -1799,7 +1819,8 @@ public final class LiveSummaryFeed: SummaryFeed {
     let scheduleRecovery = origin == .cadence && category.allowsAutomaticRecovery
     let failure = SummaryLaneFailure(
       stage: stage,
-      category: category
+      category: category,
+      recoveryAdvice: LLMRecoveryAdvice.project(error, context: context)
     )
     self[lane].failure = failure
     self[lane].consecutiveFailures += 1

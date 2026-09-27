@@ -236,6 +236,14 @@ public struct PostMeetingPipeline: Sendable {
     )
   }
 
+  private func minutesAdvice(_ error: Error, language: MeetingLanguage) -> LLMRecoveryAdvice? {
+    LLMRecoveryAdvice.project(
+      error,
+      context: LLMFailureContext(
+        feature: language == .english ? .englishMinutes : .minutes,
+        configuration: minutesClient.configuration))
+  }
+
   /// 进度是观测:回调抛错绝不能成为管线失败源(红线 R5)。
   private func report(_ progress: PostMeetingProgress) {
     guard let onProgress else { return }
@@ -558,6 +566,8 @@ public struct PostMeetingPipeline: Sendable {
     } catch MeetingStoreError.finalized {
       throw PostMeetingPipelineError.finalized
     } catch {
+      if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+      if let advice = minutesAdvice(error, language: .chinese) { report(.recoveryAdvice(advice)) }
       fatalFailures.append("中文版纪要生成失败：\(error.localizedDescription)")
     }
 
@@ -603,6 +613,8 @@ public struct PostMeetingPipeline: Sendable {
       } catch MeetingStoreError.finalized {
         throw PostMeetingPipelineError.finalized
       } catch {
+        if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+        if let advice = minutesAdvice(error, language: .english) { report(.recoveryAdvice(advice)) }
         // 附加产物:不进 fatalFailures,不推翻整场;落盘后照常 completed。
         partialFailures.append(
           PartialArtifactFailure(
@@ -722,6 +734,8 @@ public struct PostMeetingPipeline: Sendable {
       } catch MeetingStoreError.finalized {
         throw PostMeetingPipelineError.finalized
       } catch {
+        if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+        if let advice = minutesAdvice(error, language: language) { report(.recoveryAdvice(advice)) }
         // 中文是主产物:失败致命;英文是附加:落 partial,不推翻中文成功。
         // 流式半成品(.md.partial)故意保留作失败证据,不进正式版本序列。
         if language == .chinese {
@@ -1421,7 +1435,8 @@ public struct PostMeetingPipeline: Sendable {
         guard case .retryable = verdict, attempt < maxCallAttempts else {
           if case .retryable = verdict {
             // R4:传输族重试耗尽,换成说人话的包装错误;底层细节已进失败痕。
-            throw MinutesTransportExhaustedError(underlying: error)
+            throw MinutesTransportExhaustedError(
+              underlying: error, recoveryAdvice: minutesAdvice(error, language: outputLanguage))
           }
           throw error
         }

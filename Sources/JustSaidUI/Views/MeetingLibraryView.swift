@@ -242,6 +242,12 @@ public struct MeetingLibraryView: View {
       // 回写 AppCoordinator(G3):指挥台滤镜随 remount 存活。
       retainedQueueFilter = filter
     }
+    .onChange(of: transcriptSearchQuery) { _, _ in
+      model.cancelTranscriptBatch()
+    }
+    .onChange(of: model.transcriptContextRevision) { _, _ in
+      closeTranscriptSearch()
+    }
     .onChange(of: model.tab) { _, tab in
       retainedSelectedTab = tab
       if tab != .transcript {

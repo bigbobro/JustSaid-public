@@ -65,7 +65,10 @@ struct JustSaidApp: App {
     // 两份就是两个去重源,启动续查会和手动精转对同一目录各跑一遍。
     let postMeetingTasks = PostMeetingTaskCoordinator(
       meetingStore: meetingStore,
-      pipelineResolver: postMeetingPipelineResolver
+      pipelineResolver: postMeetingPipelineResolver,
+      failureContextResolver: {
+        providerSettings.failureContext(feature: .minutes, role: .minutesLLM)
+      }
     )
     self.registry = registry
     _providerSettings = StateObject(
@@ -83,6 +86,9 @@ struct JustSaidApp: App {
             for: .liveSummaryLLM,
             transport: transport
           )
+        },
+        failureContextResolver: {
+          providerSettings.failureContext(feature: .liveSummary, role: .liveSummaryLLM)
         },
         postMeetingPipelineResolver: postMeetingPipelineResolver,
         meetingStore: meetingStore,
