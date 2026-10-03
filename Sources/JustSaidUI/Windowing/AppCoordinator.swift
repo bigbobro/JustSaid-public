@@ -78,6 +78,18 @@ public final class AppCoordinator: ObservableObject {
   public let meetingStore: MeetingStore
   /// 点名提醒偏好的唯一实例:设置页、两套顶栏与会中呈现读写同一份。
   public let nameAlertPreferences: NameAlertPreferencesStore
+  /// 会议检测提醒的开关与「不再提醒」名单；设置页与检测控制器读写同一份。
+  public let meetingDetectionPreferences: MeetingDetectionPreferencesStore
+  /// 会议检测提醒控制器；只由 App 层经 `installMeetingDetection` 创建，验证宿主默认没有它，
+  /// 所以不会在验证里读真实 Core Audio 或写真实诊断账本。
+  @Published public private(set) var meetingDetection: MeetingDetectionController?
+  /// 验证宿主注入脚本化家族；生产为 nil，开始时现建系统实现。
+  private var promptFamilySource: (any AppFamilyProcessSource)?
+  private var promptStartServices:
+    (
+      providerSettings: ProviderSettingsStore, modelAssets: LocalModelAssetManager,
+      defaults: UserDefaults
+    )?
   /// 界面按哪个时区显示时间。固定值 + 本机变化检测,见 `DisplayTimeZone`。
   public let displayTimeZone: DisplayTimeZone
   /// 会中呈现的应用级宿主(点名检测、摘要桥接、悬浮载体);主窗首次出现时安装一次,
@@ -161,6 +173,7 @@ public final class AppCoordinator: ObservableObject {
       ?? TodoDeletedMeetingLedger(fileURL: TodoDeletedMeetingLedger.defaultFileURL())
     todoPage = TodoPageModel(store: todoStore, preferences: nameAlertDefaults)
     nameAlertPreferences = NameAlertPreferencesStore(defaults: nameAlertDefaults)
+    meetingDetectionPreferences = MeetingDetectionPreferencesStore(defaults: nameAlertDefaults)
     // 首次运行会把本机时区固定下来;之后每次启动比一次,变了由使用者决定换不换。
     let timeZone = DisplayTimeZone(defaults: nameAlertDefaults)
     displayTimeZone = timeZone
@@ -217,7 +230,72 @@ public final class AppCoordinator: ObservableObject {
       )
     )
     presence.observe(mainWindow: mainWindow)
+    presence.bindMeetingDetection(meetingDetection)
     meetingPresence = presence
+  }
+
+  /// 安装会议检测提醒（App 启动时一次；重复调用空操作）。默认监视器读真实 Core Audio；
+  /// 验证宿主传入脚本化快照的监视器。开关关闭时监视器不轮询。
+  public func installMeetingDetection(
+    recordingSession: RecordingSession,
+    providerSettings: ProviderSettingsStore,
+    modelAssetManager: LocalModelAssetManager,
+    monitor: MicrophoneUsageMonitor? = nil,
+    defaults: UserDefaults = .standard,
+    scopeFallbackDuration: TimeInterval = 10,
+    familySource: (any AppFamilyProcessSource)? = nil
+  ) {
+    guard meetingDetection == nil else { return }
+    promptFamilySource = familySource
+    registerRecordingSession(recordingSession)
+    promptStartServices = (providerSettings, modelAssetManager, defaults)
+    let controller = MeetingDetectionController(
+      monitor: monitor ?? MicrophoneUsageMonitor(lookup: WorkspaceRunningAppLookup()),
+      recordingSession: recordingSession,
+      preferences: meetingDetectionPreferences,
+      actions: .init(
+        start: { [weak self] info in await self?.startRecordingFromPrompt(info) },
+        end: { [weak self] in self?.requestEndMeeting() }
+      ),
+      scopeFallbackDuration: scopeFallbackDuration
+    )
+    meetingDetection = controller
+    meetingPresence?.bindMeetingDetection(controller)
+  }
+
+  /// 由提醒开始记录：**不把主窗弹到前台**（owner 2026-09-30），不读首页草稿，标题用默认「会议」，
+  /// 语言取首页同一个偏好键，提供商与本机模型门槛和主窗「开始记录」一致。
+  /// 本机模型没就绪时没法在后台静默开始，退回常规入口（唤起主窗显示准备状态）。
+  /// 被确认的会议 App 记在录制会话上（`RecordingSession.sourceApp`），系统声只录它的进程家族。
+  func startRecordingFromPrompt(_ info: MeetingCallInfo) async {
+    guard let session = recordingSession, let services = promptStartServices else { return }
+    guard session.phase == .idle || session.phase == .completed || session.phase == .failed
+    else { return }
+    HangSentinel.shared.note("meeting-start:from-prompt")
+    let language =
+      MeetingLanguage(rawValue: services.defaults.string(forKey: "justsaid.meeting.language") ?? "")
+      ?? .auto
+    let bindings = services.providerSettings.bindings(for: language)
+    let providerID =
+      bindings.first(where: { $0.role == .liveTranscriber })?.providerID
+      ?? LocalModelKnownIDs.qwenProvider
+    var decision = services.modelAssets.startGate(forProviderID: providerID)
+    if case .waitForLocalCheck = decision {
+      await services.modelAssets.refresh()
+      decision = services.modelAssets.startGate(forProviderID: providerID)
+    }
+    switch decision {
+    case .ready, .systemManaged:
+      // 由提醒开始的记录只录被确认 App 家族的系统声（浏览器即整个浏览器）；手动开始仍是全局 tap。
+      await session.start(
+        title: "会议", language: language, providers: bindings, sourceApp: info,
+        systemAudioFamily: promptFamilySource
+          ?? SystemAppFamilyProcessSource(lookup: WorkspaceRunningAppLookup()))
+      // 后台开始失败时没有别的回执：主窗的横幅是用户唯一能看到原因的地方（同 issue #28 的考虑）。
+      if session.phase == .failed { showMainWindow() }
+    case .waitForLocalCheck, .showPreparation, .configurationFailed:
+      requestStartMeeting()
+    }
   }
 
   /// 主 Scene 内容登记 `openWindow(id:)`;窗口关闭后依然可用(菜单命令同款路由)。
@@ -664,17 +742,10 @@ public final class AppCoordinator: ObservableObject {
     }
   }
 
-  public func installMenuBarIfNeeded(
-    recordingSession: RecordingSession,
-    summaryFeed: LiveSummaryFeed,
-    providerSettings _: ProviderSettingsStore
-  ) {
-    registerRecordingSession(recordingSession)
-    // 先续跑仍有 request_id 的精转；其余过程态才是上次留下的孤儿。
-    reconcileInterruptedMeetingsIfNeeded()
-
-    guard menuBar == nil else { return }
-
+  /// 「结束会议」的统一路由（菜单栏、提醒胶囊的「结束记录」都走它）：主窗注册了结束入口就用它
+  /// （含闲聊确认），否则按未封口闲聊挂起或直收。从 `installMenuBarIfNeeded` 拆出，
+  /// 让验证宿主不装菜单栏也能接上同一条路由；生产行为不变。
+  func installEndMeetingRoute(recordingSession: RecordingSession, summaryFeed: LiveSummaryFeed) {
     endMeetingFromMenus = { [weak self, weak recordingSession, weak summaryFeed] in
       guard let recordingSession else { return }
       // 与主窗「结束会议」按钮同一入口(08-14 捎带):未封口的闲聊会先弹
@@ -710,6 +781,20 @@ public final class AppCoordinator: ObservableObject {
         self?.openLibrary(focus: directory)
       }
     }
+  }
+
+  public func installMenuBarIfNeeded(
+    recordingSession: RecordingSession,
+    summaryFeed: LiveSummaryFeed,
+    providerSettings _: ProviderSettingsStore
+  ) {
+    registerRecordingSession(recordingSession)
+    // 先续跑仍有 request_id 的精转；其余过程态才是上次留下的孤儿。
+    reconcileInterruptedMeetingsIfNeeded()
+
+    guard menuBar == nil else { return }
+
+    installEndMeetingRoute(recordingSession: recordingSession, summaryFeed: summaryFeed)
 
     let controller = MenuBarController(
       recordingSession: recordingSession,

@@ -520,6 +520,14 @@ public enum DiagnosticsSettingsSnapshot {
         "- \(role.displayName): 渠道指纹=\(fingerprint(selection?.channelID))"
           + " 供应商=\(provider(binding.providerID, store: store)) 模型指纹=\(fingerprint(binding.model))")
     }
+    // 会中总结行即快路;慢路单列,并说明它是单独保存还是跟随快路。
+    let slow = store.configuration.selection(for: LLMLane.slowSummary)
+    let slowProvider = slow.flatMap { store.configuration.channel(id: $0.channelID)?.providerID }
+    lines.append(
+      "- \(LLMLane.slowSummary.displayName): 渠道指纹=\(fingerprint(slow?.channelID))"
+        + " 供应商=\(slowProvider.map { provider($0, store: store) } ?? "未配置")"
+        + " 模型指纹=\(fingerprint(slow?.model))"
+        + " 来源=\(store.configuration.slowSummarySelection == nil ? "跟随快路" : "单独保存")")
 
     let storage = store.configuration.storage
     lines.append(

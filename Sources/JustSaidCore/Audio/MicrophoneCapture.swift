@@ -535,6 +535,10 @@ public final class AVCaptureMicrophoneSampleProcessor: @unchecked Sendable {
     try await writer.finish()
   }
 
+  func drainAcceptedForRouteChange() {
+    processingQueue.drainAcceptedForRouteChange()
+  }
+
   public func cancel() {
     processingQueue.cancel()
     pendingIncomingLock.withLock { pendingIncoming.removeAll() }
@@ -758,6 +762,10 @@ public final class MicrophoneCapture: NSObject, MicrophoneAudioCapturing,
   private var inputAttemptGeneration: UInt64 = 0
   private var inputAdmission: InputAdmission?
   private var confirmedBinding: MicrophoneInputBinding?
+  // The cancelled generation's accepted processor is drained independently of
+  // captureQueue/HAL. Both fields belong to startGenerationLock, until the next start.
+  private var cancelledStartProcessor: AVCaptureMicrophoneSampleProcessor?
+  private var cancelledStartDrain: Task<Void, Never>?
 
   private struct InputAdmission {
     let generation: UInt64
@@ -864,6 +872,8 @@ public final class MicrophoneCapture: NSObject, MicrophoneAudioCapturing,
 
   private func beginStartGeneration() -> UInt64 {
     startGenerationLock.withLock {
+      cancelledStartProcessor = nil
+      cancelledStartDrain = nil
       startGeneration &+= 1
       return startGeneration
     }
@@ -921,7 +931,7 @@ public final class MicrophoneCapture: NSObject, MicrophoneAudioCapturing,
           )
           guard isCurrentStartGeneration(generation) else {
             let resources = stopOnCaptureQueue()
-            resources.processor?.cancel()
+            cancelStartupProcessor(resources.processor)
             throw CancellationError()
           }
           continuation.resume(returning: binding)
@@ -933,12 +943,36 @@ public final class MicrophoneCapture: NSObject, MicrophoneAudioCapturing,
   }
 
   public func cancelPendingStart() {
-    // 同步失效旧世代；teardown 排进串行队列但不阻塞 timeout 返回。
-    invalidateStartGeneration()
+    // Cut off admission and preserve already-accepted work before scheduling HAL teardown.
+    startGenerationLock.withLock {
+      startGeneration &+= 1
+      let processor = inputAdmission?.processor
+      inputAdmission = nil
+      confirmedBinding = nil
+      cancelledStartProcessor = processor
+      cancelledStartDrain = processor.map { processor in
+        Task.detached(priority: .userInitiated) { [logger] in
+          do { try await processor.finish() } catch {
+            logger.warning("启动取消后的音频排空失败：\(error.localizedDescription, privacy: .public)")
+          }
+        }
+      }
+    }
     captureQueue.async { [self] in
       let resources = stopOnCaptureQueue()
-      resources.processor?.cancel()
+      cancelStartupProcessor(resources.processor)
     }
+  }
+
+  public func drainCancelledStartAudio() async {
+    let drain = startGenerationLock.withLock { cancelledStartDrain }
+    await drain?.value
+  }
+
+  private func cancelStartupProcessor(_ processor: AVCaptureMicrophoneSampleProcessor?) {
+    guard let processor else { return }
+    let isDraining = startGenerationLock.withLock { cancelledStartProcessor === processor }
+    if !isDraining { processor.cancel() }
   }
 
   public func stop() async throws {
@@ -1007,6 +1041,9 @@ public final class MicrophoneCapture: NSObject, MicrophoneAudioCapturing,
     startGenerationLock.withLock { runtimeRecoveryProgress = nil }
     // 拆当前路径:VPIO 引擎与 AVCaptureSession 均可能在场,全部拆净,不碰 processor。
     retireInputAdmission()
+    // Accepted old-route buffers must see the old publication. Do this before
+    // teardown clears it or the replacement route starts confirmed callbacks.
+    processor.drainAcceptedForRouteChange()
     isRunning = false
     if activeRoute == .vpio || engine != nil {
       tearDownVPIOOnCaptureQueue(cancelProcessor: false)
@@ -1244,7 +1281,7 @@ public final class MicrophoneCapture: NSObject, MicrophoneAudioCapturing,
     } catch {
       if reusingProcessor == nil {
         let resources = stopOnCaptureQueue()
-        resources.processor?.cancel()
+        cancelStartupProcessor(resources.processor)
       }
       throw error
     }

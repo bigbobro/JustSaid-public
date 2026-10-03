@@ -30,10 +30,17 @@ let package = Package(
     .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
   ],
   targets: [
+    .binaryTarget(
+      name: "JustSaidWebRTCApm",
+      url:
+        "https://github.com/bigbobro/JustSaid-public/releases/download/deps-webrtc-apm-2.1/JustSaidWebRTCApm-2.1-macos-arm64.xcframework.zip",
+      checksum: "1b6ba79507ab17caa9bf6ad607286a32bbad667124570c12fed692f4959be9f1"
+    ),
     .target(
       name: "JustSaidCore",
       dependencies: [
-        .product(name: "sherpa-onnx", package: "sherpa-onnx")
+        .product(name: "sherpa-onnx", package: "sherpa-onnx"),
+        .target(name: "JustSaidWebRTCApm", condition: .when(platforms: [.macOS])),
       ],
       linkerSettings: [
         .linkedFramework("AudioToolbox"),

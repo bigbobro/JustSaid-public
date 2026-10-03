@@ -19,6 +19,10 @@ public struct CloudUsageRecord: Codable, Equatable, Identifiable, Sendable {
   /// `purpose` 的认名提取取值(08-20 naming-first)。同上,固定字符串不做枚举。
   public static let speakerNamingPurpose = "speakerNaming"
 
+  /// `purpose` 的会中标记提炼取值(10-01 三路配置):标记借用快总结的渠道与模型,
+  /// role 照记 `liveSummaryLLM`,靠本字段与快总结本务区分。
+  public static let markDistillPurpose = "markDistill"
+
   public let id: UUID
   public let role: ProviderRole
   public let provider: String
@@ -26,6 +30,9 @@ public struct CloudUsageRecord: Codable, Equatable, Identifiable, Sendable {
   public let timestamp: Date
   public let inputTokens: Int?
   public let outputTokens: Int?
+  public let cacheHitTokens: Int?
+  public let cacheMissTokens: Int?
+  public let reasoningTokens: Int?
   public let audioDurationSeconds: Double?
   /// 这次调用的结局(08-20 传输韧性单 R3)。nil = 成功(既有档案语义不变,
   /// 成功路径不写此键);`failedOutcome` = 请求已发出但没有完成——钱可能已花,
@@ -38,6 +45,12 @@ public struct CloudUsageRecord: Codable, Equatable, Identifiable, Sendable {
   /// 整份 meeting.json 失败(实测钉在 MeetingStoreVerification;本仓库 MeetingStatus/
   /// PartialArtifactFailure/PostMeetingStageEvent/outcome 四处同判例)。
   public let purpose: String?
+  /// 会中总结的快/慢细分(10-01 三路配置):`fast` / `slow`,其余 nil。
+  /// 同 purpose,固定字符串不做枚举,旧版本解码忽略此键。
+  public let lane: String?
+  /// 计费来源(10-01):nil = 按量 API(既有档案语义);`chatgptPlan` = ChatGPT 计划用量。
+  /// 计划用量的 token 不换算成金额或剩余额度。可选键,旧版本忽略。
+  public let billingSource: String?
 
   public init(
     id: UUID = UUID(),
@@ -47,9 +60,14 @@ public struct CloudUsageRecord: Codable, Equatable, Identifiable, Sendable {
     timestamp: Date = Date(),
     inputTokens: Int? = nil,
     outputTokens: Int? = nil,
+    cacheHitTokens: Int? = nil,
+    cacheMissTokens: Int? = nil,
+    reasoningTokens: Int? = nil,
     audioDurationSeconds: Double? = nil,
     outcome: String? = nil,
-    purpose: String? = nil
+    purpose: String? = nil,
+    lane: String? = nil,
+    billingSource: String? = nil
   ) {
     self.id = id
     self.role = role
@@ -58,9 +76,14 @@ public struct CloudUsageRecord: Codable, Equatable, Identifiable, Sendable {
     self.timestamp = timestamp
     self.inputTokens = inputTokens
     self.outputTokens = outputTokens
+    self.cacheHitTokens = cacheHitTokens
+    self.cacheMissTokens = cacheMissTokens
+    self.reasoningTokens = reasoningTokens
     self.audioDurationSeconds = audioDurationSeconds
     self.outcome = outcome
     self.purpose = purpose
+    self.lane = lane
+    self.billingSource = billingSource
   }
 }
 
@@ -434,10 +457,13 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
   /// 麦克风单路暂停区间；nil = 旧会议或本场从未暂停。
   public var microphonePauseIntervals: [MicrophonePauseInterval]?
   public var captureLossStats: MeetingCaptureLossStats?
+  public var liveEchoCancellation: LiveEchoCancellationStatistics?
   /// 单路采集失败清单(部分完成语义)。旧档案缺字段解码为 nil = 无路级失败。
   public var captureLegFailures: [CaptureLegFailure]?
   /// 自动重建额度耗尽后确认过的中断区间；恢复后仍保留历史。nil = 无此类中断。
   public var captureInterruptions: [CaptureInterruption]?
+  /// 本场系统声的录制范围（全局，或只录某个 App 家族）。nil = 旧档案或导入的录音，无迁移。
+  public var systemAudioScope: SystemAudioScopeRecord?
   /// 主产物已成功、但某份附加产物没生成出来。nil = 没有局部缺失。
   /// 旧档案缺字段解码为 nil,与「没有局部缺失」语义一致,无需迁移。
   public var partialArtifactFailures: [PartialArtifactFailure]?
@@ -490,6 +516,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     captureLossStats: MeetingCaptureLossStats? = nil,
     captureLegFailures: [CaptureLegFailure]? = nil,
     captureInterruptions: [CaptureInterruption]? = nil,
+    systemAudioScope: SystemAudioScopeRecord? = nil,
     partialArtifactFailures: [PartialArtifactFailure]? = nil,
     minutesFailureAttempts: [MinutesFailureAttempt]? = nil,
     importedRecording: Bool? = nil,
@@ -527,6 +554,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     self.captureLossStats = captureLossStats
     self.captureLegFailures = captureLegFailures
     self.captureInterruptions = captureInterruptions
+    self.systemAudioScope = systemAudioScope
     self.partialArtifactFailures = partialArtifactFailures
     self.minutesFailureAttempts = minutesFailureAttempts
     self.importedRecording = importedRecording
@@ -570,7 +598,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
   /// (火山侧从未计费);为 false 时只许 query 原任务。三层判据,逐层保守:
   /// - `postMeetingSubmittedAt` 非空 = 确证已提交 → false;
   /// - 阶段史为 nil = 旧档(request_id 落盘晚于 submit 的年代)→ 必须当已提交 → false;
-  /// - 阶段史只含提交前阶段(processingStarted/composing/uploading/submitting,
+  /// - 阶段史只含提交前阶段(processingStarted/composing/micEchoCancellation/uploading/submitting,
   ///   以及 1.2.1 本地回声副本留下的 echoReductionInputComposed/echoReductionFallback,忽略 failed)
   ///   才判从未提交。那两个阶段名现在不再写入,只为旧档判定保留:删掉它们,1.2.1 在合成窗口里
   ///   中断的会议会被当成已提交,只去续查一个火山从没收到过的任务。
@@ -585,7 +613,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
       return false
     }
     let preSubmitStages: Set<String> = [
-      "processingStarted", "composing", "uploading", "submitting",
+      "processingStarted", "composing", "micEchoCancellation", "uploading", "submitting",
       // 1.2.1 遗留:不再写入,只为旧档判定保留。
       "echoReductionInputComposed", "echoReductionFallback",
     ]

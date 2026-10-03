@@ -27,6 +27,122 @@ public enum ProviderRole: String, Codable, CaseIterable, Hashable, Identifiable,
   }
 }
 
+/// 三路 LLM 调用用途(2026-10-01 三路独立配置)。**只在内存中使用**,不持久化为
+/// `ProviderRole`:快、慢两路的 wire 角色仍是 `liveSummaryLLM`,纪要仍是 `minutesLLM`,
+/// 旧版本读 meeting.json / 配置时不会遇到不认识的角色值。
+public enum LLMLane: String, CaseIterable, Hashable, Identifiable, Sendable {
+  case fastSummary
+  case slowSummary
+  case minutes
+
+  public var id: String { rawValue }
+
+  /// 持久化与能力判定沿用的旧角色。
+  public var role: ProviderRole {
+    self == .minutes ? .minutesLLM : .liveSummaryLLM
+  }
+
+  public var displayName: String {
+    switch self {
+    case .fastSummary:
+      return "会中快总结"
+    case .slowSummary:
+      return "会中慢总结"
+    case .minutes:
+      return "会后纪要"
+    }
+  }
+
+  /// 用量记录 `CloudUsageRecord.lane` 的取值;纪要按 role 已可区分,不写此键。
+  public var usageLane: String? {
+    switch self {
+    case .fastSummary:
+      return "fast"
+    case .slowSummary:
+      return "slow"
+    case .minutes:
+      return nil
+    }
+  }
+
+  /// 旧角色在三路里的默认对应:会中总结的旧入口代表快路。
+  public init?(role: ProviderRole) {
+    switch role {
+    case .liveSummaryLLM:
+      self = .fastSummary
+    case .minutesLLM:
+      self = .minutes
+    case .liveTranscriber, .batchASR:
+      return nil
+    }
+  }
+}
+
+/// 一处正在引用渠道的选择,按界面顺序排列。会中总结拆成快、慢两路后,同一个
+/// `ProviderRole` 可能对应两处选择;引用完整性检查与报错按这个粒度列出,
+/// 用户才知道该去哪张卡解锁。
+public enum ProviderSelectionSlot: String, CaseIterable, Hashable, Sendable {
+  case liveTranscriber
+  case fastSummary
+  case slowSummary
+  case batchASR
+  case minutes
+
+  public init(role: ProviderRole) {
+    switch role {
+    case .liveTranscriber:
+      self = .liveTranscriber
+    case .liveSummaryLLM:
+      self = .fastSummary
+    case .batchASR:
+      self = .batchASR
+    case .minutesLLM:
+      self = .minutes
+    }
+  }
+
+  public init(lane: LLMLane) {
+    switch lane {
+    case .fastSummary:
+      self = .fastSummary
+    case .slowSummary:
+      self = .slowSummary
+    case .minutes:
+      self = .minutes
+    }
+  }
+
+  public var role: ProviderRole {
+    switch self {
+    case .liveTranscriber:
+      return .liveTranscriber
+    case .fastSummary, .slowSummary:
+      return .liveSummaryLLM
+    case .batchASR:
+      return .batchASR
+    case .minutes:
+      return .minutesLLM
+    }
+  }
+
+  public var lane: LLMLane? {
+    switch self {
+    case .fastSummary:
+      return .fastSummary
+    case .slowSummary:
+      return .slowSummary
+    case .minutes:
+      return .minutes
+    case .liveTranscriber, .batchASR:
+      return nil
+    }
+  }
+
+  public var displayName: String {
+    lane?.displayName ?? role.displayName
+  }
+}
+
 public enum MeetingLanguage: String, Codable, CaseIterable, Identifiable, Sendable {
   /// 自动识别(08-09 R4,工具栏默认):把自动语种意图原样交给当前会中引擎。
   /// 08-11 纯 Qwen 体验分支下,actual stream 不设置 `language` option；显式手选
@@ -110,11 +226,19 @@ public enum MinutesGenerationScope: String, CaseIterable, Equatable, Sendable {
   /// 选项文案。计费次数由 `billedCallCount` 渲染进去,不手写数字,
   /// 避免改了行为忘了改文案。
   public var actionTitle: String {
+    actionTitle(usesChatGPTPlan: false)
+  }
+
+  /// 纪要走 ChatGPT 计划用量时不按次计费,文案改说调用次数与用量来源(10-01)。
+  public func actionTitle(usesChatGPTPlan: Bool) -> String {
+    let cost =
+      usesChatGPTPlan
+      ? "\(billedCallCount) 次调用，用 ChatGPT 计划用量" : "\(billedCallCount) 次计费"
     switch self {
     case .chineseOnly:
-      return "只生成中文(\(billedCallCount) 次计费)"
+      return "只生成中文(\(cost))"
     case .bilingual:
-      return "中英都生成(\(billedCallCount) 次计费)"
+      return "中英都生成(\(cost))"
     }
   }
 }
@@ -178,24 +302,28 @@ public enum StorageProviderKind: String, Codable, CaseIterable, Identifiable, Se
 /// 把某一家的词存进配置等于把它固化进用户数据。词面只允许出现在客户端翻译处。
 ///
 /// String 枚举会被整体序列化进 UserDefaults：**加新 case 会让旧版本解码整份
-/// ProviderConfiguration 失败**(与 core spec 对 `MeetingStatus` 的红线同源),五档为定案。
+/// ProviderConfiguration 失败**。选择与渠道覆盖用宽松新键 + 旧键兼容投影，不能直接
+/// 把新增 case 写进旧键；旧 max 在读取时迁为 xhigh，不产生落盘副作用。
 public enum ReasoningEffortLevel: String, Codable, CaseIterable, Comparable, Sendable {
   case off
   case low
   case medium
   case high
+  case xhigh
   case max
 
   public var displayName: String {
     switch self {
     case .off:
-      return "关闭"
+      return "关"
     case .low:
       return "低"
     case .medium:
       return "中"
     case .high:
       return "高"
+    case .xhigh:
+      return "超高"
     case .max:
       return "最高"
     }
@@ -211,9 +339,18 @@ public enum ReasoningEffortLevel: String, Codable, CaseIterable, Comparable, Sen
       return 2
     case .high:
       return 3
-    case .max:
+    case .xhigh:
       return 4
+    case .max:
+      return 5
     }
+  }
+
+  /// 1.4.2 只认识旧五档；它将 max 发为 xhigh。
+  fileprivate var legacyStorageValue: String { self == .xhigh ? "max" : rawValue }
+
+  fileprivate static func fromLegacyStorage(_ raw: String) -> Self? {
+    raw == "max" ? .xhigh : Self(rawValue: raw)
   }
 
   public static func < (lhs: ReasoningEffortLevel, rhs: ReasoningEffortLevel) -> Bool {
@@ -253,6 +390,15 @@ public enum ReasoningEffortPolicy {
   }
 }
 
+/// 渠道怎样认证。渠道管理只呈现需要维护连接/认证的供应商(10-01 起不再只看 `requiresAPIKey`)。
+public enum ProviderAuthentication: String, Hashable, Sendable {
+  /// 本地引擎,无连接配置。
+  case none
+  case apiKey
+  /// Sign in with ChatGPT 账户授权(计划用量);令牌由 `ChatGPTPlanService` 持有。
+  case chatGPTAccount
+}
+
 public struct ProviderDescriptor: Identifiable, Hashable, Sendable {
   public let id: String
   public let displayName: String
@@ -260,14 +406,19 @@ public struct ProviderDescriptor: Identifiable, Hashable, Sendable {
   public let defaultBaseURL: String
   public let defaultModel: String
   public let requiresAPIKey: Bool
+  public let authentication: ProviderAuthentication
   public let asrVendorKind: ASRVendorKind?
-  /// 这家真支持哪几档推理强度。界面下拉只列这里声明的档,**不给用户选了也不生效的选项**;
-  /// 不支持推理的供应商声明 `[.off]`。构造时一律并入 `.off`——「关闭」必须始终可选,
-  /// 否则用户选关闭却撞上不含 `.off` 的能力集时,就近降级会**反向升档**(唯一会把
-  /// 用户意愿改大的路径),白花推理预算。
+  /// 这家声明支持的推理档位。界面只列声明内的档，等效档通过执行档表提示;
+  /// 不支持推理的供应商声明 `[.off]`。API Key 渠道保留并入 `.off` 的兼容规则;
+  /// ChatGPT 计划按账户目录与模型契约提供能力，不给未支持 `none` 的模型添加「关闭」。
   public let supportedReasoningLevels: Set<ReasoningEffortLevel>
 
-  /// 该供应商可用的最高档,用于「会后纪要默认拉满」。
+  /// 已验证的最高档，默认路径只用它，不随文档支持的新档自动升高。
+  public let highestVerifiedReasoningLevel: ReasoningEffortLevel
+  /// 官方声明的等效执行档，只供界面提示，绝不改写请求词面。
+  public let reasoningExecutionLevels: [ReasoningEffortLevel: ReasoningEffortLevel]
+
+  /// 该供应商可选的最高档；不等于已验证的默认档。
   public var highestReasoningLevel: ReasoningEffortLevel {
     supportedReasoningLevels.max() ?? .off
   }
@@ -280,7 +431,10 @@ public struct ProviderDescriptor: Identifiable, Hashable, Sendable {
     defaultModel: String,
     requiresAPIKey: Bool,
     asrVendorKind: ASRVendorKind? = nil,
-    supportedReasoningLevels: Set<ReasoningEffortLevel> = [.off]
+    authentication: ProviderAuthentication? = nil,
+    supportedReasoningLevels: Set<ReasoningEffortLevel> = [.off],
+    highestVerifiedReasoningLevel: ReasoningEffortLevel? = nil,
+    reasoningExecutionLevels: [ReasoningEffortLevel: ReasoningEffortLevel] = [:]
   ) {
     self.id = id
     self.displayName = displayName
@@ -288,8 +442,17 @@ public struct ProviderDescriptor: Identifiable, Hashable, Sendable {
     self.defaultBaseURL = defaultBaseURL
     self.defaultModel = defaultModel
     self.requiresAPIKey = requiresAPIKey
+    self.authentication = authentication ?? (requiresAPIKey ? .apiKey : .none)
     self.asrVendorKind = asrVendorKind
-    self.supportedReasoningLevels = supportedReasoningLevels.union([.off])
+    // ChatGPT 账户渠道的档位是**模型级**的(来自账户目录),不在供应商层面并入「关」:
+    // 有的模型(如 Sol)不支持 none,伪造关闭能力会让请求发出后才被拒。
+    self.supportedReasoningLevels =
+      self.authentication == .chatGPTAccount
+      ? supportedReasoningLevels : supportedReasoningLevels.union([.off])
+    self.highestVerifiedReasoningLevel =
+      highestVerifiedReasoningLevel
+      ?? supportedReasoningLevels.max() ?? .off
+    self.reasoningExecutionLevels = reasoningExecutionLevels
   }
 }
 
@@ -301,8 +464,8 @@ public struct RoleProviderBinding: Equatable, Identifiable, Sendable {
   /// 推理强度的旧形态（布尔开关）。**保留字段不删**：删了旧 UserDefaults 会掉字段，
   /// 且降级回旧版本仍要靠它。新界面选档后同步回写 `thinkingEnabled = (level != .off)`。
   public var thinkingEnabled: Bool
-  /// 中性推理档位。旧配置没有该字段，因此保持 Optional，让 Codable 无迁移读取已有
-  /// UserDefaults（nil 时按 `effectiveReasoningEffort` 从 `thinkingEnabled` 推导）。
+  /// 内存中的中性推理档位。Codable 以 reasoningLevel 新键优先、旧键迁移读取；
+  /// 两者缺席时由 effectiveReasoningEffort 从 thinkingEnabled 推导。
   public var reasoningEffort: ReasoningEffortLevel?
   /// 会后精转·火山型的非密钥标识字段；通用型不使用。密钥类字段（Access Token、
   /// TOS AK/SK、R2 AK/SK）一律只进 Keychain，不进这个会被整体序列化进 UserDefaults 的结构体。
@@ -402,6 +565,7 @@ extension RoleProviderBinding: Codable {
     case model
     case thinkingEnabled
     case reasoningEffort
+    case reasoningLevel
     case appID
     case tosBucket
     case tosRegion
@@ -420,10 +584,8 @@ extension RoleProviderBinding: Codable {
     baseURL = try container.decode(String.self, forKey: .baseURL)
     model = try container.decode(String.self, forKey: .model)
     thinkingEnabled = try container.decodeIfPresent(Bool.self, forKey: .thinkingEnabled) ?? false
-    reasoningEffort = try container.decodeIfPresent(
-      ReasoningEffortLevel.self,
-      forKey: .reasoningEffort
-    )
+    reasoningEffort = try container.decodeReasoningLevel(
+      currentKey: .reasoningLevel, legacyKey: .reasoningEffort)
     appID = try container.decodeIfPresent(String.self, forKey: .appID) ?? ""
     tosBucket = try container.decodeIfPresent(String.self, forKey: .tosBucket) ?? ""
     tosRegion = try container.decodeIfPresent(String.self, forKey: .tosRegion) ?? ""
@@ -449,8 +611,10 @@ extension RoleProviderBinding: Codable {
     try container.encode(providerID, forKey: .providerID)
     try container.encode(baseURL, forKey: .baseURL)
     try container.encode(model, forKey: .model)
-    try container.encode(thinkingEnabled, forKey: .thinkingEnabled)
-    try container.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
+    try container.encode(
+      reasoningEffort.map { $0 != .off } ?? thinkingEnabled, forKey: .thinkingEnabled)
+    try container.encodeIfPresent(reasoningEffort?.rawValue, forKey: .reasoningLevel)
+    try container.encodeIfPresent(reasoningEffort?.legacyStorageValue, forKey: .reasoningEffort)
     try container.encode(appID, forKey: .appID)
     try container.encode(tosBucket, forKey: .tosBucket)
     try container.encode(tosRegion, forKey: .tosRegion)
@@ -488,8 +652,12 @@ public struct ProviderChannel: Codable, Equatable, Identifiable, Sendable {
   public var supportedRoles: Set<ProviderRole>
   /// 渠道声明可用的模型;空数组 = 不约束(自定义网关的模型随服务端变化)。
   public var availableModels: [String]
-  /// nil = 跟随 `ProviderDescriptor.supportedReasoningLevels` 的声明与就近降级规则。
+  /// nil = 跟随供应商声明；新键 reasoningLevels 与旧键兼容投影由 Codable 管理。
   public var supportedReasoningLevels: Set<ReasoningEffortLevel>?
+  /// ChatGPT 账户渠道的目录显示名(slug → display_name);其余渠道为 nil。可选键,旧版本忽略。
+  public var modelDisplayNames: [String: String]?
+  /// ChatGPT 账户渠道的模型级推理档位(slug → 档位);缺某个 slug 表示该模型档位未知。
+  public var modelReasoningLevels: [String: [ReasoningEffortLevel]]?
 
   public init(
     id: String,
@@ -532,6 +700,66 @@ public struct ProviderChannel: Codable, Equatable, Identifiable, Sendable {
   }
 }
 
+extension ProviderChannel {
+  private enum CodingKeys: String, CodingKey {
+    case id, name, providerID, baseURL, appID, secretReference, legacySecretAccountBase
+    case supportedRoles, availableModels, supportedReasoningLevels, reasoningLevels
+    case modelDisplayNames, modelReasoningLevels
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    providerID = try container.decode(String.self, forKey: .providerID)
+    baseURL = try container.decode(String.self, forKey: .baseURL)
+    appID = try container.decode(String.self, forKey: .appID)
+    secretReference = try container.decode(String.self, forKey: .secretReference)
+    legacySecretAccountBase = try container.decodeIfPresent(
+      String.self, forKey: .legacySecretAccountBase)
+    supportedRoles = try container.decode(Set<ProviderRole>.self, forKey: .supportedRoles)
+    availableModels = try container.decode([String].self, forKey: .availableModels)
+    // 未知新值当作缺席，整组回退旧键；不把未知档过滤成一份更窄的能力表。
+    let rawLevels = try container.decodeIfPresent([String].self, forKey: .reasoningLevels)
+    if let rawLevels, rawLevels.allSatisfy({ ReasoningEffortLevel(rawValue: $0) != nil }) {
+      supportedReasoningLevels = Set(rawLevels.compactMap(ReasoningEffortLevel.init(rawValue:)))
+    } else {
+      supportedReasoningLevels = try container.decodeIfPresent(
+        [String].self, forKey: .supportedReasoningLevels
+      )
+      .map { Set($0.compactMap(ReasoningEffortLevel.fromLegacyStorage)) }
+    }
+    modelDisplayNames = try container.decodeIfPresent(
+      [String: String].self, forKey: .modelDisplayNames)
+    // 未知档位词面只丢该档,不让整份配置解码失败。
+    modelReasoningLevels = try container.decodeIfPresent(
+      [String: [String]].self, forKey: .modelReasoningLevels
+    )?.mapValues { $0.compactMap(ReasoningEffortLevel.init(rawValue:)).sorted() }
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(name, forKey: .name)
+    try container.encode(providerID, forKey: .providerID)
+    try container.encode(baseURL, forKey: .baseURL)
+    try container.encode(appID, forKey: .appID)
+    try container.encode(secretReference, forKey: .secretReference)
+    try container.encodeIfPresent(legacySecretAccountBase, forKey: .legacySecretAccountBase)
+    try container.encode(supportedRoles, forKey: .supportedRoles)
+    try container.encode(availableModels, forKey: .availableModels)
+    try container.encodeIfPresent(
+      supportedReasoningLevels.map { $0.sorted().map(\.rawValue) }, forKey: .reasoningLevels)
+    try container.encodeIfPresent(
+      supportedReasoningLevels.map { Set($0.map(\.legacyStorageValue)).sorted() },
+      forKey: .supportedReasoningLevels)
+    try container.encodeIfPresent(modelDisplayNames, forKey: .modelDisplayNames)
+    try container.encodeIfPresent(
+      modelReasoningLevels?.mapValues { $0.sorted().map(\.rawValue) },
+      forKey: .modelReasoningLevels)
+  }
+}
+
 /// 运行角色对渠道的选择:只含渠道、模型、推理档位与角色专属运行时字段。
 /// 角色专属字段(火山 ASR resource、会中语言路由)留在选择里,**不得塞入通用渠道**;
 /// 对象存储不属于这里,由独立 `StorageConfiguration` 管理。
@@ -539,7 +767,7 @@ public struct RoleChannelSelection: Codable, Equatable, Identifiable, Sendable {
   public var role: ProviderRole
   public var channelID: String
   public var model: String
-  /// 中性推理档位;nil 时按 `effectiveReasoningEffort` 从旧布尔推导(与旧绑定同一张迁移表)。
+  /// 内存中性档位；持久化新键 reasoningLevel 优先，旧键 max 读成 xhigh，nil 从旧布尔推导。
   public var reasoningEffort: ReasoningEffortLevel?
   /// 旧形态布尔开关,保留不删:用户选档后回写,降级回旧版本仍可用;读路径不回写。
   public var thinkingEnabled: Bool
@@ -580,6 +808,53 @@ public struct RoleChannelSelection: Codable, Equatable, Identifiable, Sendable {
     self.thinkingEnabled = thinkingEnabled
     self.asrResourceID = asrResourceID
     self.automaticLanguageRouting = automaticLanguageRouting
+  }
+}
+
+extension RoleChannelSelection {
+  private enum CodingKeys: String, CodingKey {
+    case role, channelID, model, reasoningEffort, reasoningLevel, thinkingEnabled
+    case asrResourceID, automaticLanguageRouting
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    role = try container.decode(ProviderRole.self, forKey: .role)
+    channelID = try container.decode(String.self, forKey: .channelID)
+    model = try container.decode(String.self, forKey: .model)
+    reasoningEffort = try container.decodeReasoningLevel(
+      currentKey: .reasoningLevel, legacyKey: .reasoningEffort)
+    thinkingEnabled = try container.decode(Bool.self, forKey: .thinkingEnabled)
+    asrResourceID = try container.decodeIfPresent(String.self, forKey: .asrResourceID)
+    automaticLanguageRouting = try container.decodeIfPresent(
+      Bool.self, forKey: .automaticLanguageRouting)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(role, forKey: .role)
+    try container.encode(channelID, forKey: .channelID)
+    try container.encode(model, forKey: .model)
+    try container.encodeIfPresent(reasoningEffort?.rawValue, forKey: .reasoningLevel)
+    try container.encodeIfPresent(reasoningEffort?.legacyStorageValue, forKey: .reasoningEffort)
+    try container.encode(
+      reasoningEffort.map { $0 != .off } ?? thinkingEnabled, forKey: .thinkingEnabled)
+    try container.encodeIfPresent(asrResourceID, forKey: .asrResourceID)
+    try container.encodeIfPresent(automaticLanguageRouting, forKey: .automaticLanguageRouting)
+  }
+}
+
+extension KeyedDecodingContainer {
+  fileprivate func decodeReasoningLevel(currentKey: Key, legacyKey: Key) throws
+    -> ReasoningEffortLevel?
+  {
+    if let raw = try decodeIfPresent(String.self, forKey: currentKey),
+      let level = ReasoningEffortLevel(rawValue: raw)
+    {
+      return level
+    }
+    return try decodeIfPresent(String.self, forKey: legacyKey)
+      .flatMap(ReasoningEffortLevel.fromLegacyStorage)
   }
 }
 
@@ -704,6 +979,11 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
   public var channels: [ProviderChannel]
   public var roleSelections: [RoleChannelSelection]
   public var storage: StorageConfiguration
+  /// 会中慢总结的独立选择(10-01 三路配置)。nil = 慢路跟随会中总结旧选择(即快路);
+  /// 首次显式改动快、慢任一路时由 `ProviderSettingsStore` 物化。**不放进
+  /// `roleSelections`**:那里按角色取第一条,同角色两条会让旧版本与 `selection(for:)` 取错。
+  /// 旧版本忽略此键,把快路当作原会中配置;旧版本保存会丢掉它,慢路回到跟随快路。
+  public var slowSummarySelection: RoleChannelSelection?
   /// 旧格式解码保留(迁移输入)。非 nil 时本值是"旧表示":`bindings` 原样返回它,
   /// 编码也只写 `bindings` 键——验证夹具借此继续构造旧格式数据。
   public var legacyBindings: [RoleProviderBinding]?
@@ -713,12 +993,14 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     version: Int = ProviderConfiguration.currentVersion,
     channels: [ProviderChannel],
     roleSelections: [RoleChannelSelection],
-    storage: StorageConfiguration
+    storage: StorageConfiguration,
+    slowSummarySelection: RoleChannelSelection? = nil
   ) {
     self.version = version
     self.channels = channels
     self.roleSelections = roleSelections
     self.storage = storage
+    self.slowSummarySelection = slowSummarySelection
     self.legacyBindings = nil
   }
 
@@ -728,6 +1010,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     self.channels = []
     self.roleSelections = []
     self.storage = .default
+    self.slowSummarySelection = nil
     self.legacyBindings = bindings
   }
 
@@ -770,6 +1053,27 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     roleSelections.first { $0.role == role }
   }
 
+  /// 按用途读取当前有效选择。慢路未物化时跟随快路,纯读取,不回写。
+  public func selection(for lane: LLMLane) -> RoleChannelSelection? {
+    switch lane {
+    case .fastSummary:
+      return selection(for: .liveSummaryLLM)
+    case .slowSummary:
+      return slowSummarySelection ?? selection(for: .liveSummaryLLM)
+    case .minutes:
+      return selection(for: .minutesLLM)
+    }
+  }
+
+  /// 每一处有效选择(含跟随快路的慢路),按界面顺序。引用完整性检查一律经由它,
+  /// 不得只扫 `roleSelections` 漏掉慢路。
+  public var selectionsBySlot: [(slot: ProviderSelectionSlot, selection: RoleChannelSelection)] {
+    ProviderSelectionSlot.allCases.compactMap { slot in
+      let selection = slot.lane.map { self.selection(for: $0) } ?? self.selection(for: slot.role)
+      return selection.map { (slot, $0) }
+    }
+  }
+
   public func channel(id: String) -> ProviderChannel? {
     channels.first { $0.id == id }
   }
@@ -779,6 +1083,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     case channels
     case roleSelections
     case storage
+    case slowSummarySelection
     case bindings
   }
 
@@ -793,6 +1098,8 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
         try container.decodeIfPresent([RoleChannelSelection].self, forKey: .roleSelections) ?? []
       storage =
         try container.decodeIfPresent(StorageConfiguration.self, forKey: .storage) ?? .default
+      slowSummarySelection = try container.decodeIfPresent(
+        RoleChannelSelection.self, forKey: .slowSummarySelection)
       legacyBindings = nil
     } else if let legacy = try container.decodeIfPresent(
       [RoleProviderBinding].self,
@@ -802,6 +1109,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
       channels = []
       roleSelections = []
       storage = .default
+      slowSummarySelection = nil
       legacyBindings = legacy
     } else {
       throw DecodingError.dataCorruptedError(
@@ -823,5 +1131,6 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     try container.encode(channels, forKey: .channels)
     try container.encode(roleSelections, forKey: .roleSelections)
     try container.encode(storage, forKey: .storage)
+    try container.encodeIfPresent(slowSummarySelection, forKey: .slowSummarySelection)
   }
 }

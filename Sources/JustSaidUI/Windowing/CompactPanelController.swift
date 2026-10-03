@@ -585,6 +585,12 @@ final class CompactPanelController {
     }
   }
 
+  /// 强提醒所在的屏：把手 / 小窗所在的显示器，没有就退回主窗所在屏。
+  /// 会议提醒胶囊用同一个解析，两者在多显示器上不会落到不同的屏。
+  var strongAlertScreen: NSScreen? {
+    currentScreen(for: windowDisplayID ?? dockPlacement.displayID)
+  }
+
   private func currentScreen(for displayID: UInt32?) -> NSScreen? {
     if let displayID,
       let screen = NSScreen.screens.first(where: { self.displayID(of: $0) == displayID })
@@ -956,7 +962,7 @@ final class HoverTrackingView: NSView {
   override func mouseExited(with event: NSEvent) { onHover(false) }
 }
 
-private final class NonActivatingPanel: NSPanel {
+class NonActivatingPanel: NSPanel {
   override var canBecomeKey: Bool { false }
   override var canBecomeMain: Bool { false }
 }

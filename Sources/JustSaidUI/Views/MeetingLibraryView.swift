@@ -22,6 +22,7 @@ public struct MeetingLibraryView: View {
   /// 顶栏 ⋯ popover 的导入/重扫入口;列表头不再放这两颗按钮。
   let onChromeActionsReady: ((@escaping () -> Void, @escaping () -> Void) -> Void)?
   @Environment(\.textScale) var textScale
+  @Environment(\.minutesUsesChatGPTPlan) var minutesUsesChatGPTPlan
   @Environment(\.accessibilityReduceMotion) var reduceMotion
   @FocusState var focusedMeetingTitleID: String?
   @FocusState var isTranscriptSearchFocused: Bool

@@ -28,7 +28,25 @@ public struct AudioFileRealtimeDriver: Sendable {
     realtimeRate: Double = 1,
     chunkDuration: TimeInterval = 0.32
   ) async throws -> AudioFilePlaybackReport {
-    guard realtimeRate > 0, chunkDuration > 0 else {
+    try await play(
+      fileURL: fileURL, source: source, maximumDuration: maximumDuration,
+      realtimeRate: realtimeRate, chunkDuration: chunkDuration,
+      handler: { buffer, source, time in try engine.feed(buffer, source: source, at: time) }
+    )
+  }
+
+  /// The same file clock/cadence with an explicit processing sink (e.g. live AEC).
+  public func play(
+    fileURL: URL,
+    source: AudioSource = .others,
+    maximumDuration: TimeInterval? = nil,
+    realtimeRate: Double = 1,
+    chunkDuration: TimeInterval = 0.32,
+    handler: @escaping @Sendable (AVAudioPCMBuffer, AudioSource, TimeInterval) throws -> Void
+  ) async throws -> AudioFilePlaybackReport {
+    guard realtimeRate.isFinite, realtimeRate > 0, chunkDuration.isFinite, chunkDuration > 0,
+      maximumDuration.map({ $0.isFinite && $0 > 0 }) ?? true
+    else {
       throw TranscriberEngineError.invalidState("文件回放速率与分块时长必须大于零")
     }
 
@@ -79,11 +97,7 @@ public struct AudioFileRealtimeDriver: Sendable {
       guard buffer.frameLength > 0 else {
         break
       }
-      try engine.feed(
-        buffer,
-        source: source,
-        at: Double(processedFrames) / format.sampleRate
-      )
+      try handler(buffer, source, Double(processedFrames) / format.sampleRate)
       processedFrames += AVAudioFramePosition(buffer.frameLength)
       bufferCount += 1
     }

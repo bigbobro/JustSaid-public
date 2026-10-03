@@ -3,6 +3,7 @@ import Foundation
 import OSLog
 
 public struct PostMeetingPipelineConfiguration: Equatable, Sendable {
+  public let microphoneEchoCancellationEnabled: Bool
   public let pollInterval: TimeInterval
   public let maximumPollAttempts: Int
   public let maximumPollingDuration: TimeInterval
@@ -12,8 +13,10 @@ public struct PostMeetingPipelineConfiguration: Equatable, Sendable {
     pollInterval: TimeInterval = 30,
     maximumPollAttempts: Int = 360,
     maximumPollingDuration: TimeInterval = 10_800,
-    signedURLLifetime: TimeInterval = 86_400
+    signedURLLifetime: TimeInterval = 86_400,
+    microphoneEchoCancellationEnabled: Bool = true
   ) {
+    self.microphoneEchoCancellationEnabled = microphoneEchoCancellationEnabled
     self.pollInterval = pollInterval
     self.maximumPollAttempts = maximumPollAttempts
     self.maximumPollingDuration = maximumPollingDuration
@@ -111,6 +114,7 @@ public struct PostMeetingPipelineResult: Equatable, Sendable {
 
 public enum PostMeetingPipelineError: LocalizedError, Sendable {
   case finalized
+  case transcriptionNotConfigured
   case batchFailed(String)
   case pollingTimedOut
   case minutesGenerationFailed(String)
@@ -120,6 +124,8 @@ public enum PostMeetingPipelineError: LocalizedError, Sendable {
     switch self {
     case .finalized:
       return "会议纪要已定稿，自动管线不得再改写"
+    case .transcriptionNotConfigured:
+      return "当前管线仅用于生成纪要，未配置会后精转"
     case .batchFailed(let detail):
       return "会后精转失败：\(detail)"
     case .pollingTimedOut:
@@ -188,8 +194,22 @@ public struct PostMeetingPipeline: Sendable {
     )
   }
 
-  private let storage: any StorageProvider
-  private let batchTranscriber: any BatchTranscriptionProvider
+  private var makeEchoCanceller: @Sendable () throws -> any AcousticEchoCancelling = {
+    WebRTCEchoCanceller(sampleRateHz: PostMeetingMicrophoneAEC.sampleRate)
+  }
+
+  /// Creates the processor inside the serial offline operation; no mutable DSP state crosses tasks.
+  @_spi(Verification)
+  public func usingEchoCancellerForVerification(
+    _ factory: @escaping @Sendable () throws -> any AcousticEchoCancelling
+  ) -> PostMeetingPipeline {
+    var copy = self
+    copy.makeEchoCanceller = factory
+    return copy
+  }
+
+  private let storage: (any StorageProvider)?
+  private let batchTranscriber: (any BatchTranscriptionProvider)?
   private let minutesClient: any LLMClient
   /// 认名提取专用客户端(08-20 naming-first):会中总结同款 flash 档,与纪要大模型分离。
   /// nil = 未配置/构造失败 → 提取整步静默跳过(降级到现状),绝不借用 minutesClient 顶替。
@@ -198,7 +218,7 @@ public struct PostMeetingPipeline: Sendable {
   private let configuration: PostMeetingPipelineConfiguration
   private let dictionaryStore: DictionaryStore
   /// 瞬时进度观测。默认 nil 时行为与今天逐字节等同;抛错被 report() 吞掉。
-  private let onProgress: (@Sendable (PostMeetingProgress) throws -> Void)?
+  private var onProgress: (@Sendable (PostMeetingProgress) throws -> Void)?
 
   public init(
     storage: any StorageProvider,
@@ -220,20 +240,31 @@ public struct PostMeetingPipeline: Sendable {
     self.onProgress = onProgress
   }
 
+  /// 从已有转写生成纪要，不构造或读取精转、存储和认名的配置与凭证。
+  public init(
+    minutesClient: any LLMClient,
+    meetingStore: MeetingStore = MeetingStore(),
+    configuration: PostMeetingPipelineConfiguration = PostMeetingPipelineConfiguration(),
+    dictionaryStore: DictionaryStore = DictionaryStore(),
+    onProgress: (@Sendable (PostMeetingProgress) throws -> Void)? = nil
+  ) {
+    self.storage = nil
+    self.batchTranscriber = nil
+    self.minutesClient = minutesClient
+    self.namingClient = nil
+    self.meetingStore = meetingStore
+    self.configuration = configuration
+    self.dictionaryStore = dictionaryStore
+    self.onProgress = onProgress
+  }
+
   /// 绑上进度回调的副本。原管线(默认 nil)不受影响;UI / 验证按需调用。
   public func reportingProgress(
     _ handler: @escaping @Sendable (PostMeetingProgress) throws -> Void
   ) -> PostMeetingPipeline {
-    PostMeetingPipeline(
-      storage: storage,
-      batchTranscriber: batchTranscriber,
-      minutesClient: minutesClient,
-      namingClient: namingClient,
-      meetingStore: meetingStore,
-      configuration: configuration,
-      dictionaryStore: dictionaryStore,
-      onProgress: handler
-    )
+    var copy = self
+    copy.onProgress = handler
+    return copy
   }
 
   private func minutesAdvice(_ error: Error, language: MeetingLanguage) -> LLMRecoveryAdvice? {
@@ -287,6 +318,9 @@ public struct PostMeetingPipeline: Sendable {
   }
 
   public func run(_ input: PostMeetingInput) async throws -> PostMeetingPipelineResult {
+    guard let storage, batchTranscriber != nil else {
+      throw PostMeetingPipelineError.transcriptionNotConfigured
+    }
     var pendingRemoteObjects: [StoredObject] = []
     let metadata = try meetingStore.read(from: input.paths)
     guard !metadata.finalized else {
@@ -388,6 +422,9 @@ public struct PostMeetingPipeline: Sendable {
   public func resume(
     _ candidate: PostMeetingRecoveryCandidate
   ) async throws -> PostMeetingPipelineResult {
+    guard storage != nil, batchTranscriber != nil else {
+      throw PostMeetingPipelineError.transcriptionNotConfigured
+    }
     let context = RunLogContext(
       meetingID: (try? meetingStore.read(from: candidate.paths).id) ?? UUID()
     )
@@ -858,9 +895,9 @@ public struct PostMeetingPipeline: Sendable {
       )
       let response: LLMResponse
       do {
-        if let client = namingClient as? OpenAICompatibleLLMClient {
-          response = try await client.complete(
-            request,
+        response = try await namingClient.complete(
+          request,
+          options: LLMCallOptions(
             context: LLMCallDiagnosticContext(
               role: ProviderRole.liveSummaryLLM.rawValue,
               purpose: CloudUsageRecord.speakerNamingPurpose,
@@ -869,9 +906,7 @@ public struct PostMeetingPipeline: Sendable {
                 .map(MeetingDiagnosticsPackageExporter.meetingHash)
             )
           )
-        } else {
-          response = try await namingClient.complete(request)
-        }
+        )
       } catch {
         // 请求可能已发出即可能已计费:失败也记一笔(token 保持 nil,不用 0 兜底)。
         if !minutesFailureIsPreSend(error) {
@@ -892,6 +927,9 @@ public struct PostMeetingPipeline: Sendable {
       recordNamingUsage(
         inputTokens: response.inputTokens,
         outputTokens: response.outputTokens,
+        cacheHitTokens: response.cacheHitTokens,
+        cacheMissTokens: response.cacheMissTokens,
+        reasoningTokens: response.reasoningTokens,
         client: namingClient,
         paths: paths,
         recoveryCandidate: recoveryCandidate,
@@ -934,6 +972,9 @@ public struct PostMeetingPipeline: Sendable {
   private func recordNamingUsage(
     inputTokens: Int? = nil,
     outputTokens: Int? = nil,
+    cacheHitTokens: Int? = nil,
+    cacheMissTokens: Int? = nil,
+    reasoningTokens: Int? = nil,
     outcome: String? = nil,
     client: any LLMClient,
     paths: MeetingPaths,
@@ -948,8 +989,13 @@ public struct PostMeetingPipeline: Sendable {
           model: client.configuration.model,
           inputTokens: inputTokens,
           outputTokens: outputTokens,
+          cacheHitTokens: cacheHitTokens,
+          cacheMissTokens: cacheMissTokens,
+          reasoningTokens: reasoningTokens,
           outcome: outcome,
-          purpose: CloudUsageRecord.speakerNamingPurpose
+          purpose: CloudUsageRecord.speakerNamingPurpose,
+          lane: client.configuration.lane?.usageLane,
+          billingSource: client.configuration.billingSource
         ),
         to: paths,
         ifCurrentRecoveryJobs: recoveryCandidate?.jobs
@@ -1004,10 +1050,16 @@ public struct PostMeetingPipeline: Sendable {
       do {
         report(.composing)
         recordStage("composing", context: context, paths: input.paths)
-        stereoURL = try await PostMeetingStereoAudioComposer.makeUploadCopy(
+        let composed = try await PostMeetingStereoAudioComposer.makeUploadCopy(
           microphoneURL: input.paths.microphoneAudio,
-          systemURL: input.paths.systemAudio
+          systemURL: input.paths.systemAudio,
+          echoCancellationEnabled: configuration.microphoneEchoCancellationEnabled,
+          makeCanceller: makeEchoCanceller
         )
+        stereoURL = composed.url
+        recordStage(
+          "micEchoCancellation", detail: composed.echoCancellation.detail, context: context,
+          paths: input.paths)
       } catch is CancellationError {
         throw CancellationError()
       } catch {
@@ -1091,6 +1143,7 @@ public struct PostMeetingPipeline: Sendable {
     audioDurations: [AudioSource: TimeInterval],
     context: RunLogContext
   ) async throws -> [TranscribedUpload] {
+    guard let storage else { throw PostMeetingPipelineError.transcriptionNotConfigured }
     let tracker = UploadedObjectTracker()
     var completed: [TranscribedUpload] = []
     do {
@@ -1138,6 +1191,9 @@ public struct PostMeetingPipeline: Sendable {
     plannedRequestID: String? = nil,
     context: RunLogContext
   ) async throws -> TranscribedUpload {
+    guard let storage, let batchTranscriber else {
+      throw PostMeetingPipelineError.transcriptionNotConfigured
+    }
     // R2:任务身份先于压缩/上传落盘。立体声路径由调用方在合成前生成并传入;
     // 单声道兜底路径在这里按路生成。提交时复用同一值(注入口),提交后以返回
     // job 的实际身份为准覆盖(provider 可能忽略注入或返回服务端 task_id)。
@@ -1456,7 +1512,11 @@ public struct PostMeetingPipeline: Sendable {
           provider: minutesClient.configuration.providerID,
           model: minutesClient.configuration.model,
           inputTokens: response.inputTokens,
-          outputTokens: response.outputTokens
+          outputTokens: response.outputTokens,
+          cacheHitTokens: response.cacheHitTokens,
+          cacheMissTokens: response.cacheMissTokens,
+          reasoningTokens: response.reasoningTokens,
+          billingSource: minutesClient.configuration.billingSource
         ),
         to: paths,
         ifCurrentRecoveryJobs: recoveryCandidate?.jobs
@@ -1476,37 +1536,39 @@ public struct PostMeetingPipeline: Sendable {
     onAccumulatedContent: (@Sendable (String) -> Void)?
   ) async throws -> LLMResponse {
     let minutesStartedAt = Date()
-    if let streamingClient = minutesClient as? OpenAICompatibleLLMClient {
-      return try await streamingClient.complete(
+    let context = LLMCallDiagnosticContext(
+      role: ProviderRole.minutesLLM.rawValue,
+      purpose: "minutes",
+      origin: "postMeeting",
+      meetingHash: meetingHash,
+      attempt: attempt,
+      retryGroup: retryGroup
+    )
+    if minutesClient.streamsProgress {
+      return try await minutesClient.complete(
         request,
-        context: LLMCallDiagnosticContext(
-          role: ProviderRole.minutesLLM.rawValue,
-          purpose: "minutes",
-          origin: "postMeeting",
-          meetingHash: meetingHash,
-          attempt: attempt,
-          retryGroup: retryGroup
-        )
-      ) { [self] streamProgress in
-        let elapsed = Date().timeIntervalSince(minutesStartedAt)
-        switch streamProgress {
-        case .thinking:
-          self.report(
-            .minutesThinking(language: outputLanguage, elapsed: elapsed)
-          )
-        case .writing(_, let accumulatedContent):
-          onAccumulatedContent?(accumulatedContent)
-          self.report(
-            .minutesWriting(
-              language: outputLanguage,
-              accumulated: accumulatedContent,
-              elapsed: elapsed
+        options: LLMCallOptions(context: context) { [self] streamProgress in
+          let elapsed = Date().timeIntervalSince(minutesStartedAt)
+          switch streamProgress {
+          case .thinking:
+            self.report(
+              .minutesThinking(language: outputLanguage, elapsed: elapsed)
             )
-          )
+          case .writing(_, let accumulatedContent):
+            onAccumulatedContent?(accumulatedContent)
+            self.report(
+              .minutesWriting(
+                language: outputLanguage,
+                accumulated: accumulatedContent,
+                elapsed: elapsed
+              )
+            )
+          }
         }
-      }
+      )
     }
-    let response = try await minutesClient.complete(request)
+    let response = try await minutesClient.complete(
+      request, options: LLMCallOptions(context: context))
     // 非流式:至少报一次 writing,便于语种横幅与 AC10/AC13 断言。
     if !response.text.isEmpty {
       onAccumulatedContent?(response.text)
@@ -1550,7 +1612,8 @@ public struct PostMeetingPipeline: Sendable {
             role: .minutesLLM,
             provider: minutesClient.configuration.providerID,
             model: minutesClient.configuration.model,
-            outcome: CloudUsageRecord.failedOutcome
+            outcome: CloudUsageRecord.failedOutcome,
+            billingSource: minutesClient.configuration.billingSource
           ),
           to: paths,
           ifCurrentRecoveryJobs: recoveryCandidate?.jobs
@@ -1600,6 +1663,7 @@ public struct PostMeetingPipeline: Sendable {
     recoveryCandidate: PostMeetingRecoveryCandidate? = nil,
     submittedAt: Date = Date()
   ) async throws -> [BatchTranscriptSegment] {
+    guard let batchTranscriber else { throw PostMeetingPipelineError.transcriptionNotConfigured }
     let deadline = Date().addingTimeInterval(
       max(1, configuration.maximumPollingDuration)
     )

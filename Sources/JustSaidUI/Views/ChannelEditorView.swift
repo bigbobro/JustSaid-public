@@ -118,7 +118,12 @@ public struct ChannelEditorView: View {
   }
 
   private var isLocalEngine: Bool {
-    descriptor?.requiresAPIKey == false
+    descriptor?.authentication == ProviderAuthentication.none
+  }
+
+  /// ChatGPT 计划用量渠道:地址固定、没有 API Key,模型目录来自账户。
+  private var isChatGPTAccount: Bool {
+    descriptor?.authentication == .chatGPTAccount
   }
 
   private var showsBaseURL: Bool {
@@ -137,6 +142,8 @@ public struct ChannelEditorView: View {
   /// 必须沿用已落盘渠道——Keychain 账户按它派生,换一个就等于读别人的钥匙。
   private var probeChannel: ProviderChannel {
     let persisted = persistedChannel
+    // ChatGPT 渠道的模型与档位来自账户目录(只在已落盘的渠道上),测试用落盘版本。
+    if isChatGPTAccount, let persisted { return persisted }
     return ProviderChannel(
       id: persisted?.id ?? "draft",
       name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名渠道" : name,
@@ -151,7 +158,8 @@ public struct ChannelEditorView: View {
   }
 
   private var testModel: String {
-    availableModels.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    (isChatGPTAccount ? probeChannel.availableModels : availableModels)
+      .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
       ?? descriptor?.defaultModel
       ?? ""
   }
@@ -183,6 +191,7 @@ public struct ChannelEditorView: View {
               }
             }
             .labelsHidden()
+            .runtimeAccessibilityIdentifier("settings.channel.editor.provider.control")
           }
           .runtimeAccessibilityIdentifier("settings.channel.editor.provider")
 
@@ -205,7 +214,7 @@ public struct ChannelEditorView: View {
 
           capabilitySection
 
-          if supportsLLM {
+          if supportsLLM && !isChatGPTAccount {
             modelListSection
           }
 
@@ -233,6 +242,7 @@ public struct ChannelEditorView: View {
         }
         .buttonStyle(.toolbarPillAccent)
         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .runtimeAccessibilityIdentifier("settings.channel.editor.save")
         if persistedChannel == nil {
           Text("创建后才能配置密钥、拉取模型与测试连接")
             .font(.system(size: Tokens.FontSize.secondary))
@@ -372,7 +382,18 @@ public struct ChannelEditorView: View {
 
   @ViewBuilder
   private var credentialSection: some View {
-    if isLocalEngine {
+    if isChatGPTAccount {
+      if let channel = persistedChannel,
+        channel.providerID == ChatGPTPlanContract.providerID,
+        let service = settingsStore.chatGPTPlan
+      {
+        ChatGPTAccountSection(channel: channel, settingsStore: settingsStore, service: service)
+      } else {
+        Text("先点下方「创建渠道」，再在这里用 ChatGPT 登录。")
+          .font(.system(size: Tokens.FontSize.ui))
+          .foregroundStyle(Tokens.Color.ink3)
+      }
+    } else if isLocalEngine {
       Label("本地引擎无需 API 密钥", systemImage: "lock.shield")
         .font(.system(size: Tokens.FontSize.ui))
         .foregroundStyle(Tokens.Color.ink3)
@@ -427,9 +448,23 @@ public struct ChannelEditorView: View {
     Binding(
       get: { providerID },
       set: { newID in
+        if let persisted = persistedChannel,
+          (persisted.providerID == ChatGPTPlanContract.providerID)
+            != (newID == ChatGPTPlanContract.providerID)
+        {
+          saveError =
+            ProviderChannelError.authenticationTypeChangeRequiresNewChannel.localizedDescription
+          return
+        }
+        saveError = nil
         let previous = registry.providers.first { $0.id == providerID }
         providerID = newID
         let descriptor = registry.providers.first { $0.id == newID }
+        if descriptor?.authentication == .chatGPTAccount,
+          name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+          name = "ChatGPT"
+        }
         // 换供应商 = 换一套协议默认值;但 Base URL 与模型列表只在用户没动过
         // (为空或仍是上一个预设的默认)时才替换,手填值一律保留——在下拉里
         // 碰一下别的供应商不该把中转站配置静默重置成官方默认。
@@ -479,7 +514,8 @@ public struct ChannelEditorView: View {
         updated.baseURL = baseURL
         updated.appID = appID
         updated.supportedRoles = supportedRoles
-        updated.availableModels = availableModels
+        // ChatGPT 渠道的模型来自账户目录,编辑器不改它(草稿里可能是打开时的旧目录)。
+        updated.availableModels = isChatGPTAccount ? persisted.availableModels : availableModels
         try settingsStore.updateChannel(updated)
       } else {
         createdChannel = try settingsStore.createChannel(

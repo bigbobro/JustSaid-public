@@ -103,6 +103,11 @@ public struct CaptureHealthPolicy: Sendable {
   /// (actor suspension 不是主线程卡死),没有它这类失败在磁盘上零痕迹;
   /// 同一个看门狗也让「慢成功」留下对照样本。
   public var startupStuckThreshold: TimeInterval
+  /// 按 App 录制时读家族进程、检查扩集的间隔。要比 `sampleInterval` 密：新 helper 出声到 tap 带上它
+  /// 之间的这段声音是录不到的，间隔就是最坏的漏录时长。
+  public var scopeSampleInterval: TimeInterval
+  /// tap 里连续全零（而该 App 在输出）多久后提示改录全部系统声音，见 `SystemAudioScopePlanner`。
+  public var scopeSilentTapSeconds: TimeInterval
 
   public init(
     microphoneStartTimeout: TimeInterval = 20,
@@ -112,7 +117,9 @@ public struct CaptureHealthPolicy: Sendable {
     retryDelays: [TimeInterval] = [0, 15, 30],
     rebuildTimeout: TimeInterval = 20,
     recoveredNoticeDuration: TimeInterval = 15,
-    startupStuckThreshold: TimeInterval = 30
+    startupStuckThreshold: TimeInterval = 30,
+    scopeSampleInterval: TimeInterval = 1,
+    scopeSilentTapSeconds: TimeInterval = 30
   ) {
     self.microphoneStartTimeout = microphoneStartTimeout
     self.sampleInterval = sampleInterval
@@ -122,6 +129,8 @@ public struct CaptureHealthPolicy: Sendable {
     self.rebuildTimeout = rebuildTimeout
     self.recoveredNoticeDuration = recoveredNoticeDuration
     self.startupStuckThreshold = startupStuckThreshold
+    self.scopeSampleInterval = scopeSampleInterval
+    self.scopeSilentTapSeconds = scopeSilentTapSeconds
   }
 
   public var maximumAttempts: Int { retryDelays.count }
@@ -200,6 +209,10 @@ public final class RecordingSession: ObservableObject {
   /// 笔记时间戳全成 00:00,「标记」取到的又是 [0,0] 空窗口,一按必报「提炼失败」
   /// (2026-07-29 实测,连挂 7 次)。起点只能由这里发布,两条开录路径才不会分叉。
   @Published public private(set) var startedAt: Date?
+  /// 由会议检测提醒启动时被确认的会议 App（身份与通话开始时刻）；手动开始为 nil。
+  @Published public private(set) var sourceApp: MeetingCallInfo?
+  /// 系统声录制范围的会中提示（回退成全局、tap 里全零）。运行时状态，不入 meeting.json。
+  @Published public private(set) var systemAudioScopeNotice: SystemAudioScopeNotice?
   /// 单路失败的非模态横幅文案(08-05 事故:单路失败不再拖垮整场,不弹模态对话框)。
   /// 非 nil 即"部分完成":整场仍是 completed,会后流水线照常;文案含缺失起点与保住了什么。
   @Published public private(set) var partialCaptureNotice: String?
@@ -232,6 +245,7 @@ public final class RecordingSession: ObservableObject {
   }
   private let transcriberFactory: @Sendable (String) throws -> any TranscriberEngine
   private let healthPolicy: CaptureHealthPolicy
+  private let configuration: RecordingSessionConfiguration
   /// 启动失败证据的落点(诊断包整目录收集该目录,证据自动进包)。
   /// 验证一律注入临时目录,绝不写用户真目录。
   private let diagnosticsRoot: URL
@@ -244,11 +258,28 @@ public final class RecordingSession: ObservableObject {
 
   private var currentRecord: MeetingRecord?
   private var transcriberEngine: (any TranscriberEngine)?
+  private var liveEchoCancellationStage: LiveEchoCancellationStage?
+  private var finalLiveEchoCancellationStatistics: LiveEchoCancellationStatistics?
+  private var transcriptionDelivery: RecordingTranscriptionDelivery?
   private var transcriberResultsTask: Task<Error?, Never>?
   private var liveTranscriptWriter: LiveTranscriptWriter?
   private var transcriberASRAnchorGapFrames: [AudioSource: UInt64] = [:]
   private var transcriberLiveEmissionStats: [AudioSource: LiveEmissionStats] = [:]
   private var healthMonitorTask: Task<Void, Never>?
+  /// 按 App 录制的本场状态：范围记录（写进 meeting.json）、家族来源与规划器。nil = 本场尚未开录。
+  private struct SystemScopeState {
+    var record: SystemAudioScopeRecord
+    var appKey: String?
+    var source: (any AppFamilyProcessSource)?
+    var planner: SystemAudioScopePlanner?
+  }
+  private var systemScope: SystemScopeState?
+  private var scopeMonitorTask: Task<Void, Never>?
+  /// 每开一场加一：停止后不再等待的范围任务醒来时，据此认出自己属于上一场。
+  private var recordingGeneration: UInt64 = 0
+  /// 系统声路在飞重建的所有权凭证：健康看门狗与范围路径都会派重建，完成时只清自己登记的那一个。
+  private var legRebuildTokens: [CaptureLeg: UUID] = [:]
+  private let tapPeakProbe = SystemTapPeakProbe()
   private var legWatchStates: [CaptureLeg: LegWatchState] = [:]
   /// 在飞的物理重建,每路至多一个。`rebuildTimeout` 只解除**采样循环**的等待,
   /// 重建本身的所有权仍留在会话:同一路不再派第二个,`stop()` 也必须等它收敛后
@@ -298,6 +329,7 @@ public final class RecordingSession: ObservableObject {
       try TranscriberEngineFactory().make(providerID: $0)
     },
     healthPolicy: CaptureHealthPolicy = CaptureHealthPolicy(),
+    configuration: RecordingSessionConfiguration = RecordingSessionConfiguration(),
     completenessScan: @escaping @Sendable (MeetingPaths) -> Void = {
       CompletenessScanner().scan(paths: $0)
     },
@@ -313,6 +345,7 @@ public final class RecordingSession: ObservableObject {
     self.verificationMicrophoneWaiter = verificationMicrophoneWaiter
     self.transcriberFactory = transcriberFactory
     self.healthPolicy = healthPolicy
+    self.configuration = configuration
     self.completenessScan = completenessScan
     self.diagnosticsRoot = diagnosticsRoot
     microphoneInputPreference = self.microphoneInputSettings.load()
@@ -444,6 +477,7 @@ public final class RecordingSession: ObservableObject {
     guard sessionEpochHostTime == operation.epoch else { return }
     switch result {
     case .success(let binding):
+      liveEchoCancellationStage?.setBypassed(binding.route == .vpio)
       if binding.device.isSameEndpoint(as: operation.target.device) {
         confirmedMicrophoneBinding = binding
         microphoneRouteFailure = nil
@@ -471,7 +505,9 @@ public final class RecordingSession: ObservableObject {
     title: String = "会议",
     language: MeetingLanguage,
     providers: [RoleProviderBinding],
-    systemAudioProcessIDs: [pid_t]? = nil
+    systemAudioProcessIDs: [pid_t]? = nil,
+    sourceApp: MeetingCallInfo? = nil,
+    systemAudioFamily: (any AppFamilyProcessSource)? = nil
   ) async {
     guard phase == .idle || phase == .completed || phase == .failed else {
       return
@@ -517,6 +553,12 @@ public final class RecordingSession: ObservableObject {
     consumedMicrophoneRouteRevision = nil
     microphoneRouteFailure = nil
     phase = .starting
+    recordingGeneration &+= 1
+    // 会议检测提醒启动的记录带着被确认的会议 App；手动开始为 nil。只在内存里，P2 按它决定录哪些进程。
+    self.sourceApp = sourceApp
+    systemAudioScopeNotice = nil
+    systemScope = nil
+    _ = tapPeakProbe.drain()
     issue = nil
     partialCaptureNotice = nil
     currentRecord = nil
@@ -526,6 +568,8 @@ public final class RecordingSession: ObservableObject {
     startedAt = nil
     transcriberASRAnchorGapFrames = [:]
     transcriberLiveEmissionStats = [:]
+    transcriptionDelivery = nil
+    finalLiveEchoCancellationStatistics = nil
     microphoneLevel = 0
     isMicrophonePaused = false
     sessionEpochHostTime = nil
@@ -574,21 +618,65 @@ public final class RecordingSession: ObservableObject {
       logStartupStage("transcriber")
 
       let activeTranscriber = transcriberEngine
-      let systemAudioHandler = Self.makeTranscriptionHandler(
-        engine: activeTranscriber,
-        source: .others,
-        logger: logger
-      )
+      let delivery = RecordingTranscriptionDelivery()
+      transcriptionDelivery = delivery
       let baseMicrophoneHandler = Self.makeTranscriptionHandler(
         engine: activeTranscriber,
         source: .me,
-        logger: logger
+        logger: logger,
+        delivery: delivery
       )
+      let stage: LiveEchoCancellationStage?
+      if configuration.liveEchoCancellationEnabled, activeTranscriber?.usesCaptureTime == true,
+        let baseMicrophoneHandler
+      {
+        stage = LiveEchoCancellationStage(
+          output: baseMicrophoneHandler, makeCanceller: configuration.makeEchoCanceller)
+      } else {
+        stage = nil
+      }
+      liveEchoCancellationStage = stage
+      let baseSystemHandler = Self.makeTranscriptionHandler(
+        engine: activeTranscriber, source: .others, logger: logger, delivery: delivery)
+      let systemAudioHandler: AudioPCMBufferHandler?
+      if let baseSystemHandler {
+        systemAudioHandler = { buffer, captureTime in
+          stage?.pushReference(buffer, at: captureTime)
+          delivery.admit(buffer, source: .others)
+          baseSystemHandler(buffer, captureTime)
+        }
+      } else {
+        systemAudioHandler = nil
+      }
+      // 按 App 录制才需要 tap 峰值（零声提示）；全局录制不加这层计算。
+      // 包在完整的系统声回调外面，参考信号、送入计数与引擎喂入都保持不变。
+      let wantsScope =
+        sourceApp != nil && systemAudioFamily != nil && (systemAudioProcessIDs ?? []).isEmpty
+      let systemHandler: AudioPCMBufferHandler? =
+        wantsScope
+        ? { [probe = tapPeakProbe] buffer, captureTime in
+          probe.record(rms: Self.bufferRMS(buffer))
+          systemAudioHandler?(buffer, captureTime)
+        } : systemAudioHandler
       let silenceWatchdog = SilenceWatchdogBox()
       let levelThrottle = LevelPublishThrottleBox()
       let microphoneHandler: AudioPCMBufferHandler? = {
-        [weak self, logger] buffer, captureTime in
-        baseMicrophoneHandler?(buffer, captureTime)
+        [weak self, logger, weak microphoneCapture] buffer, captureTime in
+        if let baseMicrophoneHandler {
+          delivery.admit(buffer, source: .me)
+          if let stage {
+            // Published by the capture attempt before any confirmed frame. This
+            // also handles VPIO fallback and first frames before start/rebuild returns.
+            if let route = microphoneCapture?.activeCaptureRouteDescription {
+              stage.setBypassed(route == MicrophoneCaptureRoutePlanner.Route.vpio.rawValue)
+            }
+            // Teardown publishes nil before old accepted callbacks finish. Keep
+            // their confirmed route; nil does not mean AVCaptureSession fallback.
+            stage.pushMicrophone(buffer, at: captureTime)
+          } else {
+            baseMicrophoneHandler(buffer, captureTime)
+          }
+        }
         let seconds = Double(buffer.frameLength) / max(1, buffer.format.sampleRate)
         let rms = Self.bufferRMS(buffer)
         if levelThrottle.shouldPublish() {
@@ -643,12 +731,49 @@ public final class RecordingSession: ObservableObject {
         )
         logStartupStage("micStart")
         trace.begin(stage: "systemStart")
-        try await systemAudioCapture.start(
-          outputURL: record.paths.systemAudio,
-          sessionEpochHostTime: sessionEpochHostTime,
-          processIDs: systemAudioProcessIDs,
-          bufferHandler: systemAudioHandler
-        )
+        let startSystem: ([pid_t]?) async throws -> Void = { [systemAudioCapture] pids in
+          try await systemAudioCapture.start(
+            outputURL: record.paths.systemAudio,
+            sessionEpochHostTime: sessionEpochHostTime,
+            processIDs: pids,
+            bufferHandler: systemHandler
+          )
+        }
+        if wantsScope, let sourceApp, let systemAudioFamily {
+          var scope = SystemScopeState(
+            record: SystemAudioScopeRecord(
+              mode: .perApp, appName: sourceApp.app.displayName, bundleID: sourceApp.app.bundleID),
+            appKey: sourceApp.app.key, source: systemAudioFamily, planner: nil)
+          let family = systemAudioFamily.familyProcesses(appKey: sourceApp.app.key)
+          let pids = Set(family.map(\.pid)).sorted()
+          var fallback: SystemAudioScopeFallbackReason?
+          if pids.isEmpty {
+            fallback = .noProcesses
+          } else {
+            do {
+              try await startSystem(pids)
+              scope.planner = SystemAudioScopePlanner(
+                appliedPIDs: Set(pids), zeroOfferSeconds: healthPolicy.scopeSilentTapSeconds)
+            } catch {
+              // 第一原则是不丢对方的声音：按进程建 tap 失败就改录全部系统声音，不让整场开录失败。
+              logger.error(
+                "按 App 录制系统声失败，改为全局：\(error.localizedDescription, privacy: .public)")
+              fallback = .tapFailed
+            }
+          }
+          if let fallback {
+            try await startSystem(nil)
+            scope.record.mode = .global
+            scope.record.fallbackReason = fallback.rawValue
+            systemAudioScopeNotice = .fellBackToGlobal
+          }
+          systemScope = scope
+        } else {
+          try await startSystem(systemAudioProcessIDs)
+          systemScope = SystemScopeState(
+            record: SystemAudioScopeRecord(
+              mode: (systemAudioProcessIDs ?? []).isEmpty ? .global : .perApp))
+        }
         logStartupStage("systemStart")
       } catch {
         // 落盘顺序是承重的(design §1.1):进 catch 第一件事就是这次同步写盘,
@@ -666,8 +791,9 @@ public final class RecordingSession: ObservableObject {
 
         let surfacedError: Error
         if error is MicrophoneStartTimedOut {
-          // cancelPendingStart 已同步让旧世代失效；这里只等本地系统声路收尾，
-          // 不能再 await 可能仍卡在 startRunning 的麦克风 stop。
+          // 旧世代已同步失效;排空已接纳的本地处理,不等待可能仍卡在
+          // startRunning 的 HAL/captureQueue。之后 stage 才能安全 flush。
+          await microphoneCapture.drainCancelledStartAudio()
           await cleanUpCaptures(waitForMicrophone: false)
           // 2026-08-20 用户实测改判:这条文案原先**无条件**归因到蓝牙,并建议改用内置麦克风。
           // 两处都错:
@@ -695,7 +821,9 @@ public final class RecordingSession: ObservableObject {
       }
 
       phase = .recording
+      persistSystemAudioScope()
       startHealthMonitoring()
+      startScopeMonitoring()
       logStartupStage("total")
       // 快成功不落盘;看门狗已 flush 过(慢成功)则追加终态行留下对照样本。
       startupWatchdog.cancel()
@@ -827,6 +955,7 @@ public final class RecordingSession: ObservableObject {
     // Stop scheduling first, then let each leg drain only its own physical work.
     // A held mic rebuild must not prevent an otherwise safe system stop from starting.
     await stopHealthMonitoring()
+    systemAudioScopeNotice = nil
     async let microphoneStop = stopCaptureLeg(.microphone)
     async let systemAudioStop = stopCaptureLeg(.systemAudio)
     let (microphoneError, systemAudioError) = await (microphoneStop, systemAudioStop)
@@ -857,6 +986,7 @@ public final class RecordingSession: ObservableObject {
         finalStatus,
         endedAt: endedAt,
         captureLossStats: captureLossStats,
+        liveEchoCancellation: finalLiveEchoCancellationStatistics,
         captureLegFailures: legFailures.isEmpty ? nil : legFailures,
         captureInterruptions: captureInterruptions.isEmpty ? nil : captureInterruptions,
         for: record
@@ -1072,11 +1202,213 @@ public final class RecordingSession: ObservableObject {
   /// Cancel only the sampler's wait layer. Physical tasks retain their registrations
   /// until their own completion paths remove them; each stop branch awaits its own leg.
   private func stopHealthMonitoring() async {
+    // 范围任务只取消、不等：它可能正等着一个系统声物理重建，等它会把麦克风的 stop 挡在重建后面
+    // （架构契约：不能先 await 全部重建再派两路 stop）。物理重建登记在 `legRebuildTasks[.systemAudio]`，
+    // 由 `stopCaptureLeg(.systemAudio)` 等；任务醒来后按本场标识自行退出。
+    if let task = scopeMonitorTask {
+      scopeMonitorTask = nil
+      task.cancel()
+    }
     if let task = healthMonitorTask {
       healthMonitorTask = nil
       task.cancel()
       await task.value
     }
+  }
+
+  // MARK: - 按 App 录制系统声（P2）
+
+  private func persistSystemAudioScope() {
+    guard let record = currentRecord, let scope = systemScope else { return }
+    do {
+      _ = try store.recordSystemAudioScope(scope.record, at: record.paths)
+      // 不用读回的元数据替换内存里的记录：读回的 startedAt 被编码精度截到整秒，
+      // stop 用它换算「首次失败在会议第几秒」会偏差最多 1 秒。只同步这个字段。
+      var metadata = record.metadata
+      metadata.systemAudioScope = scope.record
+      currentRecord = MeetingRecord(paths: record.paths, metadata: metadata)
+    } catch {
+      logger.error("系统声录制范围写入 meeting.json 失败：\(error.localizedDescription, privacy: .public)")
+    }
+  }
+
+  private func appendScopeDiagnostic(_ outcome: String, category: String? = nil) {
+    DiagnosticEventLedger.shared.append(
+      event: "audioScope.\(outcome)", source: "RecordingSession",
+      fields: DiagnosticEventFields(
+        family: "audio", operation: "systemAudioScope", role: CaptureLeg.systemAudio.rawValue,
+        purpose: "recording", origin: "meetingPrompt",
+        meetingHash: currentRecord.map {
+          MeetingDiagnosticsPackageExporter.meetingHash(for: $0.metadata.id)
+        },
+        outcome: outcome, category: category))
+  }
+
+  private func startScopeMonitoring() {
+    scopeMonitorTask?.cancel()
+    guard let scope = systemScope, scope.record.mode == .perApp, scope.planner != nil else {
+      return
+    }
+    let interval = healthPolicy.scopeSampleInterval
+    let generation = recordingGeneration
+    scopeMonitorTask = Task { [weak self] in
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        } catch {
+          return
+        }
+        guard let self else { return }
+        guard await self.scopeSampleOnce(generation: generation) else { return }
+      }
+    }
+  }
+
+  /// 读一次家族进程，按规划器决定扩集或提示。返回 false 表示不必再采样。
+  /// 物理重建走 `legRebuildTasks[.systemAudio]`：与路级健康看门狗的重建互斥，
+  /// 系统声的重建直接读写 tap/聚合设备句柄，两个重叠会互相销毁对方刚建好的资源。
+  private func scopeSampleOnce(generation: UInt64) async -> Bool {
+    guard isCurrentScopeRun(generation), let scope = systemScope, scope.record.mode == .perApp,
+      let source = scope.source, let key = scope.appKey
+    else { return false }
+    guard legRebuildTasks[.systemAudio] == nil else { return true }
+    // 读进程对象是同步 Core Audio 调用，不占主线程。
+    let family = await Task.detached { source.familyProcesses(appKey: key) }.value
+    guard isCurrentScopeRun(generation), var state = systemScope, state.record.mode == .perApp,
+      var planner = state.planner
+    else { return false }
+    guard legRebuildTasks[.systemAudio] == nil else { return true }
+
+    let decision = planner.evaluate(family: family, tapPeak: tapPeakProbe.drain(), at: Date())
+    state.planner = planner
+    systemScope = state
+    switch decision {
+    case .none:
+      return true
+    case .offerGlobal:
+      let name = state.record.appName ?? key
+      systemAudioScopeNotice = .silentTap(appName: name)
+      logger.error("按 App 录制：\(name, privacy: .public) 在输出，但 tap 连续为数字零，提示改录全局")
+      appendScopeDiagnostic("silentTap")
+      return true
+    case .expand(let pids):
+      guard
+        let expanded = await applySystemAudioPIDs(
+          pids, generation: generation, requiresPerApp: true),
+        isCurrentScopeRun(generation)
+      else { return false }
+      if expanded {
+        state = systemScope ?? state
+        state.planner?.didApply(pids: pids)
+        state.record.pidSetChanges += 1
+        systemScope = state
+        persistSystemAudioScope()
+        appendScopeDiagnostic("expanded")
+        return true
+      }
+      // 扩集失败：不重试按进程，直接改录全部系统声音，保证不漏对方的声音。
+      appendScopeDiagnostic("expandFailed")
+      _ = await recoverToGlobal(reason: .expandFailed, generation: generation)
+      return false
+    }
+  }
+
+  /// 范围任务每次从 await 醒来都要过这一关：还在录制，且仍是启动它的那一场。
+  private func isCurrentScopeRun(_ generation: UInt64) -> Bool {
+    !Task.isCancelled && phase == .recording && generation == recordingGeneration
+  }
+
+  private func markFellBackToGlobal(reason: SystemAudioScopeFallbackReason) {
+    guard var state = systemScope else { return }
+    state.record.mode = .global
+    state.record.fallbackReason = reason.rawValue
+    state.planner = nil
+    systemScope = state
+    systemAudioScopeNotice = reason == .userSwitched ? nil : .fellBackToGlobal
+    persistSystemAudioScope()
+  }
+
+  /// 用户在零声提示上选「改录全部系统声音」。重建失败会有界重试，仍失败就提示（不静默）。
+  public func switchSystemAudioToGlobal() async {
+    guard phase == .recording, systemScope?.record.mode == .perApp else { return }
+    let generation = recordingGeneration
+    if await recoverToGlobal(reason: .userSwitched, generation: generation) {
+      appendScopeDiagnostic("userSwitched")
+    }
+  }
+
+  /// 改录全局。失败时有界重试（最多 3 次，间隔一个范围采样周期）；仍失败则记为 global + `globalRebuildFailed`，
+  /// 提示「没录上」，后续恢复交给路级健康看门狗（全局重建失败不回滚配置，它会按全局重建）。
+  /// 返回是否成功；被新一场或停止打断时返回 false 且不改任何状态。
+  private func recoverToGlobal(
+    reason: SystemAudioScopeFallbackReason, generation: UInt64
+  ) async -> Bool {
+    let attemptLimit = 3
+    for attempt in 1...attemptLimit {
+      guard
+        let succeeded = await applySystemAudioPIDs(
+          nil, generation: generation, requiresPerApp: false)
+      else { return false }
+      if succeeded {
+        markFellBackToGlobal(reason: reason)
+        return true
+      }
+      appendScopeDiagnostic("globalRebuildFailed", category: "attempt\(attempt)")
+      if attempt < attemptLimit {
+        try? await Task.sleep(nanoseconds: UInt64(healthPolicy.scopeSampleInterval * 1_000_000_000))
+        guard phase == .recording, generation == recordingGeneration else { return false }
+      }
+    }
+    guard phase == .recording, generation == recordingGeneration, var state = systemScope else {
+      return false
+    }
+    state.record.mode = .global
+    state.record.fallbackReason = SystemAudioScopeFallbackReason.globalRebuildFailed.rawValue
+    state.planner = nil
+    systemScope = state
+    systemAudioScopeNotice = .rebuildFailed(appName: state.record.appName ?? state.appKey ?? "")
+    persistSystemAudioScope()
+    logger.error("系统声改录全局连续 \(attemptLimit, privacy: .public) 次重建失败，交给路级健康看门狗恢复")
+    return false
+  }
+
+  /// 一次重建的结果，Task 与调用方各自持有，不用会话级共享标志。
+  @MainActor
+  private final class RebuildResult {
+    var succeeded = false
+  }
+
+  /// 带新 pid 集合重建系统声 tap，严格与系统声路上别的重建串行：
+  /// 先等在飞的（健康看门狗或上一次范围重建）结束，醒来后重查本场标识与范围，再登记自己。
+  /// 登记带凭证，完成时只清自己的。返回 nil = 被放弃（不再录制、换了一场、或要求按 App 但范围已改）。
+  private func applySystemAudioPIDs(
+    _ pids: [pid_t]?, generation: UInt64, requiresPerApp: Bool
+  ) async -> Bool? {
+    while let pending = legRebuildTasks[.systemAudio] { await pending.value }
+    guard phase == .recording, generation == recordingGeneration else { return nil }
+    if requiresPerApp, systemScope?.record.mode != .perApp { return nil }
+    let capture = systemAudioCapture
+    let result = RebuildResult()
+    let token = UUID()
+    let task = Task { @MainActor [weak self] in
+      do {
+        try await capture.rebuild(processIDs: pids)
+        result.succeeded = true
+      } catch {
+        self?.logger.error("系统声按新范围重建失败：\(error.localizedDescription, privacy: .public)")
+      }
+      self?.releaseRebuildRegistration(.systemAudio, token: token)
+    }
+    legRebuildTasks[.systemAudio] = task
+    legRebuildTokens[.systemAudio] = token
+    await task.value
+    return result.succeeded
+  }
+
+  private func releaseRebuildRegistration(_ leg: CaptureLeg, token: UUID) {
+    guard legRebuildTokens[leg] == token else { return }
+    legRebuildTasks[leg] = nil
+    legRebuildTokens[leg] = nil
   }
 
   /// A nonthrowing result keeps both structured branches owned even when one leg fails.
@@ -1370,9 +1702,6 @@ public final class RecordingSession: ObservableObject {
         for: leg,
         timeout: healthPolicy.rebuildTimeout
       )
-      if leg == .systemAudio, case .completed = rebuildOutcome {
-        clearRebuildRegistration(for: leg)
-      }
       switch rebuildOutcome {
       case .completed(.success):
         appendCaptureDiagnostic(
@@ -1558,6 +1887,7 @@ public final class RecordingSession: ObservableObject {
     } else {
       operation = nil
     }
+    let token = UUID()
     let rebuildTask = Task { @MainActor [weak self] in
       let outcome: CaptureRebuildOutcome
       do {
@@ -1572,11 +1902,12 @@ public final class RecordingSession: ObservableObject {
         if let operation { self?.finishMicrophoneOperation(operation, result: .failure(error)) }
         outcome = .completed(.failure(error))
       }
-      if leg == .systemAudio { self?.legRebuildTasks[leg] = nil }
+      if leg == .systemAudio { self?.releaseRebuildRegistration(leg, token: token) }
       signal.yield(outcome)
       signal.finish()
     }
     legRebuildTasks[leg] = rebuildTask
+    if leg == .systemAudio { legRebuildTokens[leg] = token }
     defer {
       // 超时路径故意**不**取消 rebuildTask:见方法注释。这里只收口信号流。
       signal.finish()
@@ -1607,13 +1938,6 @@ public final class RecordingSession: ObservableObject {
     }
     if leg == .microphone { await verificationMicrophoneWaiter?() }
     return outcome
-  }
-
-  /// 摘掉本次重建的登记。`.completed` 说明物理重建已经返回(信号正是在 `rebuild()`
-  /// 返回后才 yield 的),此刻同步摘除,下一轮采样不必等任务尾巴那次调度跳点;
-  /// 超时/取消时不摘,登记留给任务自己在真正结束时清。
-  private func clearRebuildRegistration(for leg: CaptureLeg) {
-    legRebuildTasks[leg] = nil
   }
 
   private func appendCaptureDiagnostic(
@@ -1858,11 +2182,23 @@ public final class RecordingSession: ObservableObject {
     }
   }
 
-  /// 当前引擎该路已送入音频的末端,与观察的 `decodedRange` 同一时钟;作为重新开启检测的屏障。
-  /// 没有引擎、引擎不支持观察或尚未送入音频时为 nil。
+  /// 该路已接纳音频的末端,与观察的 `decodedRange` 同一时钟;作为重新开启检测的屏障。
+  /// 麦克风包含 stage 中尚未送入引擎的音频;没有观察型引擎或尚未接纳音频时为 nil。
   public func liveDecodeInputAudioEnd(for source: AudioSource) -> TimeInterval? {
-    (transcriberEngine as? any LiveDecodeObservationProviding)?.inputAudioEnd(for: source)
+    guard let engine = transcriberEngine as? any LiveDecodeObservationProviding else { return nil }
+    let fedEnd = engine.inputAudioEnd(for: source)
+    guard source == .me, let admittedEnd = liveEchoCancellationStage?.microphoneInputAudioEnd else {
+      return fedEnd
+    }
+    return max(fedEnd ?? admittedEnd, admittedEnd)
   }
+
+  public func liveEchoCancellationStatistics() async -> LiveEchoCancellationStatistics? {
+    if let stage = liveEchoCancellationStage { return await stage.statistics() }
+    return finalLiveEchoCancellationStatistics
+  }
+
+  @_spi(Verification) public var liveCaptureLossStats: MeetingCaptureLossStats { captureLossStats }
 
   /// 幻听过滤只看 isFinal、text 与 source;没有 segment 的观察按同一规则筛,不另立口径。
   private nonisolated static func screeningSegment(
@@ -1878,6 +2214,13 @@ public final class RecordingSession: ObservableObject {
   }
 
   private func stopTranscription() async -> Error? {
+    // Every capture cleanup/stop path converges here. Producers have drained before
+    // this barrier; keep the engine and result writer alive while held audio is fed.
+    if let stage = liveEchoCancellationStage {
+      await stage.flush()
+      finalLiveEchoCancellationStatistics = await stage.statistics()
+      liveEchoCancellationStage = nil
+    }
     let engine = transcriberEngine
     let resultsTask = transcriberResultsTask
     let writer = liveTranscriptWriter
@@ -2054,7 +2397,8 @@ public final class RecordingSession: ObservableObject {
   private static func makeTranscriptionHandler(
     engine: (any TranscriberEngine)?,
     source: AudioSource,
-    logger: Logger
+    logger: Logger,
+    delivery: RecordingTranscriptionDelivery
   ) -> AudioPCMBufferHandler? {
     guard let engine else {
       return nil
@@ -2062,7 +2406,9 @@ public final class RecordingSession: ObservableObject {
     return { buffer, captureTime in
       do {
         try engine.feed(buffer, source: source, at: captureTime)
+        delivery.fed(buffer, source: source)
       } catch {
+        delivery.rejected(buffer, source: source)
         logger.error(
           "\(source.rawValue, privacy: .public) 速记输入失败：\(error.localizedDescription, privacy: .public)"
         )
@@ -2076,6 +2422,7 @@ public final class RecordingSession: ObservableObject {
         .failed,
         endedAt: Date(),
         captureLossStats: captureLossStats,
+        liveEchoCancellation: finalLiveEchoCancellationStatistics,
         for: record
       )
     } catch {
@@ -2143,6 +2490,16 @@ public final class RecordingSession: ObservableObject {
   private var captureLossStats: MeetingCaptureLossStats {
     var microphone = microphoneCapture.captureLossStats
     var systemAudio = systemAudioCapture.captureLossStats
+    if let delivery = transcriptionDelivery {
+      let micDelivery = delivery.snapshot(.me)
+      let systemDelivery = delivery.snapshot(.others)
+      microphone.asrFedFrames = micDelivery.fed
+      microphone.asrPendingFrames = micDelivery.pending
+      microphone.asrRejectedFrames = micDelivery.rejected
+      systemAudio.asrFedFrames = systemDelivery.fed
+      systemAudio.asrPendingFrames = systemDelivery.pending
+      systemAudio.asrRejectedFrames = systemDelivery.rejected
+    }
     microphone.asrAnchorGapFrames = transcriberASRAnchorGapFrames[.me]
     systemAudio.asrAnchorGapFrames = transcriberASRAnchorGapFrames[.others]
     if let me = transcriberLiveEmissionStats[.me] {

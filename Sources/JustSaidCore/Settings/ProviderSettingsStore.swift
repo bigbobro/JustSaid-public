@@ -72,20 +72,27 @@ public enum ProviderChannelError: LocalizedError, Sendable {
   case emptyName
   case invalidBaseURL(String)
   case capabilityMismatch(channelName: String, role: ProviderRole)
-  /// 白名单拒绝。`roles` 是正在引用该模型的角色(updateChannel 的引用完整性路径非空,
-  /// 文案据此给出解锁出路);selectModel 路径没有引用方,传空。
-  case modelNotDeclared(channelName: String, model: String, roles: [ProviderRole])
-  /// 仍被角色选择引用的渠道不能直接删除;错误列出全部引用角色。
-  case channelInUse(channelName: String, roles: [ProviderRole])
+  /// 白名单拒绝。`slots` 是正在引用该模型的选择(updateChannel 的引用完整性路径非空,
+  /// 文案据此给出解锁出路;会中快/慢两路分开列出);selectModel 路径没有引用方,传空。
+  case modelNotDeclared(channelName: String, model: String, slots: [ProviderSelectionSlot])
+  /// 仍被选择引用的渠道不能直接删除;错误列出全部引用处(会中快/慢两路分开列出)。
+  case channelInUse(channelName: String, slots: [ProviderSelectionSlot])
   /// 渠道上下文探针(连接测试/模型拉取)的前置缺失;渠道可能尚未被任何角色引用,
   /// 不能借用角色语义的错误。
   case missingChannelBaseURL(channelName: String)
   case insecureChannelBaseURL(channelName: String)
   case missingChannelModel(channelName: String)
   case missingChannelSecret(channelName: String, slot: ProviderSecretSlot)
+  /// ChatGPT 认证所有者尚未确认本地授权已清除,不能移除管理入口。
+  case chatGPTSignedIn(channelName: String)
+  case authenticationTypeChangeRequiresNewChannel
 
   public var errorDescription: String? {
     switch self {
+    case .chatGPTSignedIn(let channelName):
+      return "渠道「\(channelName)」尚未确认 ChatGPT 授权已清除，请取消登录或完成退出后再删除"
+    case .authenticationTypeChangeRequiresNewChannel:
+      return "渠道的认证方式不能更改，请新建渠道"
     case .notFound(let channelID):
       return "渠道不存在(\(channelID))"
     case .emptyName:
@@ -94,15 +101,15 @@ public enum ProviderChannelError: LocalizedError, Sendable {
       return "渠道地址无效:\(baseURL)"
     case .capabilityMismatch(let channelName, let role):
       return "渠道「\(channelName)」不支持\(role.displayName)"
-    case .modelNotDeclared(let channelName, let model, let roles):
-      guard !roles.isEmpty else {
+    case .modelNotDeclared(let channelName, let model, let slots):
+      guard !slots.isEmpty else {
         return "渠道「\(channelName)」的模型列表不包含「\(model)」——清空渠道模型列表可自由填写"
       }
-      let usingRoles = roles.map(\.displayName).joined(separator: "、")
+      let usingRoles = slots.map(\.displayName).joined(separator: "、")
       return "渠道「\(channelName)」的模型列表不包含「\(model)」,\(usingRoles)正在使用它"
         + "——请先在角色卡换成列表内模型,或保留/补上「\(model)」,或清空列表转为自由填写"
-    case .channelInUse(let channelName, let roles):
-      let roleNames = roles.map(\.displayName).joined(separator: "、")
+    case .channelInUse(let channelName, let slots):
+      let roleNames = slots.map(\.displayName).joined(separator: "、")
       return "渠道「\(channelName)」仍被\(roleNames)使用,请先重新分配这些角色"
     case .missingChannelBaseURL(let channelName):
       return "渠道「\(channelName)」尚未填写 Base URL"
@@ -120,13 +127,36 @@ public enum ProviderChannelError: LocalizedError, Sendable {
 public final class ProviderSettingsStore: ObservableObject {
   public nonisolated static let applicationDefaultsSuiteName = "com.justsaid.app"
 
-  @Published public private(set) var configuration: ProviderConfiguration
+  @Published public private(set) var configuration: ProviderConfiguration {
+    didSet {
+      // 档位偏好变更不清记忆；渠道内容或任一选择(含慢路)的渠道/模型变化使旧请求的回写失效。
+      let oldModels = oldValue.selectionsBySlot.map {
+        ReasoningCacheKey(channelID: $0.selection.channelID, model: $0.selection.model)
+      }
+      let newModels = configuration.selectionsBySlot.map {
+        ReasoningCacheKey(channelID: $0.selection.channelID, model: $0.selection.model)
+      }
+      if oldValue.channels != configuration.channels || oldModels != newModels {
+        reasoningFallbackGeneration = UUID()
+        reasoningFallbackKnowledge.removeAll()
+      }
+    }
+  }
+  private struct ReasoningCacheKey: Hashable {
+    let channelID: String
+    let model: String
+  }
+  @Published private var reasoningFallbackKnowledge:
+    [ReasoningCacheKey: ReasoningFallbackKnowledge] = [:]
+  private var reasoningFallbackGeneration = UUID()
   @Published public private(set) var storageHealthMessage: String?
   @Published public private(set) var storageHealthFailureMessage: String?
   /// 新旧格式都无法解码时的可诊断错误;旧数据保留未动,不为 nil 时界面上必须能看到。
   @Published public private(set) var migrationFailureMessage: String?
 
   public let registry: ProviderRegistry
+  /// ChatGPT 计划用量账户的所有者(App 注入;未注入时 ChatGPT 渠道一律按未登录处理)。
+  public var chatGPTPlan: ChatGPTPlanService?
 
   private let defaults: UserDefaults
   private let secretStore: any ProviderSecretStore
@@ -320,13 +350,29 @@ public final class ProviderSettingsStore: ObservableObject {
   /// 是角色层面的偏好，不随供应商重置。
   ///
   /// 保留的是用户**原样选定**的档位，不是能力协商后的结果——存降级后的值会让
-  /// 「自定义 → deepseek → 自定义」把用户原本选的最高档悄悄毁掉。
+  /// 「自定义 → qwen → 自定义」把用户原本选的最高档悄悄毁掉。
   public func selectProvider(id: String, for role: ProviderRole) {
+    selectProvider(id: id, in: ProviderSelectionSlot(role: role))
+  }
+
+  public func selectProvider(id: String, for lane: LLMLane) {
+    selectProvider(id: id, in: ProviderSelectionSlot(lane: lane))
+  }
+
+  private func selectProvider(id: String, in slot: ProviderSelectionSlot) {
+    let role = slot.role
     guard let descriptor = registry.provider(id: id, for: role) else {
       return
     }
     allowPersist = true
-    let previous = binding(for: role)
+    // 档位偏好取本处选择原样存的值;慢路跟随快路时取到的就是快路的值。
+    let previous: (effort: ReasoningEffortLevel?, thinking: Bool)
+    if slot == .slowSummary, let current = currentSelection(slot) {
+      previous = (current.reasoningEffort, current.thinkingEnabled)
+    } else {
+      let binding = binding(for: role)
+      previous = (binding.reasoningEffort, binding.thinkingEnabled)
+    }
     let channel = findOrCreateChannel(
       providerID: descriptor.id,
       baseURL: descriptor.defaultBaseURL,
@@ -336,22 +382,22 @@ public final class ProviderSettingsStore: ObservableObject {
       model: descriptor.defaultModel
     )
     var selection =
-      configuration.selection(for: role)
+      currentSelection(slot)
       ?? RoleChannelSelection(
         role: role,
         channelID: channel.id,
         model: descriptor.defaultModel,
-        reasoningEffort: previous.reasoningEffort,
-        thinkingEnabled: previous.thinkingEnabled
+        reasoningEffort: previous.effort,
+        thinkingEnabled: previous.thinking
       )
     selection.channelID = channel.id
     selection.model = descriptor.defaultModel
-    selection.reasoningEffort = previous.reasoningEffort
-    selection.thinkingEnabled = previous.thinkingEnabled
+    selection.reasoningEffort = previous.effort
+    selection.thinkingEnabled = previous.thinking
     if role == .liveTranscriber {
       selection.automaticLanguageRouting = false
     }
-    upsert(selection)
+    storeSelection(selection, in: slot)
     persist()
     if role == .batchASR {
       scheduleStorageHealthCheck()
@@ -364,24 +410,116 @@ public final class ProviderSettingsStore: ObservableObject {
     _ level: ReasoningEffortLevel,
     for role: ProviderRole
   ) {
+    updateReasoningEffort(level, in: ProviderSelectionSlot(role: role))
+  }
+
+  public func updateReasoningEffort(_ level: ReasoningEffortLevel, for lane: LLMLane) {
+    updateReasoningEffort(level, in: ProviderSelectionSlot(lane: lane))
+  }
+
+  private func updateReasoningEffort(_ level: ReasoningEffortLevel, in slot: ProviderSelectionSlot)
+  {
     allowPersist = true
-    var selection = configuration.selection(for: role) ?? defaultSelection(for: role)
+    var selection = currentSelection(slot) ?? defaultSelection(for: slot.role)
     selection.reasoningEffort = level
     selection.thinkingEnabled = level != .off
-    upsert(selection)
+    storeSelection(selection, in: slot)
     persist()
   }
 
   /// 这一次真正会发出去的档位（用户选择 → 供应商能力协商后的结果）。
   /// 供设置页显示与运行时构造客户端共用；**不回写配置**。
   public func effectiveReasoningEffort(for role: ProviderRole) -> ReasoningEffortLevel {
-    reasoningResolution(for: role).level
+    reasoningResolution(in: ProviderSelectionSlot(role: role)).level
+  }
+
+  public func effectiveReasoningEffort(for lane: LLMLane) -> ReasoningEffortLevel {
+    reasoningResolution(in: ProviderSelectionSlot(lane: lane)).level
+  }
+
+  /// 只提示运行时识别造成的落差，不改用户选择，也不把待尝试档称作已成功。
+  public func reasoningFallbackNotice(for role: ProviderRole) -> String? {
+    reasoningFallbackNotice(in: ProviderSelectionSlot(role: role))
+  }
+
+  public func reasoningFallbackNotice(for lane: LLMLane) -> String? {
+    reasoningFallbackNotice(in: ProviderSelectionSlot(lane: lane))
+  }
+
+  private func reasoningFallbackNotice(in slot: ProviderSelectionSlot) -> String? {
+    guard let selection = currentSelection(slot),
+      configuration.channel(id: selection.channelID)?.providerID == "custom-openai-compatible",
+      let knowledge = reasoningFallbackKnowledge[
+        ReasoningCacheKey(
+          channelID: selection.channelID,
+          model: selection.model.trimmingCharacters(in: .whitespacesAndNewlines))]
+    else { return nil }
+    let requested = reasoningResolution(in: slot).level
+    guard let next = knowledge.resolve(requested) else {
+      // 关思考的写法都试过、但曾有写法拿到 200：调用仍成功，只是关不掉思考。
+      // 不能提示「请检查配置」，改配置会清空已识别的结果。
+      if requested == .off, knowledge.ignoredOffStyle != nil {
+        return "该模型无法关闭思考，按服务端默认档位执行。"
+      }
+      return "该模型已拒绝可用推理档位，请检查渠道与模型配置。"
+    }
+    if next.level != requested {
+      let execution =
+        knowledge.confirmedLevels[requested]?.contains(next.level) == true ? "已按" : "下次按"
+      if requested == .off {
+        return "该模型无法通过已有写法关闭思考，\(execution)\(next.level.displayName)执行。"
+      }
+      return "不支持\(requested.displayName)，\(execution)\(next.level.displayName)执行。"
+    }
+    if requested == .off, knowledge.observedIgnoredOff,
+      !knowledge.confirmedOffStyles.contains(next.offStyle)
+    {
+      return "关闭思考的写法未生效，已保留本次结果，下次尝试其它写法。"
+    }
+    return nil
+  }
+
+  private func reasoningFallbackContext(channelID: String, model: String)
+    -> ReasoningFallbackContext
+  {
+    let key = ReasoningCacheKey(channelID: channelID, model: model)
+    let generation = reasoningFallbackGeneration
+    return ReasoningFallbackContext(
+      read: { @MainActor [weak self] in
+        guard let self, self.reasoningFallbackGeneration == generation else {
+          return ReasoningFallbackKnowledge()
+        }
+        return self.reasoningFallbackKnowledge[key] ?? ReasoningFallbackKnowledge()
+      },
+      merge: { @MainActor [weak self] update in
+        guard let self, self.reasoningFallbackGeneration == generation else { return update }
+        var knowledge = self.reasoningFallbackKnowledge[key] ?? ReasoningFallbackKnowledge()
+        knowledge.formUnion(update)
+        if self.reasoningFallbackKnowledge[key] != knowledge {
+          self.reasoningFallbackKnowledge[key] = knowledge
+        }
+        return knowledge
+      }
+    )
   }
 
   public func supportedReasoningLevels(for role: ProviderRole) -> [ReasoningEffortLevel] {
-    if let selection = configuration.selection(for: role),
+    supportedReasoningLevels(in: ProviderSelectionSlot(role: role))
+  }
+
+  public func supportedReasoningLevels(for lane: LLMLane) -> [ReasoningEffortLevel] {
+    supportedReasoningLevels(in: ProviderSelectionSlot(lane: lane))
+  }
+
+  private func supportedReasoningLevels(in slot: ProviderSelectionSlot) -> [ReasoningEffortLevel] {
+    let role = slot.role
+    if let selection = currentSelection(slot),
       let channel = configuration.channel(id: selection.channelID)
     {
+      // ChatGPT 账户渠道:档位按模型来自账户目录;未知就是空,不并入「关」。
+      if channel.providerID == ChatGPTPlanContract.providerID {
+        return channel.modelReasoningLevels?[selection.model] ?? []
+      }
       // 渠道自己的声明优先;没有声明跟随 ProviderDescriptor。
       if let levels = channel.supportedReasoningLevels {
         return levels.union([.off]).sorted()
@@ -399,14 +537,19 @@ public final class ProviderSettingsStore: ObservableObject {
   }
 
   private func reasoningResolution(
-    for role: ProviderRole
+    in slot: ProviderSelectionSlot
   ) -> ReasoningEffortPolicy.Resolution {
+    let role = slot.role
     let requested: ReasoningEffortLevel
     let supported: Set<ReasoningEffortLevel>
     let providerID: String
-    if let selection = configuration.selection(for: role) {
+    if let selection = currentSelection(slot) {
       requested = selection.effectiveReasoningEffort
       let channel = configuration.channel(id: selection.channelID)
+      // ChatGPT 账户渠道不就近降级:不支持的档位由 selectionIssue 提示、发出前拒绝。
+      if channel?.providerID == ChatGPTPlanContract.providerID {
+        return ReasoningEffortPolicy.Resolution(level: requested, downgradeNotice: nil)
+      }
       providerID = channel?.providerID ?? ""
       supported =
         channel?.supportedReasoningLevels
@@ -488,11 +631,14 @@ public final class ProviderSettingsStore: ObservableObject {
     }) {
       targetChannelID = reusable.id
     } else if let current = currentChannel,
-      !configuration.roleSelections.contains(where: {
-        $0.channelID == current.id && $0.role != binding.role
+      (current.providerID == ChatGPTPlanContract.providerID)
+        == (binding.providerID == ChatGPTPlanContract.providerID),
+      !configuration.selectionsBySlot.contains(where: {
+        $0.selection.channelID == current.id && $0.slot != ProviderSelectionSlot(role: binding.role)
       })
     {
-      // 只被本角色引用:就地改连接信息,渠道 ID 不变。
+      // 只被本处选择引用:就地改连接信息,渠道 ID 不变。会中总结的旧入口代表快路,
+      // 慢路(含跟随快路的隐式慢路)也算另一处引用——就地改会让慢路的地址悄悄跟着变。
       var updated = current
       updated.providerID = binding.providerID
       updated.baseURL = binding.baseURL
@@ -502,7 +648,8 @@ public final class ProviderSettingsStore: ObservableObject {
       }
       targetChannelID = current.id
     } else {
-      // 渠道被其他角色共享,或选择悬空:为本次改动新建渠道,其他角色不动。
+      // 认证类型改变、渠道被其他角色共享或选择悬空时另用 ID;
+      // 原 ChatGPT 渠道必须留下,让用户仍能退出或重试清理。
       targetChannelID =
         findOrCreateChannel(
           providerID: binding.providerID,
@@ -597,7 +744,12 @@ public final class ProviderSettingsStore: ObservableObject {
     )
   }
 
+  /// `roleSelections` 的唯一写入口。写会中总结(快路)前先物化慢路:只改快路时,
+  /// 尚未单独保存过的慢路必须保留改动前的值,不能隐式跟着变。
   private func upsert(_ selection: RoleChannelSelection) {
+    if selection.role == .liveSummaryLLM {
+      materializeSlowSummaryIfNeeded()
+    }
     if let index = configuration.roleSelections.firstIndex(where: {
       $0.role == selection.role
     }) {
@@ -605,6 +757,29 @@ public final class ProviderSettingsStore: ObservableObject {
     } else {
       configuration.roleSelections.append(selection)
     }
+  }
+
+  /// 首次显式改动会中任一路时,把当前有效值物化成两份。纯读取路径不调用它。
+  private func materializeSlowSummaryIfNeeded() {
+    guard configuration.slowSummarySelection == nil,
+      let fast = configuration.selection(for: .liveSummaryLLM)
+    else { return }
+    configuration.slowSummarySelection = fast
+  }
+
+  private func currentSelection(_ slot: ProviderSelectionSlot) -> RoleChannelSelection? {
+    slot.lane.map { configuration.selection(for: $0) } ?? configuration.selection(for: slot.role)
+  }
+
+  /// 按处写回选择:慢路写独立键,其余写 `roleSelections`(经 `upsert` 物化慢路)。
+  private func storeSelection(_ selection: RoleChannelSelection, in slot: ProviderSelectionSlot) {
+    guard slot == .slowSummary else {
+      upsert(selection)
+      return
+    }
+    var slow = selection
+    slow.role = .liveSummaryLLM
+    configuration.slowSummarySelection = slow
   }
 
   // MARK: - 渠道 CRUD 与角色选择(新信息架构的核心 API)
@@ -625,7 +800,11 @@ public final class ProviderSettingsStore: ObservableObject {
     guard !trimmedName.isEmpty else {
       throw ProviderChannelError.emptyName
     }
-    let trimmedURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    // ChatGPT 账户渠道的地址固定,不接受用户填写(令牌只发往契约端点)。
+    let trimmedURL =
+      providerID == ChatGPTPlanContract.providerID
+      ? ChatGPTPlanContract.apiBaseURL.absoluteString
+      : baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmedURL.isEmpty {
       guard let url = URL(string: trimmedURL), url.scheme != nil, url.host != nil else {
         throw ProviderChannelError.invalidBaseURL(baseURL)
@@ -648,27 +827,39 @@ public final class ProviderSettingsStore: ObservableObject {
     return channel
   }
 
-  /// 编辑渠道:ID 不可变;不得把仍引用它的角色移出能力集(引用完整性)。
+  /// 编辑渠道:ID 及其 ChatGPT / 非 ChatGPT 认证类型不可变;
+  /// 不得把仍引用它的角色移出能力集(引用完整性)。
   public func updateChannel(_ channel: ProviderChannel) throws {
     allowPersist = true
     guard let index = configuration.channels.firstIndex(where: { $0.id == channel.id }) else {
       throw ProviderChannelError.notFound(channelID: channel.id)
     }
+    guard
+      (configuration.channels[index].providerID == ChatGPTPlanContract.providerID)
+        == (channel.providerID == ChatGPTPlanContract.providerID)
+    else {
+      throw ProviderChannelError.authenticationTypeChangeRequiresNewChannel
+    }
     let trimmedName = channel.name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedName.isEmpty else {
       throw ProviderChannelError.emptyName
     }
-    let trimmedURL = channel.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedURL =
+      channel.providerID == ChatGPTPlanContract.providerID
+      ? ChatGPTPlanContract.apiBaseURL.absoluteString
+      : channel.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmedURL.isEmpty {
       guard let url = URL(string: trimmedURL), url.scheme != nil, url.host != nil else {
         throw ProviderChannelError.invalidBaseURL(channel.baseURL)
       }
     }
-    for selection in configuration.roleSelections where selection.channelID == channel.id {
-      guard channel.supportedRoles.contains(selection.role) else {
+    // 引用方一律经 selectionsBySlot 枚举:慢路(含跟随快路的隐式慢路)不能漏查。
+    for (slot, selection) in configuration.selectionsBySlot
+    where selection.channelID == channel.id {
+      guard channel.supportedRoles.contains(slot.role) else {
         throw ProviderChannelError.capabilityMismatch(
           channelName: trimmedName,
-          role: selection.role
+          role: slot.role
         )
       }
       // 引用完整性延伸到模型:非空模型列表必须仍包含引用角色正在用的模型
@@ -683,13 +874,16 @@ public final class ProviderSettingsStore: ObservableObject {
         // 收集与匹配同一口径(大小写折叠):既然白名单匹配不分大小写,大小写变体
         // 引用同一被删模型的角色也一样被挡,漏列会让用户少解锁一张角色卡。
         let foldedModel = selection.model.lowercased()
-        let referencingRoles = configuration.roleSelections
-          .filter { $0.channelID == channel.id && $0.model.lowercased() == foldedModel }
-          .map(\.role)
+        let referencingSlots = configuration.selectionsBySlot
+          .filter {
+            $0.selection.channelID == channel.id
+              && $0.selection.model.lowercased() == foldedModel
+          }
+          .map(\.slot)
         throw ProviderChannelError.modelNotDeclared(
           channelName: trimmedName,
           model: selection.model,
-          roles: referencingRoles
+          slots: referencingSlots
         )
       }
     }
@@ -701,27 +895,42 @@ public final class ProviderSettingsStore: ObservableObject {
   }
 
   /// 删除渠道:仍被任一角色选择引用的渠道不能删(错误列出全部引用角色)。
-  /// 历史会议只存快照不反向引用,删除渠道不改变历史文件;Keychain 账户
-  /// (含旧账户)一律保留不删,旧版本回滚后仍能读到凭证。
-  public func deleteChannel(id: String) throws {
+  /// 历史会议只存快照不反向引用;API Key 账户保留以支持旧版本回滚。
+  /// ChatGPT 渠道必须由认证所有者确认清盘,删除期间不得开始新授权。
+  public func deleteChannel(id: String) async throws {
     allowPersist = true
     guard let channel = configuration.channel(id: id) else {
       throw ProviderChannelError.notFound(channelID: id)
     }
-    let referencingRoles = channelReferences(id: id)
-    guard referencingRoles.isEmpty else {
-      throw ProviderChannelError.channelInUse(
-        channelName: channel.name,
-        roles: referencingRoles
-      )
+    func checkReferences() throws {
+      guard configuration.channel(id: id) != nil else {
+        throw ProviderChannelError.notFound(channelID: id)
+      }
+      let referencingSlots = channelReferences(id: id)
+      guard referencingSlots.isEmpty else {
+        throw ProviderChannelError.channelInUse(channelName: channel.name, slots: referencingSlots)
+      }
     }
-    configuration.channels.removeAll { $0.id == id }
-    persist()
+    try checkReferences()
+    func removeConfiguration() throws {
+      // 认证检查跨 actor 返回后,用户可能已经把某一路切到此渠道。
+      try checkReferences()
+      configuration.channels.removeAll { $0.id == id }
+      persist()
+    }
+    if channel.providerID == ChatGPTPlanContract.providerID {
+      guard let chatGPTPlan,
+        try await chatGPTPlan.removeAccountIfSignedOut(
+          account: id, performRemoval: removeConfiguration)
+      else { throw ProviderChannelError.chatGPTSignedIn(channelName: channel.name) }
+    } else {
+      try removeConfiguration()
+    }
   }
 
-  /// 哪些角色正在选择这个渠道。
-  public func channelReferences(id: String) -> [ProviderRole] {
-    configuration.roleSelections.filter { $0.channelID == id }.map(\.role)
+  /// 哪些选择正在引用这个渠道(会中快/慢两路分开列出;慢路跟随快路时两处都算)。
+  public func channelReferences(id: String) -> [ProviderSelectionSlot] {
+    configuration.selectionsBySlot.filter { $0.selection.channelID == id }.map(\.slot)
   }
 
   public func channelsSupporting(role: ProviderRole) -> [ProviderChannel] {
@@ -732,10 +941,24 @@ public final class ProviderSettingsStore: ObservableObject {
     configuration.selection(for: role)
   }
 
+  /// 按用途读取当前有效选择;慢路未单独保存时跟随快路。纯读取,不回写。
+  public func selection(for lane: LLMLane) -> RoleChannelSelection? {
+    configuration.selection(for: lane)
+  }
+
   /// 角色选择渠道:能力不匹配直接报错,绝不静默换成默认渠道。
-  /// 模型不在渠道声明内(大小写不敏感)时落到声明的第一个模型;仅大小写不同时
-  /// 纠正为列表声明的那条(空列表 = 不约束,保持当前值)。
+  /// ChatGPT 的旧模型不在目录时保持未选,等待用户明确选择;API 渠道保留首项回退。
+  /// 仅大小写不同时纠正为声明值;API 渠道空列表不约束当前值。
   public func selectChannel(channelID: String, for role: ProviderRole) throws {
+    try selectChannel(channelID: channelID, in: ProviderSelectionSlot(role: role))
+  }
+
+  public func selectChannel(channelID: String, for lane: LLMLane) throws {
+    try selectChannel(channelID: channelID, in: ProviderSelectionSlot(lane: lane))
+  }
+
+  private func selectChannel(channelID: String, in slot: ProviderSelectionSlot) throws {
+    let role = slot.role
     allowPersist = true
     guard let channel = configuration.channel(id: channelID) else {
       throw ProviderChannelError.notFound(channelID: channelID)
@@ -744,10 +967,13 @@ public final class ProviderSettingsStore: ObservableObject {
       throw ProviderChannelError.capabilityMismatch(channelName: channel.name, role: role)
     }
     var selection =
-      configuration.selection(for: role)
+      currentSelection(slot)
       ?? RoleChannelSelection(role: role, channelID: channelID, model: "")
     selection.channelID = channelID
-    if !channel.availableModels.isEmpty {
+    if channel.providerID == ChatGPTPlanContract.providerID {
+      selection.model =
+        Self.declaredModel(matching: selection.model, in: channel.availableModels) ?? ""
+    } else if !channel.availableModels.isEmpty {
       selection.model =
         Self.declaredModel(matching: selection.model, in: channel.availableModels)
         ?? channel.availableModels[0]
@@ -757,15 +983,24 @@ public final class ProviderSettingsStore: ObservableObject {
     if role == .liveTranscriber {
       selection.automaticLanguageRouting = false
     }
-    upsert(selection)
+    storeSelection(selection, in: slot)
     persist()
   }
 
   /// 角色选择模型:渠道声明了模型列表时,不支持的组合不能选(匹配大小写不敏感,
   /// 仅大小写不同时落盘值取列表声明的那条——渠道声明的才是它承诺可发的)。
   public func selectModel(_ model: String, for role: ProviderRole) throws {
+    try selectModel(model, in: ProviderSelectionSlot(role: role))
+  }
+
+  public func selectModel(_ model: String, for lane: LLMLane) throws {
+    try selectModel(model, in: ProviderSelectionSlot(lane: lane))
+  }
+
+  private func selectModel(_ model: String, in slot: ProviderSelectionSlot) throws {
+    let role = slot.role
     allowPersist = true
-    guard let selection = configuration.selection(for: role) else {
+    guard let selection = currentSelection(slot) else {
       throw ProviderRuntimeConfigurationError.missingRoleSelection(role)
     }
     guard let channel = configuration.channel(id: selection.channelID) else {
@@ -782,14 +1017,14 @@ public final class ProviderSettingsStore: ObservableObject {
         throw ProviderChannelError.modelNotDeclared(
           channelName: channel.name,
           model: model,
-          roles: []
+          slots: []
         )
       }
       resolved = declared
     }
     var updated = selection
     updated.model = resolved
-    upsert(updated)
+    storeSelection(updated, in: slot)
     persist()
   }
 
@@ -927,13 +1162,27 @@ public final class ProviderSettingsStore: ObservableObject {
 
   /// 渠道上下文的 LLM 客户端:连接测试与模型拉取不经过角色选择——
   /// 渠道可能还没被任何角色引用(新建中),也必须能测、能拉。
-  /// 探针是「答不答话」级别的问候,固定发 `.off` 档,不为测试白烧推理预算。
+  /// 探针是「答不答话」级别的问候，请求 `.off`；自定义渠道仍按响应识别关闭写法。
   public func makeLLMClient(
     forChannel channel: ProviderChannel,
     model: String,
     transport: any HTTPTransport = URLSessionHTTPTransport()
   ) throws -> any LLMClient {
     let name = channel.name
+    if channel.providerID == ChatGPTPlanContract.providerID {
+      // 渠道测试同样是一次真实推理(用户主动触发、计入用量),按该模型支持的最低档发。
+      let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmedModel.isEmpty else {
+        throw ProviderChannelError.missingChannelModel(channelName: name)
+      }
+      return try makeChatGPTClient(
+        channel: channel,
+        selection: RoleChannelSelection(
+          role: .minutesLLM, channelID: channel.id, model: trimmedModel),
+        slot: .minutes, transport: transport, reasoningOverride: .off,
+        usesPostMeetingTimeouts: true, diagnosticPurpose: "connectionProbe",
+        diagnosticOrigin: "channel")
+    }
     let baseURLText = channel.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !baseURLText.isEmpty else {
       throw ProviderChannelError.missingChannelBaseURL(channelName: name)
@@ -959,7 +1208,7 @@ public final class ProviderSettingsStore: ObservableObject {
     else {
       throw ProviderChannelError.missingChannelSecret(channelName: name, slot: .apiKey)
     }
-    return OpenAICompatibleLLMClient(
+    var client = OpenAICompatibleLLMClient(
       configuration: LLMClientConfiguration(
         providerID: channel.providerID,
         baseURL: baseURL,
@@ -977,6 +1226,13 @@ public final class ProviderSettingsStore: ObservableObject {
       // 不设首帧超时:探针的总时长本来就被外层墙钟卡死,再加一层只会多一种失败说法。
       idleTimeout: 30
     )
+    if channel.providerID == "custom-openai-compatible",
+      configuration.channel(id: channel.id) == channel
+    {
+      client.reasoningFallback = reasoningFallbackContext(
+        channelID: channel.id, model: trimmedModel)
+    }
+    return client
   }
 
   /// 旧 API(绑定坐标)写入的落点:存储槽位永远落独立存储配置;
@@ -1059,7 +1315,14 @@ public final class ProviderSettingsStore: ObservableObject {
   private func resolveChannel(
     for role: ProviderRole
   ) throws -> (channel: ProviderChannel, selection: RoleChannelSelection) {
-    guard let selection = configuration.selection(for: role) else {
+    try resolveChannel(in: ProviderSelectionSlot(role: role))
+  }
+
+  private func resolveChannel(
+    in slot: ProviderSelectionSlot
+  ) throws -> (channel: ProviderChannel, selection: RoleChannelSelection) {
+    let role = slot.role
+    guard let selection = currentSelection(slot) else {
       throw ProviderRuntimeConfigurationError.missingRoleSelection(role)
     }
     guard let channel = configuration.channel(id: selection.channelID) else {
@@ -1077,12 +1340,101 @@ public final class ProviderSettingsStore: ObservableObject {
     return (channel, selection)
   }
 
+  /// 本路当前选择在发起调用前就能确定的失效原因(渠道已删、渠道不再支持该角色、
+  /// 未选模型),供设置页提示;不读凭证、不联网。没有问题返回 nil。
+  public func selectionIssue(for lane: LLMLane) -> String? {
+    guard let selection = configuration.selection(for: lane) else {
+      return "\(lane.displayName)还没有选择渠道，请选择渠道。"
+    }
+    guard let channel = configuration.channel(id: selection.channelID) else {
+      return "\(lane.displayName)原先选择的渠道已删除，本路调用会失败；请重新选择渠道。"
+    }
+    guard channel.supportedRoles.contains(lane.role) else {
+      return "渠道「\(channel.name)」已不支持\(lane.role.displayName)，本路调用会失败；请更换渠道。"
+    }
+    guard !selection.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return "\(lane.displayName)还没有填写模型。"
+    }
+    if channel.providerID == ChatGPTPlanContract.providerID {
+      return chatGPTSelectionIssue(channel: channel, selection: selection)
+    }
+    return nil
+  }
+
+  /// ChatGPT 账户渠道在发出前就能确定的问题:账户状态、模型是否在目录、档位是否受支持。
+  private func chatGPTSelectionIssue(channel: ProviderChannel, selection: RoleChannelSelection)
+    -> String?
+  {
+    if let state = chatGPTPlan?.snapshots[channel.id]?.state {
+      switch state {
+      case .ready: break
+      case .signedOut: return ChatGPTPlanUnavailable.notSignedIn.errorDescription
+      case .signedInWithoutPlan: return ChatGPTPlanUnavailable.planUsageNotGranted.errorDescription
+      case .reauthRequired: return ChatGPTPlanUnavailable.reauthorizationRequired.errorDescription
+      case .cleanupPending: return "本机 ChatGPT 授权尚未清除，请在渠道管理里重试退出。"
+      }
+    }
+    do {
+      _ = try chatGPTReasoningLevel(channel: channel, selection: selection, override: nil)
+      return nil
+    } catch {
+      return error.localizedDescription
+    }
+  }
+
+  /// 本次请求要发的档位。模型须在账户目录内且档位已确认受支持;`override` 非 nil 时
+  /// (连接测试、认名)取该模型支持的最低档——有 none 就是关。
+  private func chatGPTReasoningLevel(
+    channel: ProviderChannel, selection: RoleChannelSelection, override: ReasoningEffortLevel?
+  ) throws -> ReasoningEffortLevel {
+    let model = selection.model.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard channel.availableModels.contains(model) else {
+      throw ChatGPTPlanUnavailable.modelNotInCatalog(model: model)
+    }
+    guard let levels = channel.modelReasoningLevels?[model], let lowest = levels.min() else {
+      throw ChatGPTPlanUnavailable.reasoningCapabilityUnknown(model: model)
+    }
+    if override != nil { return lowest }
+    let requested = selection.effectiveReasoningEffort
+    guard levels.contains(requested) else {
+      throw ChatGPTPlanUnavailable.reasoningLevelUnsupported(model: model, level: requested)
+    }
+    return requested
+  }
+
+  /// 这一路当前是否选的 ChatGPT 计划用量渠道(界面据此调整计费措辞)。
+  public func usesChatGPTPlan(for lane: LLMLane) -> Bool {
+    configuration.selection(for: lane)
+      .flatMap { configuration.channel(id: $0.channelID) }?.providerID
+      == ChatGPTPlanContract.providerID
+  }
+
+  /// 写回当前账户的模型目录(slug、显示名、模型级档位)。不经 updateChannel 的引用校验:
+  /// 目录变化导致某路选择失效时,由 selectionIssue 提示,不替用户改选择。
+  public func applyChatGPTCatalog(_ catalog: ChatGPTModelCatalog, channelID: String) throws {
+    allowPersist = true
+    guard let index = configuration.channels.firstIndex(where: { $0.id == channelID }),
+      configuration.channels[index].providerID == ChatGPTPlanContract.providerID
+    else { throw ProviderChannelError.notFound(channelID: channelID) }
+    var channel = configuration.channels[index]
+    channel.availableModels = catalog.entries.map(\.slug)
+    channel.modelDisplayNames = Dictionary(
+      uniqueKeysWithValues: catalog.entries.map { ($0.slug, $0.displayName) })
+    channel.modelReasoningLevels = Dictionary(
+      uniqueKeysWithValues: catalog.entries.compactMap { entry in
+        entry.reasoningLevels.map { (entry.slug, $0) }
+      })
+    configuration.channels[index] = channel
+    persist()
+  }
+
+  /// 旧入口:会中总结代表快路。
   public func makeLLMClient(
     for role: ProviderRole,
     transport: any HTTPTransport = URLSessionHTTPTransport()
   ) throws -> any LLMClient {
     try makeLLMClient(
-      for: role,
+      in: ProviderSelectionSlot(role: role),
       transport: transport,
       reasoningOverride: nil,
       diagnosticPurpose: role.rawValue,
@@ -1090,8 +1442,23 @@ public final class ProviderSettingsStore: ObservableObject {
     )
   }
 
+  /// 按用途构造生产客户端。配置快照带 lane,调用开始后改设置不重标本次调用。
+  public func makeLLMClient(
+    for lane: LLMLane,
+    transport: any HTTPTransport = URLSessionHTTPTransport()
+  ) throws -> any LLMClient {
+    try makeLLMClient(
+      in: ProviderSelectionSlot(lane: lane),
+      transport: transport,
+      reasoningOverride: nil,
+      diagnosticPurpose: lane.role.rawValue,
+      diagnosticOrigin: "production"
+    )
+  }
+
   /// 「测试连接」探针用(08-13 D3):与正式链路同一渠道/模型/密钥解析——测的就是
-  /// 该角色此刻真正生效的配置——唯一区别是推理档固定「关闭」。探针测连通性不测质量,
+  /// 该角色此刻真正生效的配置。API Key 渠道请求「关闭」，ChatGPT 使用该模型最低支持档。
+  /// 探针测连通性不测质量,
   /// 高档思考在外层 30 秒硬超时下只会制造假超时;与渠道上下文探针
   /// (`makeLLMClient(forChannel:model:)` 固定 `.off`)同一口径。
   public func makeConnectionTestLLMClient(
@@ -1099,7 +1466,7 @@ public final class ProviderSettingsStore: ObservableObject {
     transport: any HTTPTransport = URLSessionHTTPTransport()
   ) throws -> any LLMClient {
     try makeLLMClient(
-      for: role,
+      in: ProviderSelectionSlot(role: role),
       transport: transport,
       reasoningOverride: .off,
       diagnosticPurpose: "connectionProbe",
@@ -1107,15 +1474,28 @@ public final class ProviderSettingsStore: ObservableObject {
     )
   }
 
-  /// 认名前置提取(08-20 naming-first)专用客户端:复用**会中总结**的渠道/模型/密钥
+  public func makeConnectionTestLLMClient(
+    for lane: LLMLane,
+    transport: any HTTPTransport = URLSessionHTTPTransport()
+  ) throws -> any LLMClient {
+    try makeLLMClient(
+      in: ProviderSelectionSlot(lane: lane),
+      transport: transport,
+      reasoningOverride: .off,
+      diagnosticPurpose: "connectionProbe",
+      diagnosticOrigin: "connectionProbe"
+    )
+  }
+
+  /// 认名前置提取(08-20 naming-first)专用客户端:复用**会中快总结**的渠道/模型/密钥
   /// (flash 档,不动纪要大模型),但超时口径按会后语义放宽——提取输入是整场转写,
   /// prefill 远长于会中总结,45 秒首帧会制造假超时;会后无节奏可赶,宁可等。
-  /// 推理档固定「关」:提取是抽取不是推理,thinking 只烧钱(与连接探针同口径)。
+  /// API Key 渠道请求「关」；ChatGPT 使用模型最低支持档，与连接探针同口径。
   public func makeSpeakerNamingLLMClient(
     transport: any HTTPTransport = URLSessionHTTPTransport()
   ) throws -> any LLMClient {
     try makeLLMClient(
-      for: .liveSummaryLLM,
+      in: .fastSummary,
       transport: transport,
       reasoningOverride: .off,
       usesPostMeetingTimeouts: true,
@@ -1125,17 +1505,24 @@ public final class ProviderSettingsStore: ObservableObject {
   }
 
   private func makeLLMClient(
-    for role: ProviderRole,
+    in slot: ProviderSelectionSlot,
     transport: any HTTPTransport,
     reasoningOverride: ReasoningEffortLevel?,
     usesPostMeetingTimeouts: Bool = false,
     diagnosticPurpose: String,
     diagnosticOrigin: String
   ) throws -> any LLMClient {
+    let role = slot.role
     guard role.isLLMRole else {
       throw ProviderRuntimeConfigurationError.unsupportedRole
     }
-    let (channel, selection) = try resolveChannel(for: role)
+    let (channel, selection) = try resolveChannel(in: slot)
+    if channel.providerID == ChatGPTPlanContract.providerID {
+      return try makeChatGPTClient(
+        channel: channel, selection: selection, slot: slot, transport: transport,
+        reasoningOverride: reasoningOverride, usesPostMeetingTimeouts: usesPostMeetingTimeouts,
+        diagnosticPurpose: diagnosticPurpose, diagnosticOrigin: diagnosticOrigin)
+    }
     let baseURLText = channel.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !baseURLText.isEmpty else {
       throw ProviderRuntimeConfigurationError.missingBaseURL(role)
@@ -1161,18 +1548,18 @@ public final class ProviderSettingsStore: ObservableObject {
         key: secretCandidates.joined(separator: " 或 ")
       )
     }
-    // 能力协商在配置层做完,客户端只收最终档位。降级是正常路径,绝不让请求失败。
+    // 声明能力协商在配置层做完；自定义渠道的响应识别与同次调用兜底由客户端处理。
     // 探针 override 跳过协商直接取「关闭」:每家能力集必含 .off
     // (BatchPipelineVerification 有正断言),不存在发不出去的组合。
-    let requestedLevel = reasoningOverride ?? requestedReasoning(for: role)
+    let requestedLevel = reasoningOverride ?? selection.effectiveReasoningEffort
     let resolution =
       reasoningOverride.map {
         ReasoningEffortPolicy.Resolution(level: $0, downgradeNotice: nil)
-      } ?? reasoningResolution(for: role)
+      } ?? reasoningResolution(in: slot)
     if let notice = resolution.downgradeNotice {
       logger.notice("\(notice, privacy: .public)")
     }
-    return OpenAICompatibleLLMClient(
+    var client = OpenAICompatibleLLMClient(
       configuration: LLMClientConfiguration(
         providerID: channel.providerID,
         baseURL: baseURL,
@@ -1183,7 +1570,8 @@ public final class ProviderSettingsStore: ObservableObject {
         diagnosticRole: role.rawValue,
         diagnosticPurpose: diagnosticPurpose,
         diagnosticOrigin: diagnosticOrigin,
-        recoveryChannelID: channel.id
+        recoveryChannelID: channel.id,
+        lane: slot.lane
       ),
       transport: transport,
       // 会后纪要走 SSE 流式,但 URLRequest.timeoutInterval 是**空闲**超时:推理档开着时,
@@ -1193,19 +1581,82 @@ public final class ProviderSettingsStore: ObservableObject {
       // 但按会后口径取超时——它的输入是整场转写,会中档超时对它就是假超时制造机。
       idleTimeout: role == .liveSummaryLLM && !usesPostMeetingTimeouts
         ? OpenAICompatibleLLMClient.liveSummaryIdleTimeout : 600,
-      // 首帧超时只给会中总结:它要跟上会议节奏,等不到首帧就该早点认输交给下一轮。
+      // 首帧超时只给会中总结(快、慢两路):它要跟上会议节奏,等不到首帧就该早点认输交给下一轮。
       // 会后纪要**必须保持 nil**——同上那次事故里首 token 就来在 300 秒之后,
       // 给它设首帧超时等于当场复刻。
       firstFrameTimeout: role == .liveSummaryLLM && !usesPostMeetingTimeouts
         ? OpenAICompatibleLLMClient.liveSummaryFirstFrameTimeout : nil
     )
+    if channel.providerID == "custom-openai-compatible" {
+      client.reasoningFallback = reasoningFallbackContext(channelID: channel.id, model: model)
+    }
+    return client
   }
 
-  private func requestedReasoning(for role: ProviderRole) -> ReasoningEffortLevel {
-    if let selection = configuration.selection(for: role) {
-      return selection.effectiveReasoningEffort
+  /// ChatGPT 计划用量客户端:身份在构造时冻结。账户状态问题(未登录、授权失效等)推迟到
+  /// 发出前由令牌来源报出,不让纪要渠道的登录状态拖垮整条会后管线(精转照常)。
+  private func makeChatGPTClient(
+    channel: ProviderChannel, selection: RoleChannelSelection, slot: ProviderSelectionSlot,
+    transport: any HTTPTransport, reasoningOverride: ReasoningEffortLevel?,
+    usesPostMeetingTimeouts: Bool, diagnosticPurpose: String, diagnosticOrigin: String
+  ) throws -> any LLMClient {
+    let role = slot.role
+    let model = selection.model.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !model.isEmpty else { throw ProviderRuntimeConfigurationError.missingModel(role) }
+    let onUsageLimit = chatGPTPlan?.usageLimitReporter(account: channel.id)
+    let identity: Result<ChatGPTCallIdentity, Error> =
+      chatGPTPlan.map { service in Result { try service.callIdentity(account: channel.id) } }
+      ?? .failure(ChatGPTPlanUnavailable.notSignedIn)
+    let level: ReasoningEffortLevel
+    let tokenSource: @Sendable () async throws -> String
+    switch identity {
+    case .success(let identity):
+      level = try chatGPTReasoningLevel(
+        channel: channel, selection: selection, override: reasoningOverride)
+      tokenSource = chatGPTPlan!.tokenSource(identity: identity)
+    case .failure(let error):
+      // 账户不可用是根因:不再拿(此时也取不到的)目录去校验模型,免得报成「模型不在目录」。
+      level = reasoningOverride ?? selection.effectiveReasoningEffort
+      tokenSource = { throw error }
     }
-    return binding(for: role).effectiveReasoningEffort
+    let live = role == .liveSummaryLLM && !usesPostMeetingTimeouts
+    return ChatGPTResponsesLLMClient(
+      configuration: LLMClientConfiguration(
+        providerID: ChatGPTPlanContract.providerID,
+        baseURL: ChatGPTPlanContract.apiBaseURL,
+        apiKey: "",
+        model: model,
+        reasoningEffort: level,
+        requestedReasoningEffort: reasoningOverride == nil
+          ? selection.effectiveReasoningEffort : level,
+        diagnosticRole: role.rawValue,
+        diagnosticPurpose: diagnosticPurpose,
+        diagnosticOrigin: diagnosticOrigin,
+        recoveryChannelID: channel.id,
+        lane: slot.lane,
+        billingSource: ChatGPTPlanContract.billingSource
+      ),
+      tokenSource: tokenSource,
+      onUsageLimit: onUsageLimit,
+      transport: transport,
+      idleTimeout: live ? OpenAICompatibleLLMClient.liveSummaryIdleTimeout : 600,
+      firstFrameTimeout: live ? OpenAICompatibleLLMClient.liveSummaryFirstFrameTimeout : nil
+    )
+  }
+
+  /// 已有权威转写的纯文本纪要入口；不要求配置 ASR、上传存储或认名渠道。
+  public func makeMinutesOnlyPipeline(
+    transport: any HTTPTransport = URLSessionHTTPTransport(),
+    meetingStore: MeetingStore = MeetingStore(),
+    configuration: PostMeetingPipelineConfiguration = PostMeetingPipelineConfiguration(),
+    dictionaryStore: DictionaryStore = DictionaryStore()
+  ) throws -> PostMeetingPipeline {
+    PostMeetingPipeline(
+      minutesClient: try makeLLMClient(for: LLMLane.minutes, transport: transport),
+      meetingStore: meetingStore,
+      configuration: configuration,
+      dictionaryStore: dictionaryStore
+    )
   }
 
   public func makeDefaultPostMeetingPipeline(
@@ -1556,10 +2007,10 @@ public final class ProviderSettingsStore: ObservableObject {
       storage: storage,
       batchTranscriber: batchTranscriber,
       minutesClient: try makeLLMClient(
-        for: .minutesLLM,
+        for: LLMLane.minutes,
         transport: transport
       ),
-      // 认名提取是可选增益:会中总结未配置/配置坏了 → nil,提取整步静默跳过,
+      // 认名提取是可选增益:会中快总结未配置/配置坏了 → nil,提取整步静默跳过,
       // 绝不让它拖垮精转+纪要主链路的管线构造。
       namingClient: try? makeSpeakerNamingLLMClient(transport: transport),
       meetingStore: meetingStore,

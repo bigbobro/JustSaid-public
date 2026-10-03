@@ -1,11 +1,14 @@
 import Foundation
 
 public enum SummaryMarkdownRenderer {
-  /// 各版留痕通常是当前全部话题的快照，但早期实产也有只写增量的版本。按落盘顺序合并，
-  /// 同标题用新版替换、新标题接在末尾，与会中慢通道的合并规则一致。
+  /// v2 最后一份留痕是完整快照，按 id 更新后的旧标题不得从旧版复活。
+  /// 旧会议保留按标题并集，以兼容早期只写增量的快照。
   public static func topics(
     fromHistorySnapshots snapshots: [MeetingSummarySnapshot]
   ) -> [SummaryTopic] {
+    if let last = snapshots.last, last.version == 2, let topics = last.structuredTopics {
+      return topics
+    }
     var merged: [SummaryTopic] = []
     for snapshot in snapshots {
       // 新留痕优先读取同名 JSON sidecar；旧会议没有 sidecar 时只恢复本渲染器曾经
@@ -565,7 +568,7 @@ struct SummaryHistorySidecar: Codable {
     topics: [SummaryTopic],
     actionItems: [SummaryActionItem]
   ) {
-    version = 1
+    version = 2
     self.coveredUntilLabel = coveredUntilLabel
     self.topics = topics
     self.actionItems = actionItems

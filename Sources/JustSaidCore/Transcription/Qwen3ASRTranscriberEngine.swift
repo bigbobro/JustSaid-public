@@ -67,6 +67,7 @@ public final class Qwen3ASRTranscriberEngine: TranscriberEngine,
   )
 
   public var results: AsyncStream<TranscriptSegment> { runtime.results }
+  public var usesCaptureTime: Bool { true }
 
   public var decodeObservations: AsyncStream<LiveDecodeObservation> {
     runtime.decodeObservations

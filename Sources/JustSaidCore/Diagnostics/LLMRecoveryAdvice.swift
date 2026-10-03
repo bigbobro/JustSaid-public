@@ -16,6 +16,8 @@ public struct LLMFailureContext: Hashable, Sendable {
   }
   public let feature: Feature
   public let role: ProviderRole?
+  /// 三路配置下失败所属的用途;nil 时按 role 的旧对应理解(会中总结 = 快路)。
+  public let lane: LLMLane?
   public let channelID: String?
   public let providerID: String?
   public let providerFingerprint: String?
@@ -25,12 +27,13 @@ public struct LLMFailureContext: Hashable, Sendable {
   public let occurredAt: Date?
 
   public init(
-    feature: Feature, role: ProviderRole? = nil, channelID: String? = nil,
+    feature: Feature, role: ProviderRole? = nil, lane: LLMLane? = nil, channelID: String? = nil,
     providerID: String? = nil, model: String? = nil, baseURL: String? = nil,
     occurredAt: Date? = Date()
   ) {
     self.feature = feature
-    self.role = role
+    self.role = role ?? lane?.role
+    self.lane = lane
     self.channelID = channelID
     self.providerID = providerID.map { DiagnosticSanitizer.token($0, fallback: "unknown") }
     self.providerFingerprint = providerID.map(Self.fingerprint)
@@ -43,6 +46,7 @@ public struct LLMFailureContext: Hashable, Sendable {
   public init(feature: Feature, configuration: LLMClientConfiguration, occurredAt: Date? = Date()) {
     self.init(
       feature: feature, role: configuration.diagnosticRole.flatMap(ProviderRole.init(rawValue:)),
+      lane: configuration.lane,
       channelID: configuration.recoveryChannelID, providerID: configuration.providerID,
       model: configuration.model, baseURL: configuration.baseURL.absoluteString,
       occurredAt: occurredAt)
@@ -51,6 +55,7 @@ public struct LLMFailureContext: Hashable, Sendable {
   private init(feature: Feature, copying context: Self) {
     self.feature = feature
     self.role = context.role
+    self.lane = context.lane
     self.channelID = context.channelID
     self.providerID = context.providerID
     self.providerFingerprint = context.providerFingerprint
@@ -61,6 +66,9 @@ public struct LLMFailureContext: Hashable, Sendable {
   }
 
   public func withFeature(_ feature: Feature) -> Self { Self(feature: feature, copying: self) }
+
+  /// 失败所属的用途:显式 lane 优先,否则按旧角色对应(会中总结 = 快路)。
+  public var effectiveLane: LLMLane? { lane ?? role.flatMap(LLMLane.init(role:)) }
 
   public static func fingerprint(_ value: String) -> String {
     String(
@@ -74,9 +82,15 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case missingKey, missingModel, configuration, authentication, permission, quota, concurrency,
       rateLimit
     case unsupported, unavailable, offline, connection, unknown, history
+    /// ChatGPT 计划用量(10-01):额度用尽;需要重新登录或开启计划用量授权。
+    case chatGPTUsageLimit, chatGPTSignIn
   }
   public enum Action: String, Sendable {
     case steps, editKey, editModel, editConfiguration, chooseChannel, exportDiagnostics
+    /// 打开 ChatGPT 用量设置(外部网页,不发请求)。
+    case manageChatGPTUsage
+    /// 打开该渠道的账户区,由用户重新登录。
+    case signInChatGPT
   }
   public let cause: Cause
   public let context: LLMFailureContext
@@ -90,6 +104,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
   }
   public var action: Action {
     switch cause {
+    case .chatGPTUsageLimit: return .manageChatGPTUsage
+    case .chatGPTSignIn: return .signInChatGPT
     case .missingKey: return .editKey
     case .missingModel: return .editModel
     case .configuration: return .editConfiguration
@@ -100,6 +116,9 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
   }
   public var message: String {
     switch cause {
+    case .chatGPTUsageLimit:
+      return "ChatGPT 计划用量已达上限，可能是整个计划或本应用的额度"
+    case .chatGPTSignIn: return "ChatGPT 授权不可用，需要重新登录或开启计划用量"
     case .missingKey: return "这个渠道还没有保存 API 密钥"
     case .missingModel: return "这次操作尚未选择模型，请填写或选择模型"
     case .configuration: return "渠道或模型配置不完整，请检查本次使用的配置"
@@ -118,6 +137,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
   }
   public var actionTitle: String {
     switch cause {
+    case .chatGPTUsageLimit: return "管理用量"
+    case .chatGPTSignIn: return "重新登录 ChatGPT"
     case .missingKey: return "填写密钥"
     case .missingModel: return "选择模型"
     case .configuration: return "检查配置"
@@ -133,9 +154,22 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
   }
   public var steps: [String] {
     switch cause {
+    case .chatGPTUsageLimit:
+      return [
+        "在 ChatGPT 设置 → 用量里查看计划与本应用的额度，必要时调整本应用的上限。",
+        "JustSaid 不会自动改用按量付费渠道；也可手动为这一路换一个渠道。",
+      ]
+    case .chatGPTSignIn:
+      return ["在渠道管理里打开这个 ChatGPT 渠道，重新登录并允许使用计划用量。", "退出或在 ChatGPT 设置里断开过授权时，都需要重新登录。"]
     case .authentication:
       return ["到获取密钥的渠道后台核对密钥归属和有效性。", "如需替换 App 中的密钥，打开本次出错的渠道配置。", "仍被拒绝时，复制渠道排查信息交给渠道服务商。"]
     case .permission:
+      if context.providerID == ChatGPTPlanContract.providerID {
+        return [
+          "检查当前 ChatGPT 账户、计划用量授权和应用注册配置。",
+          "保留渠道排查信息联系 JustSaid 开发者；仅凭这次响应不能确认授权已撤销。",
+        ]
+      }
       return ["到渠道后台核对模型权限与账号限制；有分组时再核对当前分组。", "仅凭这次响应不能确定是哪项权限；可复制渠道排查信息联系服务商。"]
     case .quota:
       return ["到渠道后台检查余额、项目或账号的额度设置。", "尚不能确定余额为零；以渠道后台提示为准。"]
@@ -146,6 +180,12 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case .offline:
       return ["检查本机网络是否已连接，再按原入口重试。", "若网络恢复后仍失败，可导出诊断包。"]
     case .missingKey, .missingModel, .configuration:
+      if context.providerID == ChatGPTPlanContract.providerID {
+        return [
+          "检查本次失败使用的 ChatGPT 渠道、模型和推理档位。",
+          "若提示应用注册配置无效，请保留渠道排查信息联系 JustSaid 开发者。",
+        ]
+      }
       return ["检查本次失败使用的渠道、模型和已保存密钥。", "配置修改需要明确保存，查看本提示不会发起请求。"]
     default:
       return ["直接导出诊断包，无需先测试渠道。", "请将诊断包发送给 JustSaid 开发者；应用不会自动上传。"]
@@ -202,6 +242,28 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
       case .missingChannelSecret: cause = .missingKey
       case .missingChannelModel: cause = .missingModel
       default: cause = .configuration
+      }
+    } else if let unavailable = error as? ChatGPTPlanUnavailable {
+      switch unavailable {
+      case .notSignedIn, .planUsageNotGranted, .reauthorizationRequired: cause = .chatGPTSignIn
+      case .usageLimitPaused: cause = .chatGPTUsageLimit
+      case .credentialsUnavailable, .accountChanged: cause = .unavailable
+      case .clientConfigurationInvalid, .modelNotInCatalog, .reasoningCapabilityUnknown,
+        .reasoningLevelUnsupported:
+        cause = .configuration
+      }
+    } else if let service = error as? ChatGPTPlanServiceError {
+      status = service.httpStatus
+      code = service.code
+      switch service.kind {
+      case .usageLimitExceeded: cause = .chatGPTUsageLimit
+      case .invalidUser, .notAuthorized: cause = .permission
+      case .usageUnavailable, .userUnavailable: cause = .unavailable
+      case .notEligible, .routeNotSupported: cause = .permission
+      case .unsupportedCapability: cause = .unsupported
+      case .admissionRejected:
+        cause = service.httpStatus == 503 ? .unavailable : .permission
+      case .responseFailed, .responseIncomplete, .refused, .other: cause = .unknown
       }
     } else if let url = error as? URLError {
       cause = url.code == .notConnectedToInternet ? .offline : .connection
@@ -263,6 +325,17 @@ extension ProviderSettingsStore {
     let channel = selection.flatMap { configuration.channel(id: $0.channelID) }
     return LLMFailureContext(
       feature: feature, role: role, channelID: selection?.channelID,
+      providerID: channel?.providerID, model: selection?.model, baseURL: channel?.baseURL)
+  }
+
+  /// 按用途读取失败上下文:慢路失败对照慢路选择,不拿快路的渠道/模型去比。
+  public func failureContext(feature: LLMFailureContext.Feature, lane: LLMLane)
+    -> LLMFailureContext
+  {
+    let selection = configuration.selection(for: lane)
+    let channel = selection.flatMap { configuration.channel(id: $0.channelID) }
+    return LLMFailureContext(
+      feature: feature, role: lane.role, lane: lane, channelID: selection?.channelID,
       providerID: channel?.providerID, model: selection?.model, baseURL: channel?.baseURL)
   }
 }

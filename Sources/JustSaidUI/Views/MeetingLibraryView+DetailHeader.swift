@@ -184,10 +184,10 @@ extension MeetingLibraryView {
       titleVisibility: .visible,
       presenting: model.pendingMinutesGeneration
     ) { target in
-      Button(MinutesGenerationScope.chineseOnly.actionTitle) {
+      Button(MinutesGenerationScope.chineseOnly.actionTitle(usesChatGPTPlan: minutesUsesChatGPTPlan)) {
         startMinutesGeneration(for: target, scope: .chineseOnly)
       }
-      Button(MinutesGenerationScope.bilingual.actionTitle) {
+      Button(MinutesGenerationScope.bilingual.actionTitle(usesChatGPTPlan: minutesUsesChatGPTPlan)) {
         startMinutesGeneration(for: target, scope: .bilingual)
       }
       Button("取消", role: .cancel) {}

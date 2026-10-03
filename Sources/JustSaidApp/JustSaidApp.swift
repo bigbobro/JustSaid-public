@@ -55,6 +55,16 @@ struct JustSaidApp: App {
     let providerSettings = ProviderSettingsStore(registry: registry)
     let meetingStore = MeetingStore()
     let transport = URLSessionHTTPTransport()
+    // ChatGPT 计划用量账户的唯一所有者:独立钥匙串项,登录走系统默认浏览器。
+    providerSettings.chatGPTPlan = ChatGPTPlanService(
+      store: KeychainChatGPTCredentialStore(),
+      defaults: .standard,
+      transport: transport,
+      openBrowser: { url in
+        let opened = await MainActor.run { NSWorkspace.shared.open(url) }
+        if !opened { throw ChatGPTAuthorizationError.browserUnavailable }
+      }
+    )
     let postMeetingPipelineResolver: LiveSummaryFeed.PostMeetingPipelineResolver = {
       try providerSettings.makeDefaultPostMeetingPipeline(
         transport: transport,
@@ -66,8 +76,14 @@ struct JustSaidApp: App {
     let postMeetingTasks = PostMeetingTaskCoordinator(
       meetingStore: meetingStore,
       pipelineResolver: postMeetingPipelineResolver,
+      minutesPipelineResolver: {
+        try providerSettings.makeMinutesOnlyPipeline(
+          transport: transport,
+          meetingStore: meetingStore
+        )
+      },
       failureContextResolver: {
-        providerSettings.failureContext(feature: .minutes, role: .minutesLLM)
+        providerSettings.failureContext(feature: .minutes, lane: .minutes)
       }
     )
     self.registry = registry
@@ -81,14 +97,12 @@ struct JustSaidApp: App {
     )
     _summaryFeed = StateObject(
       wrappedValue: LiveSummaryFeed(
-        clientResolver: {
-          try providerSettings.makeLLMClient(
-            for: .liveSummaryLLM,
-            transport: transport
-          )
+        // 快、慢两路每轮各自解析当时的选择;标记提炼由 feed 明确走快路。
+        laneClientResolver: { lane in
+          try providerSettings.makeLLMClient(for: lane, transport: transport)
         },
-        failureContextResolver: {
-          providerSettings.failureContext(feature: .liveSummary, role: .liveSummaryLLM)
+        laneFailureContextResolver: { lane in
+          providerSettings.failureContext(feature: .liveSummary, lane: lane)
         },
         postMeetingPipelineResolver: postMeetingPipelineResolver,
         meetingStore: meetingStore,
@@ -142,6 +156,16 @@ struct JustSaidApp: App {
           summaryFeed: summaryFeed,
           providerSettings: providerSettings
         )
+        // 会议检测提醒：只在真实 App 里安装（验证宿主不装，不读真实 Core Audio）。
+        appCoordinator.installMeetingDetection(
+          recordingSession: recordingSession,
+          providerSettings: providerSettings,
+          modelAssetManager: modelAssetManager
+        )
+        // ChatGPT 渠道的账户状态在钥匙串里;保管者 actor 上读取,不在主线程等待。
+        await providerSettings.chatGPTPlan?.loadSnapshots(
+          accounts: providerSettings.configuration.channels
+            .filter { $0.providerID == ChatGPTPlanContract.providerID }.map(\.id))
         await modelAssetManager.refresh()
         await providerSettings.refreshStorageHealthForStartup()
         startupStorageFailure = providerSettings.storageHealthFailureMessage

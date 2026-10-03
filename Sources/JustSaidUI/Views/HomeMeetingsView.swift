@@ -5,6 +5,7 @@ import SwiftUI
 struct HomeMeetingsView: View {
   @ObservedObject var model: MeetingLibraryModel
   @ObservedObject var coordinator: AppCoordinator
+  @Environment(\.minutesUsesChatGPTPlan) private var minutesUsesChatGPTPlan
   @State private var filter = HomeMeetingFilter.all
   @State private var renameTarget: MeetingLibraryItem?
   @State private var renamedTitle = ""
@@ -182,10 +183,10 @@ struct HomeMeetingsView: View {
         set: { if !$0 { model.pendingMinutesGeneration = nil } }),
       titleVisibility: .visible, presenting: model.pendingMinutesGeneration
     ) { item in
-      Button(MinutesGenerationScope.chineseOnly.actionTitle) {
+      Button(MinutesGenerationScope.chineseOnly.actionTitle(usesChatGPTPlan: minutesUsesChatGPTPlan)) {
         model.generateMinutes(for: item, scope: .chineseOnly)
       }
-      Button(MinutesGenerationScope.bilingual.actionTitle) {
+      Button(MinutesGenerationScope.bilingual.actionTitle(usesChatGPTPlan: minutesUsesChatGPTPlan)) {
         model.generateMinutes(for: item, scope: .bilingual)
       }
       Button("取消", role: .cancel) {}

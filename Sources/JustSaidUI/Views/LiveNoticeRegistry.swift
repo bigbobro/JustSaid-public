@@ -64,6 +64,7 @@ public struct LiveNoticeInputs: Equatable, Sendable {
   public var postMeetingStage: PostMeetingStage
   public var hasLanguageMismatch: Bool
   public var isShowingLowRecognition: Bool
+  public var systemScopeNotice: SystemAudioScopeNotice?
 
   public init(
     isRecording: Bool = false,
@@ -78,7 +79,8 @@ public struct LiveNoticeInputs: Equatable, Sendable {
     partialCaptureNotice: String? = nil,
     postMeetingStage: PostMeetingStage = .none,
     hasLanguageMismatch: Bool = false,
-    isShowingLowRecognition: Bool = false
+    isShowingLowRecognition: Bool = false,
+    systemScopeNotice: SystemAudioScopeNotice? = nil
   ) {
     self.isRecording = isRecording
     self.isFailed = isFailed
@@ -93,6 +95,7 @@ public struct LiveNoticeInputs: Equatable, Sendable {
     self.postMeetingStage = postMeetingStage
     self.hasLanguageMismatch = hasLanguageMismatch
     self.isShowingLowRecognition = isShowingLowRecognition
+    self.systemScopeNotice = systemScopeNotice
   }
 }
 
@@ -102,6 +105,7 @@ public enum LiveNoticeRegistry {
     "recording-failure", "engine-issue", "microphone-route", "leg-health",
     "chat-open", "microphone-paused", "exclusion-error", "partial-capture",
     "post-meeting", "language-mismatch", "low-recognition",
+    "system-scope-fallback", "system-scope-silent", "system-scope-failed",
   ]
 
   /// 当前成立的提示,已按「打断 → 警示 → 信息 → 中性」排好序。
@@ -170,6 +174,20 @@ public enum LiveNoticeRegistry {
     // 那要电平历史,是功能,不在本批。
     if inputs.isRecording, inputs.isShowingLowRecognition, !inputs.hasLanguageMismatch {
       result.append(.init(id: "low-recognition", level: .warn, rank: 6))
+    }
+
+    // 系统声录制范围（P2）：只在录制中。回退成全局没丢东西，信息级；tap 里全零是可能漏掉对方，
+    // 警示级，带一个「改录全部系统声音」按钮。
+    if inputs.isRecording, let notice = inputs.systemScopeNotice {
+      switch notice {
+      case .fellBackToGlobal:
+        result.append(.init(id: "system-scope-fallback", level: .info, rank: 0))
+      case .silentTap:
+        result.append(.init(id: "system-scope-silent", level: .warn, rank: 7))
+      case .rebuildFailed:
+        // 改录全局也失败：系统声音可能没在录，比「建议改录」更要紧，排在同级前面。
+        result.append(.init(id: "system-scope-failed", level: .warn, rank: 1))
+      }
     }
 
     return result.sorted {

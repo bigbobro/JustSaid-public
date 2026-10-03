@@ -64,6 +64,27 @@ enum SummaryFailurePolicy {
     if let urlError = error as? URLError {
       return urlError.code == .timedOut ? .timeout : .networkService
     }
+    // ChatGPT 计划用量:授权、额度与能力问题不提前重试(等用户处理);暂时性问题照常恢复。
+    if let unavailable = error as? ChatGPTPlanUnavailable {
+      switch unavailable {
+      case .credentialsUnavailable: return .networkService
+      case .accountChanged: return .unknown
+      default: return .configuration
+      }
+    }
+    if let service = error as? ChatGPTPlanServiceError {
+      switch service.kind {
+      case .usageUnavailable, .userUnavailable, .responseFailed, .other:
+        return .networkService
+      case .admissionRejected:
+        return service.httpStatus == 503 ? .networkService : .configuration
+      case .responseIncomplete, .refused:
+        return .invalidResponse
+      case .usageLimitExceeded, .notEligible, .unsupportedCapability, .routeNotSupported,
+        .invalidUser, .notAuthorized:
+        return .configuration
+      }
+    }
     return .unknown
   }
 

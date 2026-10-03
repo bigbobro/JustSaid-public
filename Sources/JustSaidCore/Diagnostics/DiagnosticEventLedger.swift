@@ -26,6 +26,7 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
   public var endpointFingerprint: String?
   public var requestedReasoning: String?
   public var effectiveReasoning: String?
+  public var reasoningOffStyle: String?
   public var wireReasoning: String?
   public var stream: Bool?
   public var expectsJSON: Bool?
@@ -41,6 +42,9 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
   public var outputSize: Int?
   public var inputTokens: Int?
   public var outputTokens: Int?
+  public var cacheHitTokens: Int?
+  public var cacheMissTokens: Int?
+  public var reasoningTokens: Int?
   public var latencyMs: Int?
   public var firstFrameMs: Int?
   public var responseBytes: Int?
@@ -62,6 +66,7 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
     requestedReasoning: String? = nil,
     effectiveReasoning: String? = nil,
     wireReasoning: String? = nil,
+    reasoningOffStyle: String? = nil,
     stream: Bool? = nil,
     expectsJSON: Bool? = nil,
     timeoutProfile: String? = nil,
@@ -76,6 +81,9 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
     outputSize: Int? = nil,
     inputTokens: Int? = nil,
     outputTokens: Int? = nil,
+    cacheHitTokens: Int? = nil,
+    cacheMissTokens: Int? = nil,
+    reasoningTokens: Int? = nil,
     latencyMs: Int? = nil,
     firstFrameMs: Int? = nil,
     responseBytes: Int? = nil,
@@ -97,6 +105,7 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
     self.requestedReasoning = requestedReasoning
     self.effectiveReasoning = effectiveReasoning
     self.wireReasoning = wireReasoning
+    self.reasoningOffStyle = reasoningOffStyle
     self.stream = stream
     self.expectsJSON = expectsJSON
     self.timeoutProfile = timeoutProfile
@@ -111,6 +120,9 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
     self.outputSize = outputSize
     self.inputTokens = inputTokens
     self.outputTokens = outputTokens
+    self.cacheHitTokens = cacheHitTokens
+    self.cacheMissTokens = cacheMissTokens
+    self.reasoningTokens = reasoningTokens
     self.latencyMs = latencyMs
     self.firstFrameMs = firstFrameMs
     self.responseBytes = responseBytes
@@ -688,6 +700,15 @@ public enum DiagnosticSanitizer {
       }
     }
     if error is CancellationError { return "cancelled" }
+    if error is ChatGPTPlanUnavailable { return "notSent" }
+    if let service = error as? ChatGPTPlanServiceError {
+      switch service.kind {
+      case .usageLimitExceeded: return "quota"
+      case .responseIncomplete: return "incomplete"
+      case .refused: return "refused"
+      default: return "provider"
+      }
+    }
     if (error as NSError).domain == NSURLErrorDomain { return "network" }
     return "unknown"
   }

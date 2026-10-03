@@ -6,7 +6,8 @@ import SwiftUI
 // MARK: - 角色卡(只做选择)
 
 /// 瘦身后的角色卡:渠道 + 模型 + 推理强度(LLM),不再出现 Base URL 与 API Key——
-/// 那些在渠道管理区统一维护。四个角色各自独立,互不同步。
+/// 那些在渠道管理区统一维护。各卡各自独立,互不同步。LLM 卡按 `LLMLane` 工作:
+/// 会中总结拆成快、慢两张卡(10-01 三路配置),旧的按角色构造等同快路。
 ///
 /// 公开是为了让 `UIHierarchyVerification` 能独立摆出卡片做反向断言
 /// (卡内不得出现地址/密钥输入)。
@@ -17,6 +18,9 @@ enum ChannelRoleCardConstants {
 
 public struct ChannelRoleCard<Extra: View>: View {
   private let role: ProviderRole
+  /// LLM 卡对应的用途;非 LLM 角色为 nil。读写选择、档位与连接测试一律按它走,
+  /// 慢路卡的改动不得落到共有的会中总结角色上。
+  private let lane: LLMLane?
   private let registry: ProviderRegistry
   @ObservedObject private var settingsStore: ProviderSettingsStore
   private let secretDigest: any StoredSecretDigest
@@ -32,6 +36,7 @@ public struct ChannelRoleCard<Extra: View>: View {
 
   public init(
     role: ProviderRole,
+    lane: LLMLane? = nil,
     registry: ProviderRegistry,
     settingsStore: ProviderSettingsStore,
     secretDigest: any StoredSecretDigest,
@@ -40,7 +45,8 @@ public struct ChannelRoleCard<Extra: View>: View {
     modelAssetManager: LocalModelAssetManager? = nil,
     @ViewBuilder extraRows: @escaping () -> Extra
   ) {
-    self.role = role
+    self.role = lane?.role ?? role
+    self.lane = lane ?? LLMLane(role: role)
     self.registry = registry
     self.settingsStore = settingsStore
     self.secretDigest = secretDigest
@@ -51,7 +57,20 @@ public struct ChannelRoleCard<Extra: View>: View {
   }
 
   private var selection: RoleChannelSelection? {
-    settingsStore.selection(for: role)
+    lane.map { settingsStore.selection(for: $0) } ?? settingsStore.selection(for: role)
+  }
+
+  /// 无障碍标识里的身份:快路沿用旧 `liveSummaryLLM`,慢路单独一个,其余照旧按角色。
+  private var identifierKey: String {
+    lane == .slowSummary ? "liveSummarySlowLLM" : role.rawValue
+  }
+
+  private var title: String {
+    lane?.displayName ?? role.displayName
+  }
+
+  private var selectionIssue: String? {
+    lane.flatMap { settingsStore.selectionIssue(for: $0) }
   }
 
   private var channel: ProviderChannel? {
@@ -101,6 +120,23 @@ public struct ChannelRoleCard<Extra: View>: View {
     role == .batchASR && descriptor?.asrVendorKind == .volcengine
   }
 
+  /// 选的是 ChatGPT 计划用量渠道:模型来自账户目录,用量不按量计费。
+  private var isChatGPTChannel: Bool {
+    descriptor?.authentication == .chatGPTAccount
+  }
+
+  private func modelLabel(_ model: String) -> String {
+    effectiveChannel.modelDisplayNames?[model] ?? model
+  }
+
+  private var selectedModelLabel: String {
+    let model = modelPickerBinding.wrappedValue
+    guard isChatGPTChannel else { return modelLabel(model) }
+    guard !model.isEmpty else { return "请选择模型" }
+    return effectiveChannel.availableModels.contains(model)
+      ? modelLabel(model) : "\(modelLabel(model))（已不可用）"
+  }
+
   private var subtitle: String {
     switch role {
     case .liveTranscriber:
@@ -108,14 +144,17 @@ public struct ChannelRoleCard<Extra: View>: View {
     case .batchASR:
       return "云端按量使用，重新整理整场转写。"
     case .liveSummaryLLM:
-      return "云端按量使用，与会后纪要分别选择。"
+      let source = isChatGPTChannel ? "使用 ChatGPT 计划用量" : "云端按量使用"
+      return lane == .slowSummary
+        ? "\(source)，约每 150 秒整理话题与待办。"
+        : "\(source)，约每 40 秒概括最近发言；标记与认名沿用此项。"
     case .minutesLLM:
-      return "云端按量使用，与会中总结分别选择。"
+      return (isChatGPTChannel ? "使用 ChatGPT 计划用量" : "云端按量使用") + "，与会中两路分别选择。"
     }
   }
 
   public var body: some View {
-    SettingsFormGroup(role.displayName, hint: subtitle) {
+    SettingsFormGroup(title, hint: subtitle) {
       channelRow
 
       if isVolcengineASR {
@@ -128,9 +167,19 @@ public struct ChannelRoleCard<Extra: View>: View {
         reasoningRow
       }
 
+      if role.isLLMRole, isChatGPTChannel {
+        ChatGPTUsageRow()
+      }
+
       // 推理强度的提示是**后果**(选到中高档会中总结可能缺轮),不是解释,所以留着。
       if role.isLLMRole, let hint = reasoningHint {
         SettingsFormNote(hint, tone: .warn)
+      }
+
+      // 失效选择(渠道已删、渠道不再支持本角色、没填模型)照实说;卡面上仍退回默认渠道展示,
+      // 但运行时不会悄悄换成它。
+      if let selectionIssue {
+        SettingsFormNote(selectionIssue, tone: .warn)
       }
 
       extraRows()
@@ -141,7 +190,10 @@ public struct ChannelRoleCard<Extra: View>: View {
       // 下面又来一条「当前生效:自动路由 · Qwen3-ASR 质量优先」——同一件事说第三遍。
       // 它真正该守的是「你改了但还没保存」「保存的和在跑的不是一个」这种落差,
       // 没有落差就什么都不显示(设计系统:没有状态就什么都不显示)。
-      if descriptor?.requiresAPIKey == true || lastSavedAt != nil {
+      // 选择失效时没有「生效中」的配置,不能拿兜底展示的渠道冒充。
+      if selectionIssue == nil,
+        descriptor.map({ $0.authentication != .none }) == true || lastSavedAt != nil
+      {
         SettingsFormNote(
           ProviderEffectiveSummary.text(segments: effectiveSegments, savedAt: lastSavedAt))
       }
@@ -153,7 +205,7 @@ public struct ChannelRoleCard<Extra: View>: View {
         SettingsFormNote(detail, tone: connectionState.isFailure ? .warn : .meta)
       }
     }
-    .runtimeAccessibilityIdentifier("settings.role-card.\(role.rawValue)")
+    .runtimeAccessibilityIdentifier("settings.role-card.\(identifierKey)")
     .onDisappear { probeGeneration = UUID() }
   }
 
@@ -167,7 +219,7 @@ public struct ChannelRoleCard<Extra: View>: View {
       V1Dropdown(
         value: channelSelection.wrappedValue == ChannelRoleCardConstants.automaticSelection
           ? "自动（Qwen3-ASR，质量优先，会有数秒延迟）" : channelLabel(effectiveChannel),
-        identifier: "settings.channel-select.\(role.rawValue)"
+        identifier: "settings.channel-select.\(identifierKey)"
       ) {
         if role == .liveTranscriber {
           Button("自动（Qwen3-ASR，质量优先，会有数秒延迟）") {
@@ -195,7 +247,7 @@ public struct ChannelRoleCard<Extra: View>: View {
         }
         .buttonStyle(.v1Outline)
         .disabled(connectionState.isRunning)
-        .runtimeAccessibilityIdentifier("settings.role-test.\(role.rawValue)")
+        .runtimeAccessibilityIdentifier("settings.role-test.\(identifierKey)")
         if connectionState.isRunning {
           BreathingDots()
         }
@@ -209,42 +261,65 @@ public struct ChannelRoleCard<Extra: View>: View {
   @ViewBuilder
   private var modelRow: some View {
     SettingsFormRow("模型") {
-      if effectiveChannel.availableModels.isEmpty {
+      if isChatGPTChannel, effectiveChannel.availableModels.isEmpty {
+        Text("先在渠道管理里用 ChatGPT 登录，获取模型目录")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+      } else if effectiveChannel.availableModels.isEmpty {
         V1TextField(
           placeholder: "自由填写，如 deepseek-v4-flash", text: modelTextBinding,
-          identifier: "settings.model-input.\(role.rawValue)"
+          identifier: "settings.model-input.\(identifierKey)"
         )
         .frame(width: Tokens.V1.Size.settingsModelField)
         .accessibilityLabel("模型名称")
       } else {
         V1Dropdown(
-          value: modelPickerBinding.wrappedValue,
-          identifier: "settings.model-select.\(role.rawValue)"
+          value: selectedModelLabel,
+          identifier: "settings.model-select.\(identifierKey)"
         ) {
           ForEach(effectiveChannel.availableModels, id: \.self) { model in
-            Button(model) { modelPickerBinding.wrappedValue = model }
+            Button(modelLabel(model)) { modelPickerBinding.wrappedValue = model }
           }
         }
         .frame(width: Tokens.V1.Size.settingsModelField)
       }
     }
-    .runtimeAccessibilityIdentifier("settings.model.\(role.rawValue)")
+    .runtimeAccessibilityIdentifier("settings.model.\(identifierKey)")
+  }
+
+  private func reasoningLabel(_ level: ReasoningEffortLevel) -> String {
+    if let executed = registry.provider(id: effectiveChannel.providerID, for: role)?
+      .reasoningExecutionLevels[level], executed != level
+    {
+      return "\(level.displayName)（按 \(executed.rawValue) 执行）"
+    }
+    return level.displayName
   }
 
   private var reasoningRow: some View {
     SettingsFormRow("推理强度") {
-      // 下拉只列这个渠道真支持的档:选了也不生效的选项不该出现在界面上。
+      // 下拉只列渠道声明内的档；等效档在选项和当前值旁注明。
       V1Dropdown(
-        value: reasoningBinding.wrappedValue.displayName,
-        identifier: "settings.reasoning.\(role.rawValue)"
+        value: reasoningLabel(reasoningBinding.wrappedValue),
+        identifier: "settings.reasoning.\(identifierKey)"
       ) {
-        ForEach(settingsStore.supportedReasoningLevels(for: role), id: \.self) { level in
-          Button(level.displayName) { reasoningBinding.wrappedValue = level }
+        ForEach(supportedReasoningLevels, id: \.self) { level in
+          Button(reasoningLabel(level)) { reasoningBinding.wrappedValue = level }
         }
       }
       .frame(width: Tokens.V1.Size.settingsModelField)
     }
-    .runtimeAccessibilityIdentifier("settings.reasoning-row.\(role.rawValue)")
+    .runtimeAccessibilityIdentifier("settings.reasoning-row.\(identifierKey)")
+  }
+
+  private var supportedReasoningLevels: [ReasoningEffortLevel] {
+    lane.map { settingsStore.supportedReasoningLevels(for: $0) }
+      ?? settingsStore.supportedReasoningLevels(for: role)
+  }
+
+  private var effectiveReasoning: ReasoningEffortLevel {
+    lane.map { settingsStore.effectiveReasoningEffort(for: $0) }
+      ?? settingsStore.effectiveReasoningEffort(for: role)
   }
 
   /// 火山精转的模型版本是角色级资源选择,不进渠道模型列表。
@@ -282,6 +357,9 @@ public struct ChannelRoleCard<Extra: View>: View {
             ? "旧版鉴权未配置"
             : "旧版 APP ID \(effectiveChannel.appID)"),
       ]
+    }
+    if isChatGPTChannel {
+      return [channelName, selectedModelLabel, "ChatGPT 计划用量"]
     }
     let model = selection?.model ?? effectiveChannel.availableModels.first ?? ""
     if descriptor?.requiresAPIKey == false {
@@ -325,12 +403,16 @@ public struct ChannelRoleCard<Extra: View>: View {
         } else if let candidate = channels.first(where: { $0.id == newValue }) {
           if isChannelDisabled(candidate) { return }
           if settingsStore.configuration.channel(id: newValue) == nil {
-            settingsStore.selectProvider(id: candidate.providerID, for: role)
+            if let lane {
+              settingsStore.selectProvider(id: candidate.providerID, for: lane)
+            } else {
+              settingsStore.selectProvider(id: candidate.providerID, for: role)
+            }
           } else {
-            try? settingsStore.selectChannel(channelID: newValue, for: role)
+            selectChannel(newValue)
           }
         } else {
-          try? settingsStore.selectChannel(channelID: newValue, for: role)
+          selectChannel(newValue)
         }
         lastSavedAt = Date()
       }
@@ -341,6 +423,7 @@ public struct ChannelRoleCard<Extra: View>: View {
     Binding(
       get: {
         let current = selection?.model ?? ""
+        if isChatGPTChannel { return current }
         return effectiveChannel.availableModels.contains(current)
           ? current
           : (effectiveChannel.availableModels.first ?? "")
@@ -360,12 +443,24 @@ public struct ChannelRoleCard<Extra: View>: View {
     )
   }
 
-  /// 模型改动要落到角色选择;选择还没建(极端的半迁移数据)先按当前渠道建一个再写。
-  private func select(_ model: String) {
-    if settingsStore.selection(for: role) == nil {
-      try? settingsStore.selectChannel(channelID: effectiveChannel.id, for: role)
+  private func selectChannel(_ channelID: String) {
+    if let lane {
+      try? settingsStore.selectChannel(channelID: channelID, for: lane)
+    } else {
+      try? settingsStore.selectChannel(channelID: channelID, for: role)
     }
-    try? settingsStore.selectModel(model, for: role)
+  }
+
+  /// 模型改动要落到本卡的选择;选择还没建(极端的半迁移数据)先按当前渠道建一个再写。
+  private func select(_ model: String) {
+    if selection == nil {
+      selectChannel(effectiveChannel.id)
+    }
+    if let lane {
+      try? settingsStore.selectModel(model, for: lane)
+    } else {
+      try? settingsStore.selectModel(model, for: role)
+    }
     lastSavedAt = Date()
   }
 
@@ -385,31 +480,42 @@ public struct ChannelRoleCard<Extra: View>: View {
   /// 界面就该照实显示降级后的结果,而不是显示一个发不出去的档。存的值不动。
   private var reasoningBinding: Binding<ReasoningEffortLevel> {
     Binding(
-      get: { settingsStore.effectiveReasoningEffort(for: role) },
+      get: { effectiveReasoning },
       set: { newValue in
-        settingsStore.updateReasoningEffort(newValue, for: role)
+        if let lane {
+          settingsStore.updateReasoningEffort(newValue, for: lane)
+        } else {
+          settingsStore.updateReasoningEffort(newValue, for: role)
+        }
         lastSavedAt = Date()
       }
     )
   }
 
   private var reasoningHint: String? {
+    let fallbackNotice =
+      lane.map { settingsStore.reasoningFallbackNotice(for: $0) }
+      ?? settingsStore.reasoningFallbackNotice(for: role)
+    let combined: (String) -> String = { warning in
+      [fallbackNotice, warning].compactMap { $0 }.joined(separator: "\n")
+    }
     switch role {
     case .liveSummaryLLM:
       // 高档思考可能拖过会中总结的首帧墙(等不到首帧 45 秒即放弃本轮)——
       // 不拦用户选(快的渠道如 DeepSeek 用得上),但选到「中」及以上要照实提示。
-      if settingsStore.effectiveReasoningEffort(for: role) >= .medium {
-        return "中高推理档会让每轮总结变慢：会中总结等不到首帧 45 秒即放弃本轮，"
-          + "高档可能导致总结延时或缺轮。"
+      if effectiveReasoning >= .medium {
+        return combined(
+          "中高推理档会让每轮总结变慢：会中总结等不到首帧 45 秒即放弃本轮，"
+            + "高档可能导致总结延时或缺轮。")
       }
-      return nil
+      return fallbackNotice
     case .minutesLLM:
       // 这里原来有一句「会后纪要不赶时间,默认取这家可用的最高档。」——
       // 它不是后果,是解释,而且挂在警告样式下像是出了事(设计系统原则 1)。
       // 当前档位下拉自己写着,不用再说一遍。
-      return nil
+      return fallbackNotice
     case .liveTranscriber, .batchASR:
-      return nil
+      return fallbackNotice
     }
   }
 
@@ -420,10 +526,17 @@ public struct ChannelRoleCard<Extra: View>: View {
     connectionState = .running
     let generation = UUID()
     probeGeneration = generation
-    let context = settingsStore.failureContext(feature: .connectionTest, role: role)
+    let lane = lane
+    let role = role
+    let context =
+      lane.map { settingsStore.failureContext(feature: .connectionTest, lane: $0) }
+      ?? settingsStore.failureContext(feature: .connectionTest, role: role)
     Task { @MainActor in
       let result = await ConnectionTestRunner.run(context: context) {
-        try settingsStore.makeConnectionTestLLMClient(for: role)
+        if let lane {
+          return try settingsStore.makeConnectionTestLLMClient(for: lane)
+        }
+        return try settingsStore.makeConnectionTestLLMClient(for: role)
       }
       guard probeGeneration == generation, !Task.isCancelled else { return }
       connectionState = result
@@ -432,7 +545,27 @@ public struct ChannelRoleCard<Extra: View>: View {
 }
 
 extension ChannelRoleCard where Extra == EmptyView {
-  /// 不挂额外行的角色组(会中总结 / 会后纪要)。
+  /// 按用途构造的 LLM 卡(会中快总结 / 会中慢总结 / 会后纪要)。
+  public init(
+    lane: LLMLane,
+    registry: ProviderRegistry,
+    settingsStore: ProviderSettingsStore,
+    secretDigest: any StoredSecretDigest,
+    connectionTestState: ConnectionTestState = .idle,
+    connectionTestAction: (() -> Void)? = nil
+  ) {
+    self.init(
+      role: lane.role,
+      lane: lane,
+      registry: registry,
+      settingsStore: settingsStore,
+      secretDigest: secretDigest,
+      connectionTestState: connectionTestState,
+      connectionTestAction: connectionTestAction,
+      extraRows: { EmptyView() })
+  }
+
+  /// 不挂额外行的角色组(会中总结 = 快路 / 会后纪要)。
   public init(
     role: ProviderRole,
     registry: ProviderRegistry,

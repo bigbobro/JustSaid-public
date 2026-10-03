@@ -383,7 +383,7 @@ struct OnePagerView<Trailing: View>: View {
       Text(kind == .toVerify ? "[待核] 等确认" : "⚑ 尚有分歧")
         .font(.system(size: Tokens.FontSize.caption, weight: .bold))
         .foregroundStyle(
-          kind == .toVerify ? Tokens.Color.warn : Tokens.Color.disagreement
+          kind == .toVerify ? Tokens.Color.warn : Tokens.V1.Color.disagreement
         )
       if items.isEmpty {
         Text("无")

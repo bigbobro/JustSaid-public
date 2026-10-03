@@ -25,7 +25,8 @@ public enum SettingsSection: String, CaseIterable, Identifiable {
 /// 不删除本地渠道，也不改任何角色选择。
 public enum ConnectionManagedProviderPresentation {
   public static func descriptors(in registry: ProviderRegistry) -> [ProviderDescriptor] {
-    registry.providers.filter(\.requiresAPIKey)
+    // 需要维护连接或认证的供应商(API Key 与 ChatGPT 账户);本地引擎不进渠道管理。
+    registry.providers.filter { $0.authentication != .none }
   }
 
   public static func providerIDs(in registry: ProviderRegistry) -> [String] {
@@ -44,7 +45,7 @@ public enum ConnectionManagedProviderPresentation {
 /// 本地转写引擎不进渠道管理，但必须始终可在会中速记角色里选择。
 public enum LiveTranscriberProviderPresentation {
   public static func descriptors(in registry: ProviderRegistry) -> [ProviderDescriptor] {
-    registry.providers(for: .liveTranscriber).filter { !$0.requiresAPIKey }
+    registry.providers(for: .liveTranscriber).filter { $0.authentication == .none }
   }
 
   public static func providerIDs(in registry: ProviderRegistry) -> [String] {
@@ -99,6 +100,7 @@ public struct ProviderSettingsView: View {
   @ObservedObject var modelAssetManager: LocalModelAssetManager
   let secretDigest: any StoredSecretDigest
   let nameAlertPreferences: NameAlertPreferencesStore?
+  let meetingDetectionPreferences: MeetingDetectionPreferencesStore?
   let displayTimeZone: DisplayTimeZone?
   let appUpdates: AppUpdatesModel?
   let onDone: (() -> Void)?
@@ -131,6 +133,7 @@ public struct ProviderSettingsView: View {
     modelAssetManager: LocalModelAssetManager,
     secretDigest: (any StoredSecretDigest)? = nil,
     nameAlertPreferences: NameAlertPreferencesStore? = nil,
+    meetingDetectionPreferences: MeetingDetectionPreferencesStore? = nil,
     displayTimeZone: DisplayTimeZone? = nil,
     appUpdates: AppUpdatesModel? = nil,
     initialSection: SettingsSection = .general,
@@ -144,6 +147,7 @@ public struct ProviderSettingsView: View {
     externalSection = section
     self.recoveryRequest = recoveryRequest
     self.nameAlertPreferences = nameAlertPreferences
+    self.meetingDetectionPreferences = meetingDetectionPreferences
     self.displayTimeZone = displayTimeZone
     self.appUpdates = appUpdates
     self.registry = registry
@@ -172,7 +176,8 @@ public struct ProviderSettingsView: View {
         case .general:
           GeneralSettingsPane(
             settingsStore: settingsStore, nameAlertPreferences: nameAlertPreferences,
-            appUpdates: appUpdates, displayTimeZone: displayTimeZone)
+            appUpdates: appUpdates, displayTimeZone: displayTimeZone,
+            meetingDetection: meetingDetectionPreferences)
         case .nameAlert:
           if let nameAlertPreferences {
             NameAlertSettingsPane(preferences: nameAlertPreferences)
@@ -234,40 +239,43 @@ public struct ProviderSettingsView: View {
             role: .liveTranscriber, registry: registry, settingsStore: settingsStore,
             secretDigest: secretDigest, modelAssetManager: modelAssetManager
           ) { LocalModelsSettingsRow(manager: modelAssetManager) }
-          VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
-            recoveryContextNotice(for: .liveSummaryLLM)
-            ChannelRoleCard(
-              role: .liveSummaryLLM, registry: registry, settingsStore: settingsStore,
-              secretDigest: secretDigest
-            )
+          // 会中总结拆成快、慢两张卡(10-01 三路配置),各自定位恢复锚点。
+          ForEach([LLMLane.fastSummary, .slowSummary], id: \.self) { lane in
+            VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
+              recoveryContextNotice(for: lane)
+              ChannelRoleCard(
+                lane: lane, registry: registry, settingsStore: settingsStore,
+                secretDigest: secretDigest
+              )
+            }
+            .id(lane)
           }
-          .id(ProviderRole.liveSummaryLLM)
           ChannelRoleCard(
             role: .batchASR, registry: registry, settingsStore: settingsStore,
             secretDigest: secretDigest
           ) { StorageSettingsRow(settingsStore: settingsStore, secretDigest: secretDigest) }
           VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
-            recoveryContextNotice(for: .minutesLLM)
+            recoveryContextNotice(for: .minutes)
             ChannelRoleCard(
-              role: .minutesLLM, registry: registry, settingsStore: settingsStore,
+              lane: .minutes, registry: registry, settingsStore: settingsStore,
               secretDigest: secretDigest
             )
           }
-          .id(ProviderRole.minutesLLM)
+          .id(LLMLane.minutes)
         }
       }
       .onChange(of: recoveryDestination) { _, destination in
-        if let role = destination?.role { proxy.scrollTo(role, anchor: .top) }
+        if let lane = destination?.lane { proxy.scrollTo(lane, anchor: .top) }
       }
       .onAppear {
-        if let role = recoveryDestination?.role { proxy.scrollTo(role, anchor: .top) }
+        if let lane = recoveryDestination?.lane { proxy.scrollTo(lane, anchor: .top) }
       }
     }
   }
 
   @ViewBuilder
-  private func recoveryContextNotice(for role: ProviderRole?) -> some View {
-    if let destination = recoveryDestination, destination.role == role {
+  private func recoveryContextNotice(for lane: LLMLane?) -> some View {
+    if let destination = recoveryDestination, destination.lane == lane {
       Text(
         destination.changed
           ? "本次失败使用的是原渠道；配置已改变或渠道已删除，请核对对应角色的当前选择。"

@@ -8,17 +8,20 @@ public struct GeneralSettingsPane: View {
   let nameAlertPreferences: NameAlertPreferencesStore?
   let appUpdates: AppUpdatesModel?
   let displayTimeZone: DisplayTimeZone?
+  let meetingDetection: MeetingDetectionPreferencesStore?
 
   public init(
     settingsStore: ProviderSettingsStore? = nil,
     nameAlertPreferences: NameAlertPreferencesStore? = nil,
     appUpdates: AppUpdatesModel? = nil,
-    displayTimeZone: DisplayTimeZone? = nil
+    displayTimeZone: DisplayTimeZone? = nil,
+    meetingDetection: MeetingDetectionPreferencesStore? = nil
   ) {
     self.settingsStore = settingsStore
     self.nameAlertPreferences = nameAlertPreferences
     self.appUpdates = appUpdates
     self.displayTimeZone = displayTimeZone
+    self.meetingDetection = meetingDetection
   }
 
   public var body: some View {
@@ -30,6 +33,9 @@ public struct GeneralSettingsPane: View {
           TimeZoneSettingsCard(displayTimeZone: displayTimeZone)
         }
 
+        if let meetingDetection {
+          MeetingDetectionSettingsCard(preferences: meetingDetection)
+        }
         MicrophoneAECSettingsCard()
         AudioRetentionSettingsCard()
         if let appUpdates {
@@ -89,6 +95,54 @@ private struct AppearanceSettingsCard: View {
       }
     }
     .runtimeAccessibilityIdentifier("settings.appearance")
+  }
+}
+
+// MARK: - 会议检测提醒
+
+private struct MeetingDetectionSettingsCard: View {
+  @ObservedObject var preferences: MeetingDetectionPreferencesStore
+
+  var body: some View {
+    SettingsFormGroup(
+      "会议检测提醒", hint: "别的 App 开始通话时提醒你开始记录，通话结束时提醒你结束。检测只在这台 Mac 上进行。"
+    ) {
+      SettingsFormRow("检测通话", isFirst: true) {
+        Toggle(
+          "检测通话",
+          isOn: Binding(get: { preferences.isEnabled }, set: { preferences.setEnabled($0) })
+        )
+        .toggleStyle(.v1Switch)
+        .labelsHidden()
+        .runtimeAccessibilityIdentifier("settings.meeting-detection.enabled")
+      }
+      SettingsFormRow("不再提醒的 App") {
+        if preferences.excludedList.isEmpty {
+          Text("没有")
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink3)
+            .runtimeAccessibilityIdentifier("settings.meeting-detection.excluded-empty")
+        } else {
+          VStack(alignment: .leading, spacing: Tokens.V1.Space.s2xs) {
+            ForEach(preferences.excludedList) { app in
+              HStack(spacing: Tokens.V1.Space.sm) {
+                Text(app.name)
+                  .font(Tokens.V1.Text.body.font)
+                  .foregroundStyle(Tokens.V1.Color.ink)
+                  .lineLimit(1)
+                  .truncationMode(.tail)
+                Spacer(minLength: Tokens.V1.Space.sm)
+                Button("移除") { preferences.removeExclusion(key: app.key) }
+                  .buttonStyle(.v1Quiet)
+                  .runtimeAccessibilityIdentifier("settings.meeting-detection.remove")
+              }
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+    }
+    .runtimeAccessibilityIdentifier("settings.meeting-detection")
   }
 }
 

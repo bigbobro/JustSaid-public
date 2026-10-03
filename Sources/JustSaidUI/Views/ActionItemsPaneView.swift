@@ -86,20 +86,29 @@ struct ActionItemsPaneView: View {
         }
         if let recorded = item.recordedAt {
           HStack(spacing: Tokens.Spacing.xxs) {
-            Text("记录 \(recorded.timecode)")
-            TranscriptAnchorButton(anchor: recorded, onJump: onJumpToTranscript)
+            // 时间只出现一次：能点的锚点芯片替代时间文字，拿不到才退回文字。
+            if canJump(recorded) {
+              Text("记录")
+              TranscriptAnchorButton(anchor: recorded, onJump: onJumpToTranscript)
+            } else {
+              Text("记录 \(recorded.timecode)")
+            }
           }
           .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
           .foregroundStyle(Tokens.Color.ink4)
         }
         ForEach(item.updates) { update in
           HStack(spacing: Tokens.Spacing.xxs) {
-            if let anchor = update.anchor {
+            if let anchor = update.anchor, !canJump(anchor) {
               Text("更新 \(anchor.timecode)")
                 .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
                 .foregroundStyle(Tokens.Color.ink4)
+            } else if update.anchor != nil {
+              Text("更新")
+                .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
+                .foregroundStyle(Tokens.Color.ink4)
             }
-            Text(update.anchor == nil ? "更新 · \(update.text)" : "· \(update.text)")
+            Text(updateLead(update))
               .font(.system(size: textScale.size(Tokens.FontSize.badge)))
               .foregroundStyle(Tokens.Color.revision)
             TranscriptAnchorButton(anchor: update.anchor, onJump: onJumpToTranscript)
@@ -109,6 +118,16 @@ struct ActionItemsPaneView: View {
     }
     .padding(.horizontal, Tokens.Spacing.md)
     .padding(.vertical, Tokens.Spacing.xsm)
+  }
+
+  private func canJump(_ anchor: TranscriptAnchor?) -> Bool {
+    TranscriptAnchorButton.canRender(anchor, onJump: onJumpToTranscript)
+  }
+
+  /// 有锚点时「更新」标签已单独画出（文字时间或芯片前），正文只写「· 文」；无锚点才由「更新」领头。
+  private func updateLead(_ update: SummaryActionUpdate) -> String {
+    if update.anchor != nil { return "· \(update.text)" }
+    return "更新 · \(update.text)"
   }
 
   private func ownerLabel(_ item: SummaryActionItem) -> String {

@@ -44,9 +44,14 @@ public func classifyMinutesFailure(_ error: Error) -> MinutesCallVerdict {
   return .terminal
 }
 
-/// R3 记账门:失败发生在**请求发出之前**(端点拼装 / HTTPS 校验)时不记 usage,
+/// 推理请求发出之前就确定的失败(未登录、授权刷新失败、缺计划用量许可、模型或档位不支持等)。
+/// 符合它的错误不会产生推理用量;适配器只给真正未发送的错误加这一约定。
+public protocol LLMRequestNotSentError: Error {}
+
+/// R3 记账门:失败发生在**请求发出之前**(端点拼装 / HTTPS 校验 / 认证与能力前置检查)时不记 usage,
 /// 只留 R2 失败痕——钱不可能已花。其余失败一律当"请求已发出"记一笔失败账。
 public func minutesFailureIsPreSend(_ error: Error) -> Bool {
+  if error is any LLMRequestNotSentError { return true }
   guard let clientError = error as? LLMClientError else { return false }
   switch clientError {
   case .invalidEndpoint, .insecureEndpoint:

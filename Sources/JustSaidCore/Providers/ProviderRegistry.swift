@@ -1,18 +1,12 @@
 import Foundation
 
 public struct ProviderRegistry: Sendable {
-  /// 已有线上实证的档位:`medium` 是本项目一直在发的值;`low` 是 OpenAI 兼容标准档且
-  /// 严格弱于 medium(不会比现状更冒进)。`high`/`max` 在这几家没实测过,不声明——
-  /// 会后纪要默认取最高档,声明了就等于让默认路径去发一个没人发过的词面。
+  /// qwen / glm / volcengine-ark 保留现有声明，不扩大默认路径。
   private static let measuredOpenAICompatibleLevels: Set<ReasoningEffortLevel> = [
     .off, .low, .medium,
   ]
-  /// 自定义 OpenAI 兼容网关:用户 2026-08-06 实测其网关接受最高档词面,故整梯可选。
-  /// 中间两档是同一网关(GPT 族)上的 OpenAI 兼容标准梯级,**只可能被用户显式选中**
-  /// ——没有任何默认路径会发出它们,与上面"默认不发没实测过的词面"是同一条纪律。
-  private static let fullOpenAICompatibleLevels: Set<ReasoningEffortLevel> = [
-    .off, .low, .medium, .high, .max,
-  ]
+  /// 文档支持的档可手选，默认仍取各供应商已验证的最高档。
+  private static let fullOpenAICompatibleLevels = Set(ReasoningEffortLevel.allCases)
 
   public let providers: [ProviderDescriptor]
 
@@ -73,7 +67,9 @@ public struct ProviderRegistry: Sendable {
         // 大写驼峰 DeepSeek-V4-Flash 是 HuggingFace 仓库名,照官方 API 发是错的模型名。
         defaultModel: "deepseek-v4-flash",
         requiresAPIKey: true,
-        supportedReasoningLevels: Self.measuredOpenAICompatibleLevels
+        supportedReasoningLevels: Self.fullOpenAICompatibleLevels,
+        highestVerifiedReasoningLevel: .medium,
+        reasoningExecutionLevels: [.medium: .high, .xhigh: .high]
       ),
       ProviderDescriptor(
         id: "qwen",
@@ -108,7 +104,20 @@ public struct ProviderRegistry: Sendable {
         supportedRoles: [.liveSummaryLLM, .minutesLLM],
         defaultModel: "",
         requiresAPIKey: true,
-        supportedReasoningLevels: Self.fullOpenAICompatibleLevels
+        supportedReasoningLevels: Self.fullOpenAICompatibleLevels,
+        highestVerifiedReasoningLevel: .xhigh
+      ),
+      // 10-01:Sign in with ChatGPT 的计划用量,只做文本总结与纪要。地址固定,不收 API Key;
+      // 模型与推理档位来自当前账户的目录,不硬编码默认模型。
+      ProviderDescriptor(
+        id: ChatGPTPlanContract.providerID,
+        displayName: "ChatGPT 计划用量",
+        supportedRoles: [.liveSummaryLLM, .minutesLLM],
+        defaultBaseURL: ChatGPTPlanContract.apiBaseURL.absoluteString,
+        defaultModel: "",
+        requiresAPIKey: false,
+        authentication: .chatGPTAccount,
+        supportedReasoningLevels: []
       ),
     ]
 
@@ -163,7 +172,7 @@ public struct ProviderRegistry: Sendable {
   /// 按角色的出厂默认档。**只作用于新建绑定**——已存配置由
   /// `RoleProviderBinding.effectiveReasoningEffort` 的迁移表决定,不被这里覆盖。
   ///
-  /// - 会后纪要:该供应商最高档(会后跑,超时 600 秒,等得起);
+  /// - 会后纪要:该供应商已验证的最高档(会后跑,超时 600 秒,等得起);
   /// - 会中总结:关闭。它的首帧超时是 45 秒且要跟上会议节奏,默认开推理等于在本就
   ///   不宽裕的预算里抢时间;用户想拉满,设置页一个下拉即可。
   /// - 非 LLM 角色:不涉及推理,保持 nil。
@@ -173,7 +182,7 @@ public struct ProviderRegistry: Sendable {
   ) -> ReasoningEffortLevel? {
     switch role {
     case .minutesLLM:
-      return descriptor.highestReasoningLevel
+      return descriptor.highestVerifiedReasoningLevel
     case .liveSummaryLLM:
       return .off
     case .liveTranscriber, .batchASR:

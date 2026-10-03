@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 /// 会后长任务的操作类型。identity 已经保证「同一场会议同一时刻至多一个任务」,
-/// kind 只用来把快照路由到正确的界面槽位(精转横幅 / 纪要横幅 / 英文重试横幅)。
+/// kind 选择完整或纯纪要工厂,并把快照路由到界面槽位(精转 / 纪要 / 英文重试)。
 public enum PostMeetingOperationKind: String, Hashable, Sendable {
   /// `pipeline.run(input)`:会中结束自动流程与会议库「重新精转」。
   case fullPostMeeting
@@ -78,6 +78,7 @@ public final class PostMeetingTaskCoordinator {
 
   private let meetingStore: MeetingStore
   private let pipelineResolver: PipelineResolver?
+  private let minutesPipelineResolver: PipelineResolver?
   private let failureContextResolver: (() -> LLMFailureContext)?
 
   /// identity -> 运行中的任务句柄。移除只代表"不再是当前任务",不代表取消。
@@ -101,11 +102,13 @@ public final class PostMeetingTaskCoordinator {
   public init(
     meetingStore: MeetingStore = MeetingStore(),
     pipelineResolver: PipelineResolver? = nil,
+    minutesPipelineResolver: PipelineResolver? = nil,
     failureContextResolver: (() -> LLMFailureContext)? = nil,
     successNoticeDelay: PostMeetingNoticeDismissalScheduler.Delay? = nil
   ) {
     self.meetingStore = meetingStore
     self.pipelineResolver = pipelineResolver
+    self.minutesPipelineResolver = minutesPipelineResolver
     self.failureContextResolver = failureContextResolver
     self.noticeDismissal = PostMeetingNoticeDismissalScheduler(delay: successNoticeDelay)
   }
@@ -505,7 +508,14 @@ public final class PostMeetingTaskCoordinator {
     onFailureWriteDisk: (@MainActor (String) -> Void)?,
     body: @escaping @Sendable (PostMeetingPipeline) async throws -> String
   ) -> Bool {
-    guard let pipelineResolver else { return false }
+    // App 为纯纪要提供独立工厂,已有转写不依赖 ASR/存储配置与凭证。
+    // 旧调用方未拆分 resolver 时保留原注入语义;任务所有权仍由同一 launch 管理。
+    let resolver =
+      switch kind {
+      case .minutes, .englishMinutes: minutesPipelineResolver ?? pipelineResolver
+      default: pipelineResolver
+      }
+    guard let resolver else { return false }
     guard let runID = beginRun(identity: identity, directory: directory, kind: kind) else {
       return false
     }
@@ -522,7 +532,7 @@ public final class PostMeetingTaskCoordinator {
         }
       }
       do {
-        let pipeline = try pipelineResolver().reportingProgress { channel.yield($0) }
+        let pipeline = try resolver().reportingProgress { channel.yield($0) }
         let notice = try await body(pipeline)
         channel.finish()
         await progressTask.value

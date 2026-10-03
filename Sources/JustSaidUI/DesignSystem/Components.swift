@@ -6,6 +6,7 @@ import SwiftUI
 /// AppKit view so UIHierarchyVerification can inspect the conditional, rendered subtree.
 private struct RuntimeAccessibilityMarker: NSViewRepresentable {
   let identifier: String
+  var hitCount: Int? = nil
 
   func makeNSView(context: Context) -> NSView {
     let view = NSView()
@@ -20,6 +21,22 @@ private struct RuntimeAccessibilityMarker: NSViewRepresentable {
   private func configure(_ view: NSView) {
     view.identifier = NSUserInterfaceItemIdentifier(identifier)
     view.setAccessibilityElement(false)
+    if let hitCount { view.setAccessibilityValue(hitCount) }
+  }
+}
+
+/// 只在运行时探针开启时安装。不另设 contentShape,让窗口鼠标事件检验视图自己的命中区域。
+private struct RuntimeHitRegionProbe: ViewModifier {
+  let identifier: String
+  @State private var hitCount = 0
+
+  func body(content: Content) -> some View {
+    content
+      .simultaneousGesture(TapGesture().onEnded { hitCount += 1 })
+      .background(
+        RuntimeAccessibilityMarker(identifier: identifier, hitCount: hitCount)
+          .allowsHitTesting(false)
+      )
   }
 }
 
@@ -44,13 +61,20 @@ private let runtimeAccessibilityProbesEnabled: Bool = {
 
 extension View {
   @ViewBuilder
-  func runtimeAccessibilityIdentifier(_ identifier: String) -> some View {
+  func runtimeAccessibilityIdentifier(
+    _ identifier: String, tracksHitRegion: Bool = false
+  ) -> some View {
     if runtimeAccessibilityProbesEnabled {
-      accessibilityIdentifier(identifier)
-        .background(
-          RuntimeAccessibilityMarker(identifier: identifier)
-            .allowsHitTesting(false)
-        )
+      if tracksHitRegion {
+        accessibilityIdentifier(identifier)
+          .modifier(RuntimeHitRegionProbe(identifier: identifier))
+      } else {
+        accessibilityIdentifier(identifier)
+          .background(
+            RuntimeAccessibilityMarker(identifier: identifier)
+              .allowsHitTesting(false)
+          )
+      }
     } else {
       accessibilityIdentifier(identifier)
     }

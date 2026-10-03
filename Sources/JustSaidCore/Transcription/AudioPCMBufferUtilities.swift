@@ -69,9 +69,11 @@ final class PCMBufferConverter: @unchecked Sendable {
 
   private var converter: AVAudioConverter?
   private var inputFormat: AVAudioFormat?
+  private let primeMethod: AVAudioConverterPrimeMethod
 
-  init(outputFormat: AVAudioFormat) {
+  init(outputFormat: AVAudioFormat, primeMethod: AVAudioConverterPrimeMethod = .normal) {
     self.outputFormat = outputFormat
+    self.primeMethod = primeMethod
   }
 
   func convert(_ input: sending AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
@@ -82,6 +84,7 @@ final class PCMBufferConverter: @unchecked Sendable {
     if inputFormat != input.format {
       inputFormat = input.format
       converter = AVAudioConverter(from: input.format, to: outputFormat)
+      converter?.primeMethod = primeMethod
     }
     guard let converter else {
       throw TranscriptionAudioError.converterUnavailable

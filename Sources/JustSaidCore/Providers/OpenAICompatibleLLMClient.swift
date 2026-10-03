@@ -1,13 +1,12 @@
 import CryptoKit
 import Foundation
-import Synchronization
 
 public struct LLMClientConfiguration: Equatable, Sendable {
   public let providerID: String
   public let baseURL: URL
   public let apiKey: String
   public let model: String
-  /// 已经过供应商能力协商的**最终**档位:客户端只负责翻译成线上格式,不再做降级判断。
+  /// 供应商声明协商后的档位；自定义渠道还可在收到明确拒绝后运行时降档。
   public let reasoningEffort: ReasoningEffortLevel
   public let requestedReasoningEffort: ReasoningEffortLevel
   /// 诊断上下文只包含闭合身份词，不承载 prompt/转写。
@@ -16,6 +15,10 @@ public struct LLMClientConfiguration: Equatable, Sendable {
   public let diagnosticOrigin: String?
   public let diagnosticMeetingHash: String?
   public let recoveryChannelID: String?
+  /// 解析时所属的用途(三路配置)。随配置快照固定:调用开始后改设置不重标本次调用。
+  public let lane: LLMLane?
+  /// 计费来源;按量 API 为 nil,ChatGPT 计划用量为 `ChatGPTPlanContract.billingSource`。
+  public let billingSource: String?
 
   public var thinkingEnabled: Bool {
     reasoningEffort != .off
@@ -32,7 +35,9 @@ public struct LLMClientConfiguration: Equatable, Sendable {
     diagnosticPurpose: String? = nil,
     diagnosticOrigin: String? = nil,
     diagnosticMeetingHash: String? = nil,
-    recoveryChannelID: String? = nil
+    recoveryChannelID: String? = nil,
+    lane: LLMLane? = nil,
+    billingSource: String? = nil
   ) {
     self.providerID = providerID
     self.baseURL = baseURL
@@ -45,6 +50,8 @@ public struct LLMClientConfiguration: Equatable, Sendable {
     self.diagnosticOrigin = diagnosticOrigin
     self.diagnosticMeetingHash = diagnosticMeetingHash
     self.recoveryChannelID = recoveryChannelID
+    self.lane = lane
+    self.billingSource = billingSource
   }
 }
 
@@ -68,11 +75,27 @@ public struct LLMResponse: Equatable, Sendable {
   public let text: String
   public let inputTokens: Int?
   public let outputTokens: Int?
+  public let cacheHitTokens: Int?
+  public let cacheMissTokens: Int?
+  public let reasoningTokens: Int?
+  public let reasoningExecution: LLMReasoningExecution?
 
-  public init(text: String, inputTokens: Int? = nil, outputTokens: Int? = nil) {
+  public init(
+    text: String,
+    inputTokens: Int? = nil,
+    outputTokens: Int? = nil,
+    cacheHitTokens: Int? = nil,
+    cacheMissTokens: Int? = nil,
+    reasoningTokens: Int? = nil,
+    reasoningExecution: LLMReasoningExecution? = nil
+  ) {
     self.text = text
     self.inputTokens = inputTokens
     self.outputTokens = outputTokens
+    self.cacheHitTokens = cacheHitTokens
+    self.cacheMissTokens = cacheMissTokens
+    self.reasoningTokens = reasoningTokens
+    self.reasoningExecution = reasoningExecution
   }
 }
 
@@ -143,15 +166,47 @@ public enum LLMClientError: LocalizedError {
   }
 }
 
+/// 一次生产调用的附加约定:诊断上下文、解码进展期限与增量观测。
+public struct LLMCallOptions: Sendable {
+  public var context: LLMCallDiagnosticContext?
+  /// 无解码进展的期限(会中快/慢);nil 表示不设。只有 `streamsProgress` 的客户端执行它。
+  public var progressTimeout: TimeInterval?
+  /// 增量观测(会后纪要的思考/写作进度与 partial)。回调抛错不影响完成路径。
+  public var onStreamProgress: (@Sendable (LLMStreamProgress) throws -> Void)?
+
+  public init(
+    context: LLMCallDiagnosticContext? = nil,
+    progressTimeout: TimeInterval? = nil,
+    onStreamProgress: (@Sendable (LLMStreamProgress) throws -> Void)? = nil
+  ) {
+    self.context = context
+    self.progressTimeout = progressTimeout
+    self.onStreamProgress = onStreamProgress
+  }
+}
+
 public protocol LLMClient: Sendable {
   var configuration: LLMClientConfiguration { get }
   func complete(_ request: LLMRequest) async throws -> LLMResponse
+  /// 生产调用入口(10-01 共同契约)。调用方一律经此派发,不按具体客户端类型分支。
+  /// `streamsProgress` 为 true 的客户端必须执行 `options` 的进展期限并回调增量;
+  /// 简单桩可用默认实现:按 `complete(_:)` 完整返回,不报增量。
+  func complete(_ request: LLMRequest, options: LLMCallOptions) async throws -> LLMResponse
+  /// true:本客户端流式解码,自行执行 `progressTimeout` 并经 `onStreamProgress` 报增量。
+  /// false(默认):调用方为它套整轮时限,完成后自行补报一次写作进度。
+  var streamsProgress: Bool { get }
   /// 设置页辅助能力:返回服务商可用模型列表。不支持或失败时返回 nil,
   /// 调用方必须降级为手填,不得因此阻断配置保存。
   func availableModels() async -> [String]?
 }
 
 extension LLMClient {
+  public func complete(_ request: LLMRequest, options: LLMCallOptions) async throws -> LLMResponse {
+    try await complete(request)
+  }
+
+  public var streamsProgress: Bool { false }
+
   public func availableModels() async -> [String]? { nil }
 }
 
@@ -174,6 +229,7 @@ public struct OpenAICompatibleLLMClient: LLMClient {
 
   private let transport: any HTTPTransport
   private let diagnosticsLedger: DiagnosticEventLedger
+  var reasoningFallback: ReasoningFallbackContext?
 
   /// `firstFrameTimeout` 默认 **nil 而不是 45**:本类型是会中总结与会后纪要共用的。
   /// 会后纪要开着推理档,2026-08-07 实测 91 分钟会议的英文纪要思考超过 300 秒才吐出
@@ -195,6 +251,17 @@ public struct OpenAICompatibleLLMClient: LLMClient {
 
   public func complete(_ request: LLMRequest) async throws -> LLMResponse {
     try await complete(request, context: nil, onStreamProgress: nil)
+  }
+
+  public var streamsProgress: Bool { true }
+
+  public func complete(_ request: LLMRequest, options: LLMCallOptions) async throws -> LLMResponse {
+    try await complete(
+      request,
+      context: options.context,
+      progressTimeout: options.progressTimeout,
+      onStreamProgress: options.onStreamProgress
+    )
   }
 
   /// 流式完成;可选增量回调在**发出侧节流**(≥200ms 或字符增量阈值,取先到者)。
@@ -224,7 +291,24 @@ public struct OpenAICompatibleLLMClient: LLMClient {
     let retryGroup = context?.retryGroup
     let callID = UUID().uuidString.lowercased()
     let startedAt = Date()
-    let wireReasoning = Self.wireReasoningEffort(configuration.reasoningEffort) ?? "off"
+    let allowsFallback = configuration.providerID == "custom-openai-compatible"
+    var knowledge =
+      allowsFallback
+      ? await reasoningFallback?.read() ?? ReasoningFallbackKnowledge()
+      : ReasoningFallbackKnowledge()
+    var execution =
+      allowsFallback
+      ? knowledge.resolve(configuration.reasoningEffort)
+        ?? ReasoningAttempt(
+          level: configuration.reasoningEffort,
+          offStyle: knowledge.ignoredOffStyle ?? .enableThinking)
+      : ReasoningAttempt(
+        level: configuration.reasoningEffort,
+        offStyle: configuration.providerID == "deepseek" ? .thinkingDisabled : .enableThinking)
+    var wireReasoning: String {
+      if execution.level == .off, execution.offStyle == .reasoningNone { return "none" }
+      return Self.wireReasoningEffort(execution.level) ?? "off"
+    }
     diagnosticsLedger.append(
       event: "modelCall.start",
       source: "OpenAICompatibleLLMClient",
@@ -240,8 +324,9 @@ public struct OpenAICompatibleLLMClient: LLMClient {
         model: configuration.model,
         endpointFingerprint: Self.endpointFingerprint(configuration.baseURL),
         requestedReasoning: configuration.requestedReasoningEffort.rawValue,
-        effectiveReasoning: configuration.reasoningEffort.rawValue,
+        effectiveReasoning: execution.level.rawValue,
         wireReasoning: wireReasoning,
+        reasoningOffStyle: execution.level == .off ? execution.offStyle.rawValue : nil,
         stream: true,
         expectsJSON: request.expectsJSON,
         timeoutProfile:
@@ -252,13 +337,62 @@ public struct OpenAICompatibleLLMClient: LLMClient {
       )
     )
     do {
-      let instrumented = try await completeInstrumented(
-        request,
-        wireReasoning: wireReasoning,
-        progressTimeout: progressTimeout,
-        onStreamProgress: onStreamProgress,
-        startedAt: startedAt
-      )
+      let instrumented: InstrumentedResult
+      var isFinalFallback = false
+      while true {
+        try Task.checkCancellation()
+        do {
+          instrumented = try await completeInstrumented(
+            request,
+            execution: execution,
+            progressTimeout: progressTimeout,
+            onStreamProgress: onStreamProgress,
+            startedAt: startedAt
+          )
+          break
+        } catch {
+          if isFinalFallback || Task.isCancelled || error is CancellationError { throw error }
+          // 上一写法被静默忽略但拿到过 200：探索新写法的任何失败都不能让调用比改动前更差。
+          // 探索对象包括新的关闭写法，以及所有关法耗尽后改发的 low。
+          if allowsFallback, configuration.reasoningEffort == .off,
+            let ignored = knowledge.ignoredOffStyle,
+            execution.level == .off
+              ? execution.offStyle != ignored
+                && !knowledge.confirmedOffStyles.contains(execution.offStyle)
+              : execution.level == .low
+                && knowledge.confirmedLevels[.off]?.contains(.low) != true
+          {
+            knowledge.recordExplorationFailure(
+              execution, clientSide: Self.isClientSideFailure(error))
+            if let reasoningFallback { knowledge = await reasoningFallback.merge(knowledge) }
+            execution = ReasoningAttempt(level: .off, offStyle: ignored)
+            isFinalFallback = true
+            continue
+          }
+          guard allowsFallback, Self.isReasoningRejection(error, attempt: execution) else {
+            throw error
+          }
+          knowledge.reject(execution)
+          if let reasoningFallback { knowledge = await reasoningFallback.merge(knowledge) }
+          guard let next = knowledge.resolve(configuration.reasoningEffort), next != execution
+          else { throw error }
+          execution = next
+        }
+      }
+      if allowsFallback {
+        if instrumented.response.reasoningExecution?.offIgnored == true {
+          knowledge.reject(execution)
+          knowledge.observedIgnoredOff = true
+          knowledge.recordSuccess(execution)
+          if execution.level == .off { knowledge.ignoredOffStyle = execution.offStyle }
+        } else {
+          knowledge.recordSuccess(execution)
+          knowledge.confirmedLevels[configuration.reasoningEffort, default: []].insert(
+            execution.level)
+          if execution.level == .off { knowledge.confirmedOffStyles.insert(execution.offStyle) }
+        }
+        if let reasoningFallback { _ = await reasoningFallback.merge(knowledge) }
+      }
       diagnosticsLedger.append(
         event: "modelCall.finish",
         source: "OpenAICompatibleLLMClient",
@@ -274,8 +408,10 @@ public struct OpenAICompatibleLLMClient: LLMClient {
           model: configuration.model,
           endpointFingerprint: Self.endpointFingerprint(configuration.baseURL),
           requestedReasoning: configuration.requestedReasoningEffort.rawValue,
-          effectiveReasoning: configuration.reasoningEffort.rawValue,
+          effectiveReasoning: instrumented.response.reasoningExecution?.effectiveLevel?.rawValue
+            ?? "unknown",
           wireReasoning: wireReasoning,
+          reasoningOffStyle: execution.level == .off ? execution.offStyle.rawValue : nil,
           stream: true,
           expectsJSON: request.expectsJSON,
           attempt: attempt,
@@ -286,6 +422,9 @@ public struct OpenAICompatibleLLMClient: LLMClient {
           outputSize: instrumented.response.text.utf8.count,
           inputTokens: instrumented.response.inputTokens,
           outputTokens: instrumented.response.outputTokens,
+          cacheHitTokens: instrumented.response.cacheHitTokens,
+          cacheMissTokens: instrumented.response.cacheMissTokens,
+          reasoningTokens: instrumented.response.reasoningTokens,
           latencyMs: Int(Date().timeIntervalSince(startedAt) * 1_000),
           firstFrameMs: instrumented.firstFrameMs,
           responseBytes: instrumented.responseBytes,
@@ -311,8 +450,9 @@ public struct OpenAICompatibleLLMClient: LLMClient {
           model: configuration.model,
           endpointFingerprint: Self.endpointFingerprint(configuration.baseURL),
           requestedReasoning: configuration.requestedReasoningEffort.rawValue,
-          effectiveReasoning: configuration.reasoningEffort.rawValue,
+          effectiveReasoning: execution.level.rawValue,
           wireReasoning: wireReasoning,
+          reasoningOffStyle: execution.level == .off ? execution.offStyle.rawValue : nil,
           stream: true,
           expectsJSON: request.expectsJSON,
           attempt: attempt,
@@ -334,7 +474,7 @@ public struct OpenAICompatibleLLMClient: LLMClient {
 
   private func completeInstrumented(
     _ request: LLMRequest,
-    wireReasoning: String,
+    execution: ReasoningAttempt,
     progressTimeout: TimeInterval?,
     onStreamProgress: (@Sendable (LLMStreamProgress) throws -> Void)?,
     startedAt: Date
@@ -362,6 +502,11 @@ public struct OpenAICompatibleLLMClient: LLMClient {
       messages.append(Message(role: "system", content: request.systemPrompt))
     }
     messages.append(Message(role: "user", content: request.userPrompt))
+    let off = execution.level == .off
+    let wireReasoning =
+      off
+      ? (execution.offStyle == .reasoningNone ? "none" : nil)
+      : Self.wireReasoningEffort(execution.level)
     urlRequest.httpBody = try JSONEncoder().encode(
       ChatCompletionRequest(
         model: configuration.model,
@@ -370,8 +515,10 @@ public struct OpenAICompatibleLLMClient: LLMClient {
         // 流式默认不返回 usage;不显式索要就等于从此丢掉花销账本(既有红线)。
         streamOptions: StreamOptions(includeUsage: true),
         responseFormat: request.expectsJSON ? ResponseFormat(type: "json_object") : nil,
-        enableThinking: configuration.thinkingEnabled ? nil : false,
-        reasoningEffort: wireReasoning == "off" ? nil : wireReasoning
+        enableThinking: off && execution.offStyle == .enableThinking ? false : nil,
+        thinking: off && execution.offStyle == .thinkingDisabled
+          ? ThinkingMode(type: "disabled") : nil,
+        reasoningEffort: wireReasoning
       )
     )
 
@@ -394,7 +541,16 @@ public struct OpenAICompatibleLLMClient: LLMClient {
       response: LLMResponse(
         text: text,
         inputTokens: accumulated.promptTokens,
-        outputTokens: accumulated.completionTokens
+        outputTokens: accumulated.completionTokens,
+        cacheHitTokens: accumulated.cacheHitTokens,
+        cacheMissTokens: accumulated.cacheMissTokens,
+        reasoningTokens: accumulated.reasoningTokens,
+        reasoningExecution: LLMReasoningExecution(
+          requestedLevel: configuration.requestedReasoningEffort,
+          effectiveLevel: off && accumulated.observedReasoning ? nil : execution.level,
+          offStyle: off ? execution.offStyle : nil,
+          offIgnored: off && accumulated.observedReasoning
+        )
       ),
       firstFrameMs: accumulated.firstFrameMs,
       responseBytes: accumulated.responseBytes
@@ -409,238 +565,28 @@ public struct OpenAICompatibleLLMClient: LLMClient {
 
   /// 同一调用的 reader 与可选看门狗共用终态；开流前开始计时，退出时取消并等待子任务。
   /// 首帧仍按首个 data 负载解除；progress 只认成功解码的当前非空增量，与 UI 节流无关。
+  /// 期限与终态语义在 `LLMStreamLiveness`,各协议适配器共用。
   private func streamGuardedByLiveness(
     _ urlRequest: URLRequest,
     progressTimeout: TimeInterval?,
     onStreamProgress: (@Sendable (LLMStreamProgress) throws -> Void)?,
     startedAt: Date
   ) async throws -> AccumulatedStream {
-    guard let progressTimeout else {
-      return try await streamGuardedByFirstFrame(
-        urlRequest, onStreamProgress: onStreamProgress, startedAt: startedAt
-      )
-    }
-    let lifetime = try StreamLifetime(progressTimeout: progressTimeout)
     let transport = self.transport
-    return try await withTaskCancellationHandler {
-      do {
-        return try await withThrowingTaskGroup(of: AccumulatedStream?.self) { group in
-          defer { group.cancelAll() }
-          group.addTask {
-            do {
-              try Task.checkCancellation()
-              let stream = try await transport.validatedLines(for: urlRequest)
-              let accumulated = try await Self.consumeSSE(
-                stream,
-                onFirstFrame: { lifetime.markFirstFrame() },
-                onDecodedProgress: { try lifetime.renewProgress() },
-                onStreamProgress: onStreamProgress,
-                startedAt: startedAt
-              )
-              try Task.checkCancellation()
-              try lifetime.finish()
-              return accumulated
-            } catch {
-              try lifetime.finish(error: error)
-              throw error
-            }
-          }
-          if let firstFrameTimeout {
-            group.addTask {
-              try await Task.sleep(
-                nanoseconds: UInt64(max(0, firstFrameTimeout) * 1_000_000_000)
-              )
-              try lifetime.checkFirstFrame(timeout: firstFrameTimeout)
-              return nil
-            }
-          }
-          group.addTask {
-            while let remaining = try lifetime.remainingProgress() {
-              try await Task.sleep(nanoseconds: remaining)
-            }
-            return nil
-          }
-          while let finished = try await group.next() {
-            // 已解除的看门狗不是 LLM 结果；继续等 reader。
-            if let accumulated = finished { return accumulated }
-          }
-          throw CancellationError()
-        }
-      } catch {
-        // 超时拥有终态后，它取消 reader 产生的 CancellationError 不能反客为主。
-        try lifetime.finish(error: error)
-        throw error
-      }
-    } onCancel: {
-      try? lifetime.finish(error: CancellationError())
-    }
-  }
-
-  /// 所有状态都在短临界区中更新；不跨 await / 外部回调持锁，也不为每帧创建任务。
-  private final class StreamLifetime: Sendable {
-    private enum Terminal {
-      case completed
-      case failed(Error)
-    }
-
-    private struct State {
-      var firstFrameReceived = false
-      var deadline: UInt64
-      var terminal: Terminal?
-    }
-
-    private let progressTimeout: TimeInterval
-    private let interval: UInt64
-    private let state: Mutex<State>
-
-    init(progressTimeout: TimeInterval) throws {
-      self.progressTimeout = progressTimeout
-      guard progressTimeout.isFinite, progressTimeout >= 0,
-        let interval = UInt64(exactly: (progressTimeout * 1_000_000_000).rounded(.down))
-      else { throw LLMClientError.progressTimedOut(progressTimeout) }
-      let (deadline, overflow) = DispatchTime.now().uptimeNanoseconds.addingReportingOverflow(
-        interval)
-      guard !overflow else { throw LLMClientError.progressTimedOut(progressTimeout) }
-      self.interval = interval
-      state = Mutex(State(deadline: deadline))
-    }
-
-    func markFirstFrame() {
-      state.withLock {
-        guard case nil = $0.terminal else { return }
-        $0.firstFrameReceived = true
-      }
-    }
-
-    func renewProgress() throws {
-      try state.withLock { state in
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard try isActive(&state, now: now) else { return }
-        let (deadline, overflow) = now.addingReportingOverflow(interval)
-        guard !overflow else {
-          let error = LLMClientError.progressTimedOut(progressTimeout)
-          state.terminal = .failed(error)
-          throw error
-        }
-        state.deadline = deadline
-      }
-    }
-
-    func remainingProgress() throws -> UInt64? {
-      try state.withLock { state in
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard try isActive(&state, now: now) else { return nil }
-        return state.deadline - now
-      }
-    }
-
-    func checkFirstFrame(timeout: TimeInterval) throws {
-      try state.withLock { state in
-        guard try isActive(&state, now: DispatchTime.now().uptimeNanoseconds),
-          !state.firstFrameReceived
-        else { return }
-        let error = LLMClientError.firstFrameTimedOut(timeout)
-        state.terminal = .failed(error)
-        throw error
-      }
-    }
-
-    func finish(error: Error? = nil) throws {
-      try state.withLock { state in
-        guard try isActive(&state, now: DispatchTime.now().uptimeNanoseconds) else { return }
-        if let error {
-          state.terminal = .failed(error)
-          throw error
-        }
-        state.terminal = .completed
-      }
-    }
-
-    /// 到期本身即终态；即使看门狗暂未被调度，晚到的增量也不能续命。
-    private func isActive(_ state: inout State, now: UInt64) throws -> Bool {
-      switch state.terminal {
-      case .completed?: return false
-      case .failed(let error)?: throw error
-      case nil: break
-      }
-      if now >= state.deadline {
-        let error = LLMClientError.progressTimedOut(progressTimeout)
-        state.terminal = .failed(error)
-        throw error
-      }
-      return true
-    }
-  }
-
-  /// 开流并消费,附带**首帧看门狗**。
-  ///
-  /// 看门狗只睡一觉:醒来时首帧已到就自行退场(此后是否被砍由空闲超时说了算——长内容
-  /// **不得**因为总时长超过首帧阈值被砍);首帧未到才抛错,连带取消开流任务。
-  /// `firstFrameTimeout == nil` 时完全不起任务组,路径与改动前逐字一致。
-  private func streamGuardedByFirstFrame(
-    _ urlRequest: URLRequest,
-    onStreamProgress: (@Sendable (LLMStreamProgress) throws -> Void)?,
-    startedAt: Date
-  ) async throws -> AccumulatedStream {
-    guard let firstFrameTimeout else {
-      let stream = try await transport.validatedLines(for: urlRequest)
-      return try await Self.consumeSSE(
-        stream,
-        onStreamProgress: onStreamProgress,
-        startedAt: startedAt
-      )
-    }
-    let latch = FirstFrameLatch()
-    let transport = self.transport
-    return try await withThrowingTaskGroup(of: AccumulatedStream?.self) { group in
-      group.addTask {
-        // 开流与消费放同一个子任务:首帧超时因此覆盖握手与响应头,而流不跨任务边界。
-        let stream = try await transport.validatedLines(for: urlRequest)
-        return try await Self.consumeSSE(
+    return try await LLMStreamLiveness.run(
+      firstFrameTimeout: firstFrameTimeout,
+      progressTimeout: progressTimeout,
+      open: { try await transport.validatedLines(for: urlRequest) },
+      consume: { stream, hooks in
+        try await Self.consumeSSE(
           stream,
-          onFirstFrame: { latch.mark() },
+          onFirstFrame: hooks.onFirstFrame,
+          onDecodedProgress: hooks.onDecodedProgress,
           onStreamProgress: onStreamProgress,
           startedAt: startedAt
         )
       }
-      group.addTask {
-        try await Task.sleep(
-          nanoseconds: UInt64(max(0, firstFrameTimeout) * 1_000_000_000)
-        )
-        guard latch.isMarked else {
-          throw LLMClientError.firstFrameTimedOut(firstFrameTimeout)
-        }
-        return nil
-      }
-      while let finished = try await group.next() {
-        guard let accumulated = finished else {
-          // 看门狗解除,继续等真正的结果。
-          continue
-        }
-        group.cancelAll()
-        return accumulated
-      }
-      // 消费任务只会返回结果或抛错;走到这里说明整个任务组被外部取消了。
-      throw CancellationError()
-    }
-  }
-
-  /// 首帧是否到达的一次性标记。看门狗睡醒时读一次,消费侧写一次,用最简单的锁即可。
-  private final class FirstFrameLatch: @unchecked Sendable {
-    private let lock = NSLock()
-    private var marked = false
-
-    func mark() {
-      lock.lock()
-      marked = true
-      lock.unlock()
-    }
-
-    var isMarked: Bool {
-      lock.lock()
-      defer { lock.unlock() }
-      return marked
-    }
+    )
   }
 
   /// SSE 累积结果。用量为 nil 表示「这次没拿到」——与「这次没花钱(0)」是两回事,
@@ -648,8 +594,12 @@ public struct OpenAICompatibleLLMClient: LLMClient {
   private struct AccumulatedStream {
     var content = ""
     var reasoning = ""
+    var observedReasoning = false
     var promptTokens: Int?
     var completionTokens: Int?
+    var cacheHitTokens: Int?
+    var cacheMissTokens: Int?
+    var reasoningTokens: Int?
     var firstFrameMs: Int?
     var responseBytes = 0
   }
@@ -770,6 +720,7 @@ public struct OpenAICompatibleLLMClient: LLMClient {
         }
         if let reasoning = delta.reasoningContent {
           accumulated.reasoning += reasoning
+          if !reasoning.isEmpty { accumulated.observedReasoning = true }
         }
         if delta.content != nil || delta.reasoningContent != nil {
           emitProgressIfNeeded()
@@ -778,6 +729,11 @@ public struct OpenAICompatibleLLMClient: LLMClient {
       if let usage = chunk.usage {
         accumulated.promptTokens = usage.promptTokens
         accumulated.completionTokens = usage.completionTokens
+        accumulated.cacheHitTokens =
+          usage.promptCacheHitTokens ?? usage.promptTokensDetails?.cachedTokens
+        accumulated.cacheMissTokens = usage.promptCacheMissTokens
+        accumulated.reasoningTokens = usage.completionTokensDetails?.reasoningTokens
+        if (accumulated.reasoningTokens ?? 0) > 0 { accumulated.observedReasoning = true }
       }
       return false
     }
@@ -943,9 +899,9 @@ public struct OpenAICompatibleLLMClient: LLMClient {
   }
 
   /// 中性档位 → OpenAI 兼容线上词面。**全项目唯一允许出现供应商词面的地方。**
-  /// `medium` 是本项目一直在发的值;最高档词面由用户 2026-08-06 在其自定义网关实测确认。
-  /// `.off` 返回 nil,该字段缺省(维持改动前语义,配合 `enable_thinking: false`)。
-  /// Claude(思考预算 token 数)与 Grok 尚未接入,取值以接入时实测为准,此处不预写。
+  /// medium 与 xhigh 有既有调用证据；max 按官方文档开放手选，不进入默认路径。
+  /// `.off` 返回 nil；关闭写法在请求编码处按供应商声明或自定义渠道识别结果翻译。
+  /// 自定义渠道只按响应识别，不按模型名猜供应商。
   private static func wireReasoningEffort(_ level: ReasoningEffortLevel) -> String? {
     switch level {
     case .off:
@@ -956,8 +912,10 @@ public struct OpenAICompatibleLLMClient: LLMClient {
       return "medium"
     case .high:
       return "high"
-    case .max:
+    case .xhigh:
       return "xhigh"
+    case .max:
+      return "max"
     }
   }
 
@@ -1032,6 +990,7 @@ private struct ChatCompletionRequest: Encodable {
   let streamOptions: StreamOptions?
   let responseFormat: ResponseFormat?
   let enableThinking: Bool?
+  let thinking: ThinkingMode?
   let reasoningEffort: String?
 
   enum CodingKeys: String, CodingKey {
@@ -1041,8 +1000,13 @@ private struct ChatCompletionRequest: Encodable {
     case streamOptions = "stream_options"
     case responseFormat = "response_format"
     case enableThinking = "enable_thinking"
+    case thinking
     case reasoningEffort = "reasoning_effort"
   }
+}
+
+private struct ThinkingMode: Encodable {
+  let type: String
 }
 
 private struct StreamOptions: Encodable {
@@ -1099,12 +1063,36 @@ private struct ResponseFormat: Encodable {
 }
 
 private struct ChatCompletionUsage: Decodable {
+  struct PromptDetails: Decodable {
+    let cachedTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+      case cachedTokens = "cached_tokens"
+    }
+  }
+
+  struct CompletionDetails: Decodable {
+    let reasoningTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+      case reasoningTokens = "reasoning_tokens"
+    }
+  }
+
   let promptTokens: Int?
   let completionTokens: Int?
+  let promptCacheHitTokens: Int?
+  let promptCacheMissTokens: Int?
+  let promptTokensDetails: PromptDetails?
+  let completionTokensDetails: CompletionDetails?
 
   enum CodingKeys: String, CodingKey {
     case promptTokens = "prompt_tokens"
     case completionTokens = "completion_tokens"
+    case promptCacheHitTokens = "prompt_cache_hit_tokens"
+    case promptCacheMissTokens = "prompt_cache_miss_tokens"
+    case promptTokensDetails = "prompt_tokens_details"
+    case completionTokensDetails = "completion_tokens_details"
   }
 }
 

@@ -212,6 +212,7 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       // 这里原来传 nil,于是「点名提醒」分区在真实 app 里是一页空白
       // (截图装置注入了所以看不出来)。coordinator 本来就持有这份偏好。
       nameAlertPreferences: appCoordinator.nameAlertPreferences,
+      meetingDetectionPreferences: appCoordinator.meetingDetectionPreferences,
       displayTimeZone: appCoordinator.displayTimeZone,
       appUpdates: appCoordinator.appUpdates,
       initialSection: appCoordinator.settingsSection,
@@ -284,6 +285,7 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     }
     .onChange(of: appCoordinator.workspaceMode) { _, _ in dictionaryPane.reload() }
     .environment(\.textScale, textScale)
+    .environment(\.minutesUsesChatGPTPlan, providerSettings.usesChatGPTPlan(for: .minutes))
     .environment(
       \.llmRecoveryServices,
       LLMRecoveryServices(settings: providerSettings) { request in
@@ -353,7 +355,12 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     }
     .onChange(of: recordingSession.phase) { _, phase in
       if phase == .recording {
-        appCoordinator.showCockpit()
+        // 由会议检测提醒开始的记录（有来源 App）在后台开始：只把内容切到驾驶舱，不把主窗弹到前台。
+        if recordingSession.sourceApp != nil {
+          appCoordinator.selectCockpit()
+        } else {
+          appCoordinator.showCockpit()
+        }
         displayEchoFilter.reset()
         displaySegments =
           displayEchoFilter.removeEcho(

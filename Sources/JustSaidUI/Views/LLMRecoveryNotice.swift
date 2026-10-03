@@ -189,8 +189,11 @@ private struct RecoveryNoticeContents: View {
     case .steps: showsDetails = true
     case .exportDiagnostics:
       diagnostics.chooseDestination(paths: paths, settings: settings, advice: advice)
-    case .editKey, .editModel, .editConfiguration, .chooseChannel:
+    case .editKey, .editModel, .editConfiguration, .chooseChannel, .signInChatGPT:
       services?.navigate(.init(context: advice.context, action: action))
+    case .manageChatGPTUsage:
+      // 外部网页,只打开不发请求;额度由用户在 ChatGPT 设置里查看与调整。
+      NSWorkspace.shared.open(ChatGPTPlanContract.usageSettingsURL)
     }
   }
 }
@@ -198,6 +201,8 @@ private struct RecoveryNoticeContents: View {
 public struct RecoverySettingsDestination: Equatable {
   public let channelID: String?
   public let role: ProviderRole?
+  /// 失败所属的用途;设置页按它定位卡片,慢路失败不能跳到快路卡。
+  public let lane: LLMLane?
   public let changed: Bool
 
   public static func resolve(
@@ -205,7 +210,10 @@ public struct RecoverySettingsDestination: Equatable {
   ) -> Self {
     let context = request.context
     let channel = context.channelID.flatMap { configuration.channel(id: $0) }
-    let selection = context.role.flatMap { configuration.selection(for: $0) }
+    let lane = context.effectiveLane
+    let selection =
+      lane.map { configuration.selection(for: $0) }
+      ?? context.role.flatMap { configuration.selection(for: $0) }
     let roleChanged =
       context.role != nil
       && (selection?.channelID != context.channelID
@@ -220,6 +228,6 @@ public struct RecoverySettingsDestination: Equatable {
     return Self(
       channelID: request.action == .chooseChannel
         || (request.action == .editModel && context.role != nil) || changed ? nil : channel?.id,
-      role: context.role, changed: changed)
+      role: context.role, lane: lane, changed: changed)
   }
 }

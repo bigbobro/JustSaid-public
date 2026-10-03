@@ -30,6 +30,9 @@ public struct TranscriptSegment: Codable, Equatable, Sendable {
 
 public protocol TranscriberEngine: AnyObject, Sendable {
   var results: AsyncStream<TranscriptSegment> { get }
+  /// True only when input and decode ranges use the session captureTime clock.
+  /// Optional microphone processing may hold buffers without moving those anchors.
+  var usesCaptureTime: Bool { get }
 
   /// 传的是用户在工具栏选的**语言意图**,不是 locale 字符串(08-10 实证:
   /// `.auto` 与 `.chinese` 的 `transcriptionLocaleIdentifier` 都是 `"zh-CN"`,
@@ -42,6 +45,10 @@ public protocol TranscriberEngine: AnyObject, Sendable {
     at captureTime: TimeInterval
   ) throws
   func stop() async
+}
+
+extension TranscriberEngine {
+  public var usesCaptureTime: Bool { false }
 }
 
 public protocol TranscriberASRAnchorGapFramesProviding: Sendable {

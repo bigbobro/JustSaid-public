@@ -34,7 +34,8 @@ extension MainWorkspaceView {
       partialCaptureNotice: recordingSession.partialCaptureNotice,
       postMeetingStage: isShowingPostMeetingDetail ? .none : summaryFeed.postMeetingStage,
       hasLanguageMismatch: languageMismatch != nil,
-      isShowingLowRecognition: isShowingLowRecognition
+      isShowingLowRecognition: isShowingLowRecognition,
+      systemScopeNotice: recordingSession.systemAudioScopeNotice
     )
   }
 
@@ -131,6 +132,35 @@ extension MainWorkspaceView {
       languageMismatchBanner
     case "low-recognition":
       lowRecognitionBanner
+    case "system-scope-fallback":
+      NoticeShell(
+        level: .info, systemImage: "speaker.wave.2",
+        text: "已改为录制全部系统声音"
+      ) { EmptyView() }
+      .runtimeAccessibilityIdentifier("cockpit.system-scope.fallback")
+    case "system-scope-silent":
+      if case .silentTap(let name) = recordingSession.systemAudioScopeNotice {
+        NoticeShell(
+          level: .warn, systemImage: "exclamationmark.triangle.fill",
+          text: "没有录到「\(name)」的声音，对方的声音可能不是从它播放的"
+        ) {
+          Button("改录全部系统声音") {
+            Task { await recordingSession.switchSystemAudioToGlobal() }
+          }
+          .buttonStyle(.textAction)
+          .font(Tokens.V1.Text.label.font)
+          .fontWeight(.semibold)
+          .foregroundStyle(Tokens.V1.Color.warn)
+          .runtimeAccessibilityIdentifier("cockpit.system-scope.switch")
+        }
+        .runtimeAccessibilityIdentifier("cockpit.system-scope.silent")
+      }
+    case "system-scope-failed":
+      NoticeShell(
+        level: .warn, systemImage: "exclamationmark.triangle.fill",
+        text: "系统声音可能没有录上，已重试仍未恢复"
+      ) { EmptyView() }
+      .runtimeAccessibilityIdentifier("cockpit.system-scope.failed")
     case "partial-capture":
       partialCaptureBanner
     case "post-meeting":

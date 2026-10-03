@@ -54,12 +54,22 @@ public struct CaptureLossStats: Codable, Equatable, Sendable {
   public var droppedByOverload: UInt64
   public var droppedOutOfOrder: UInt64
   public var asrFedFrames: UInt64
+  /// Session-level delivery accounting; nil in older/direct-capture diagnostics.
+  public var asrPendingFrames: UInt64?
+  public var asrRejectedFrames: UInt64?
   public var asrSkippedFrames: UInt64
   public var asrAnchorGapFrames: UInt64?
   /// 会中实时转写发射统计(可选:旧会议与无速记会议为 nil)。
   public var livePartialsEmitted: UInt64?
   public var livePartialsSkipped: UInt64?
   public var liveFinalsEmitted: UInt64?
+  /// Largest amount the file cursor leads a block's expected position, in PCM frames.
+  /// Nil when no early offset was observed, and in older recordings.
+  public var writerMaxEarlyFrames: UInt64?
+  /// Actual zero PCM inserted for leading/small file alignment, separate from real losses.
+  /// Optional for recordings made before alignment diagnostics existed.
+  public var alignmentPadFrames: UInt64?
+  public var alignmentPadCount: UInt64?
 
   public init(
     capturedFrames: UInt64 = 0,
@@ -69,11 +79,16 @@ public struct CaptureLossStats: Codable, Equatable, Sendable {
     droppedByOverload: UInt64 = 0,
     droppedOutOfOrder: UInt64 = 0,
     asrFedFrames: UInt64 = 0,
+    asrPendingFrames: UInt64? = nil,
+    asrRejectedFrames: UInt64? = nil,
     asrSkippedFrames: UInt64 = 0,
     asrAnchorGapFrames: UInt64? = nil,
     livePartialsEmitted: UInt64? = nil,
     livePartialsSkipped: UInt64? = nil,
-    liveFinalsEmitted: UInt64? = nil
+    liveFinalsEmitted: UInt64? = nil,
+    writerMaxEarlyFrames: UInt64? = nil,
+    alignmentPadFrames: UInt64? = nil,
+    alignmentPadCount: UInt64? = nil
   ) {
     self.capturedFrames = capturedFrames
     self.writtenFrames = writtenFrames
@@ -82,11 +97,16 @@ public struct CaptureLossStats: Codable, Equatable, Sendable {
     self.droppedByOverload = droppedByOverload
     self.droppedOutOfOrder = droppedOutOfOrder
     self.asrFedFrames = asrFedFrames
+    self.asrPendingFrames = asrPendingFrames
+    self.asrRejectedFrames = asrRejectedFrames
     self.asrSkippedFrames = asrSkippedFrames
     self.asrAnchorGapFrames = asrAnchorGapFrames
     self.livePartialsEmitted = livePartialsEmitted
     self.livePartialsSkipped = livePartialsSkipped
     self.liveFinalsEmitted = liveFinalsEmitted
+    self.writerMaxEarlyFrames = writerMaxEarlyFrames
+    self.alignmentPadFrames = alignmentPadFrames
+    self.alignmentPadCount = alignmentPadCount
   }
 
   var logDescription: String {
@@ -95,16 +115,22 @@ public struct CaptureLossStats: Codable, Equatable, Sendable {
       + "droppedByOverload=\(droppedByOverload) "
       + "droppedOutOfOrder=\(droppedOutOfOrder) asrFedFrames=\(asrFedFrames) "
       + "asrSkippedFrames=\(asrSkippedFrames)"
+      + " writerMaxEarlyFrames=\(writerMaxEarlyFrames ?? 0)"
+      + " alignmentPadFrames=\(alignmentPadFrames ?? 0) alignmentPadCount=\(alignmentPadCount ?? 0)"
   }
 }
 
 final class CaptureLossStatsBox: @unchecked Sendable {
   private let lock = NSLock()
   private var stats = CaptureLossStats()
+  // IO may run ahead of the processing queue. Only losses before an accepted block's
+  // capture frame can credit its padding. RangeSet coalesces consecutive layout drops.
+  private var pendingInputGapFrames = RangeSet<Int64>()
 
   func reset() {
     lock.lock()
     stats = CaptureLossStats()
+    pendingInputGapFrames = RangeSet()
     lock.unlock()
   }
 
@@ -122,8 +148,52 @@ final class CaptureLossStatsBox: @unchecked Sendable {
     mutate { $0.writtenFrames += count }
   }
 
-  func recordGapFrames(_ count: UInt64) {
-    mutate { $0.gapFrames += count }
+  func recordInputGapFrames(_ count: UInt64, startingAt frame: Int64) {
+    lock.lock()
+    defer { lock.unlock() }
+    stats.gapFrames += count
+    let (end, overflowed) = frame.addingReportingOverflow(Int64(count))
+    if !overflowed, count > 0 {
+      pendingInputGapFrames.insert(contentsOf: frame..<end)
+    }
+  }
+
+  func recordWriterPadding(
+    _ count: UInt64, before frame: Int64, uncorrectedLateFrames: UInt64, isAlignment: Bool
+  ) {
+    lock.lock()
+    defer { lock.unlock() }
+    var eligible: UInt64 = 0
+    for range in pendingInputGapFrames.ranges {
+      let end = min(range.upperBound, frame)
+      guard range.lowerBound < end else { break }
+      eligible += UInt64(end - range.lowerBound)
+    }
+    let alreadyCounted = min(count, eligible)
+    // Accepted early/short-timestamp blocks can catch the cursor up without padding.
+    // Keep the loss statistic, but retire credits no longer present in its residual.
+    var toRemove = count > 0 ? eligible : eligible - min(eligible, uncorrectedLateFrames)
+    // Consume prior losses even for small alignment pads: a delayed correction need
+    // not overlap the original lost interval, but must not credit a future IO drop.
+    for range in pendingInputGapFrames.ranges {
+      let end = min(range.upperBound, frame)
+      guard range.lowerBound < end, toRemove > 0 else { break }
+      let credit = min(toRemove, UInt64(end - range.lowerBound))
+      pendingInputGapFrames.remove(
+        contentsOf: range.lowerBound..<(range.lowerBound + Int64(credit)))
+      toRemove -= credit
+    }
+    if count > 0, isAlignment {
+      stats.alignmentPadFrames = (stats.alignmentPadFrames ?? 0) + count
+      stats.alignmentPadCount = (stats.alignmentPadCount ?? 0) + 1
+    } else {
+      // Layout loss was already counted in IO, including losses never recovered at stop.
+      stats.gapFrames += count - alreadyCounted
+    }
+  }
+
+  func recordWriterEarlyFrames(_ count: UInt64) {
+    mutate { $0.writerMaxEarlyFrames = max($0.writerMaxEarlyFrames ?? 0, count) }
   }
 
   func recordBackpressureDrop() {
@@ -208,6 +278,12 @@ final class BoundedCaptureProcessingQueue: @unchecked Sendable {
     }
   }
 
+  /// Physical capture owner calls after retiring admission, before replacing a
+  /// route. Never called by processing work; keeps this queue accepting after rebuild.
+  func drainAcceptedForRouteChange() {
+    queue.sync {}
+  }
+
   func cancel() {
     lock.lock()
     isAccepting = false
@@ -245,6 +321,9 @@ public protocol SystemAudioCapturing: AnyObject, Sendable {
   /// **writer/处理队列/统计保持不动**,新样本仍按 session epoch 锚定。
   /// 由会话层健康监测驱动;不支持自愈的实现走默认抛错,由重试上限兜底。
   func rebuild() async throws
+  /// 带新的 pid 集合重建系统声 tap（nil = 全局）。按 App 录制中扩集与回退全局用；
+  /// 不支持的实现走默认抛错。语义同 `rebuild()`，失败不得留下新集合。
+  func rebuild(processIDs: [pid_t]?) async throws
 }
 
 /// 麦克风启动子阶段(08-20 失败可自证单;design §2.1 已拍板方案 A:启动契约不变,
@@ -426,6 +505,9 @@ public protocol MicrophoneAudioCapturing: AnyObject, Sendable {
   /// 启动超时后同步让当前 start 世代失效，并把半启动资源收尾排到后台。
   /// 不能只依赖 Task.cancel：AVCaptureSession.startRunning 可能长期不响应取消。
   func cancelPendingStart()
+  /// After cancelPendingStart retires admission, drain accepted local processing
+  /// without waiting for HAL/captureQueue teardown. ASR must stay alive until return.
+  func drainCancelledStartAudio() async
   /// 只暂停麦克风内容：采集时钟继续推进，母带写等长静音，实时 ASR 不收该区间。
   /// `captureTime` 与 `bufferHandler` 的会议时间轴同轴。
   func setPaused(_ paused: Bool, at captureTime: TimeInterval)
@@ -519,6 +601,10 @@ extension SystemAudioCapturing {
   }
 
   public func rebuild() async throws {
+    throw AudioCaptureError.audioWriteFailed("该系统音频采集实现不支持在线重建")
+  }
+
+  public func rebuild(processIDs: [pid_t]?) async throws {
     throw AudioCaptureError.audioWriteFailed("该系统音频采集实现不支持在线重建")
   }
 }

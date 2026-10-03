@@ -169,13 +169,54 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
     logger.notice("系统音频采集管线已重建（tap/聚合设备/IO 回调）")
   }
 
+  /// 带着新的 pid 集合重建（按 App 录制中扩集、回退全局用）。只在重建成功后才保留新集合，
+  /// 按进程重建失败则回滚（之后健康看门狗的重建仍用旧集合，不会被一个坏集合反复卡住）；全局重建失败不回滚。
+  /// 与 `rebuild()` 同一个互斥约束：由会话层保证同一时刻只有一个物理重建。
+  public func rebuild(processIDs: [pid_t]?) async throws {
+    guard isRunning, let configuration = startConfiguration else {
+      throw AudioCaptureError.audioWriteFailed("系统音频采集未在运行，无法重建")
+    }
+    let previous = configuration.processIDs
+    startConfiguration?.processIDs = processIDs
+    do {
+      try await rebuild()
+      logger.notice(
+        "系统音频改为\((processIDs ?? []).isEmpty ? "全局" : "按进程（\(processIDs?.count ?? 0) 个）", privacy: .public)"
+      )
+    } catch {
+      // 按进程的重建失败才回滚（避免被一个坏 pid 集合卡住）。全局重建失败保留全局意图：
+      // 之后健康看门狗的重建直接按全局来，不会退回已经失效的旧按进程集合而丢掉对方的声音。
+      if processIDs != nil { startConfiguration?.processIDs = previous }
+      throw error
+    }
+  }
+
+  /// pid 转进程对象。已经退出的进程（枚举到建 tap 之间消失，或老集合里的旧 pid）跳过，
+  /// 只有一个都翻译不出来才抛错，由会话层回退全局。
+  private static func resolveProcessObjects(
+    _ processIDs: [pid_t], logger: Logger
+  ) throws -> [AudioObjectID] {
+    var objects: [AudioObjectID] = []
+    var firstError: Error?
+    for pid in processIDs {
+      do {
+        objects.append(try processObjectID(for: pid))
+      } catch {
+        firstError = firstError ?? error
+        logger.notice("按进程录制：跳过无法翻译的进程 \(pid, privacy: .public)")
+      }
+    }
+    if objects.isEmpty, let firstError { throw firstError }
+    return objects
+  }
+
   /// tap + 聚合设备 + 降混计划(start 与 rebuild 共用)。tap format 只作为
   /// 选择提示；聚合设备建立后立即读取实际 selected stream 的完整 VirtualFormat，
   /// 并让该格式贯穿 plan、PCM 包装、降混与初始 writer。
   private func createTapAndAggregateDevice(
     processIDs: [pid_t]?
   ) throws -> CoreAudioPipelinePlan {
-    let processObjectIDs = try (processIDs ?? []).map(Self.processObjectID(for:))
+    let processObjectIDs = try Self.resolveProcessObjects(processIDs ?? [], logger: logger)
     let tapDescription =
       if processObjectIDs.isEmpty {
         CATapDescription(stereoGlobalTapButExcludeProcesses: [])
@@ -292,12 +333,17 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       let source = UnsafeMutableAudioBufferListPointer(
         UnsafeMutablePointer(mutating: inputData)
       )
+      let captureTime = AudioCaptureClock.secondsSinceEpoch(
+        hostTime: inputTime.pointee.mHostTime,
+        epochHostTime: sessionEpochHostTime
+      )
       // No Core Audio property query or channel-only fallback in the callback.
       // Admission and PCM copying consume this activation's monitored layout.
       guard let rawBuffer = inputState.makeOwned(from: inputData) else {
         Self.recordDroppedInputFrames(
           source: source,
           format: format,
+          captureTime: captureTime,
           lossStatsBox: lossStatsBox
         )
         if layoutMismatchLog.mark() {
@@ -309,10 +355,6 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
 
       let frameCount = UInt64(rawBuffer.frameLength)
       lossStatsBox.recordCapturedFrames(frameCount)
-      let captureTime = AudioCaptureClock.secondsSinceEpoch(
-        hostTime: inputTime.pointee.mHostTime,
-        epochHostTime: sessionEpochHostTime
-      )
       let ticket = handoff.stage(rawBuffer)
       let accepted = processingQueue.submit(frameCount: frameCount) {
         guard let rawBuffer = handoff.take(ticket) else {
@@ -791,13 +833,14 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       try await writer.finish()
     } else {
       processingQueue?.cancel()
-      writer.cancel()
+      await writer.cancelAndWait()
     }
   }
 
   private static func recordDroppedInputFrames(
     source: UnsafeMutableAudioBufferListPointer,
     format: AVAudioFormat,
+    captureTime: TimeInterval,
     lossStatsBox: CaptureLossStatsBox
   ) {
     let bytesPerFrame = format.streamDescription.pointee.mBytesPerFrame
@@ -805,9 +848,24 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       return
     }
     let frames = UInt64(first.mDataByteSize / bytesPerFrame)
-    if frames > 0 {
-      lossStatsBox.recordGapFrames(frames)
+    let frame = (captureTime * format.sampleRate).rounded()
+    if frames > 0, frame.isFinite, frame > Double(Int64.min), frame < Double(Int64.max) {
+      lossStatsBox.recordInputGapFrames(frames, startingAt: Int64(frame))
     }
+  }
+
+  /// Uses the IO callback's loss-accounting path without creating audio devices.
+  @_spi(Verification) public static func recordVerificationDroppedInputFrames(
+    _ buffer: AVAudioPCMBuffer,
+    at captureTime: TimeInterval,
+    writer: IncrementalM4AWriter
+  ) {
+    recordDroppedInputFrames(
+      source: UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList),
+      format: buffer.format,
+      captureTime: captureTime,
+      lossStatsBox: writer.lossStatsBox
+    )
   }
 
   private static func processObjectID(for processID: pid_t) throws -> AudioObjectID {

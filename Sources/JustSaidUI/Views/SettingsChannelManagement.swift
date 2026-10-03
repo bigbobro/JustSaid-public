@@ -74,11 +74,13 @@ struct ChannelManagementCard: View {
       titleVisibility: .visible, presenting: deletionCandidate
     ) { channel in
       Button("删除", role: .destructive) {
-        do {
-          try settingsStore.deleteChannel(id: channel.id)
-          deletionError = nil
-        } catch {
-          deletionError = error.localizedDescription
+        Task { @MainActor in
+          do {
+            try await settingsStore.deleteChannel(id: channel.id)
+            deletionError = nil
+          } catch {
+            deletionError = error.localizedDescription
+          }
         }
         deletionCandidate = nil
       }
@@ -115,7 +117,11 @@ struct ChannelManagementCard: View {
               .runtimeAccessibilityIdentifier(
                 "settings.channel.purpose.\(channel.id).\(purpose.kind.rawValue)")
           }
-          if descriptor?.requiresAPIKey == true {
+          if descriptor?.authentication == .chatGPTAccount {
+            Text("ChatGPT 账户")
+              .font(Tokens.V1.Text.meta.font)
+              .foregroundStyle(Tokens.V1.Color.ink3)
+          } else if descriptor?.requiresAPIKey == true {
             SettingsKeyBadge(suffix: secretDigest.suffix(slot: .apiKey, forChannel: channel))
               .fixedSize()
           }

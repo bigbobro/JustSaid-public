@@ -1,24 +1,17 @@
 import Foundation
 
 public enum TodoDueChoiceReason: String, Equatable, Sendable {
-  /// 「…前」是否把当天算进去。
-  case inclusiveBoundary
   /// 「三天内」这一类是否把参照日当天算进去。
   case withinIncludesReferenceDay
   /// 没写年份，参照日之前的月日可能是今年或明年。
   case missingYear
-  case boundaryAndYear
 
   public var detail: String {
     switch self {
-    case .inclusiveBoundary:
-      return "「前」是否包含当天还没确定"
     case .withinIncludesReferenceDay:
       return "「以内」是否包含当天还没确定"
     case .missingYear:
       return "没写年份，可能是今年或明年"
-    case .boundaryAndYear:
-      return "「前」和年份都还没确定"
     }
   }
 }
@@ -155,10 +148,9 @@ public enum TodoDueInterpreter {
     if compact.isEmpty || isHourLevel(compact) || vague.contains(compact) {
       return .unresolved
     }
-    let (core, hasBoundary) = strippingBoundary(compact)
-    let resolved = interpretCore(core, referenceDay: referenceDay, timeZone: timeZone)
-    guard hasBoundary else { return resolved }
-    return applyingBoundary(resolved, timeZone: timeZone)
+    // 「X 前」按 X 当天截止（2026-10-03 owner），边界本身就是确定的那一天。
+    let core = strippingBoundary(compact)
+    return interpretCore(core, referenceDay: referenceDay, timeZone: timeZone)
   }
 
   public static func isBeforeReference(
@@ -179,12 +171,12 @@ public enum TodoDueInterpreter {
     return text.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) != nil
   }
 
-  private static func strippingBoundary(_ text: String) -> (String, Bool) {
+  private static func strippingBoundary(_ text: String) -> String {
     for suffix in ["之前", "以前", "前"] where text.hasSuffix(suffix) && text.count > suffix.count {
       let base = String(text.dropLast(suffix.count))
-      if !base.isEmpty { return (base, true) }
+      if !base.isEmpty { return base }
     }
-    return (text, false)
+    return text
   }
 
   private static func interpretCore(
@@ -225,8 +217,8 @@ public enum TodoDueInterpreter {
     if let token = captures(#"(?:下周|下星期|下礼拜)([一二三四五六日天])"#, text)?.first {
       return weekday(token, nextWeek: true, referenceDay: referenceDay, timeZone: timeZone)
     }
-    if captures(#"(?:周|星期|礼拜)([一二三四五六日天])"#, text) != nil {
-      return .unresolved
+    if let token = captures(#"(?:周|星期|礼拜)([一二三四五六日天])"#, text)?.first {
+      return upcomingWeekday(token, referenceDay: referenceDay, timeZone: timeZone)
     }
     if let token = captures(#"(\d+|[一二两三四五六七八九十])天内"#, text)?.first {
       return within(token, referenceDay: referenceDay, timeZone: timeZone)
@@ -267,6 +259,20 @@ public enum TodoDueInterpreter {
       let offset = weekdayOffset(token)
     else { return .unresolved }
     return shift((nextWeek ? 7 : 0) + offset, from: monday, timeZone: timeZone)
+  }
+
+  /// 裸星期几：参照日当天或之后最近的那一天（参照日恰是那天就取当天）。
+  private static func upcomingWeekday(
+    _ token: String,
+    referenceDay: String,
+    timeZone: TimeZone
+  ) -> TodoDueResolution {
+    guard let monday = TodoCalendar.weekStart(containing: referenceDay, timeZone: timeZone),
+      let target = weekdayOffset(token),
+      let elapsed = TodoCalendar.dayCount(from: monday, to: referenceDay)
+    else { return .unresolved }
+    let ahead = target >= elapsed ? target - elapsed : target + 7 - elapsed
+    return shift(ahead, from: referenceDay, timeZone: timeZone)
   }
 
   private static func weekdayOffset(_ token: String) -> Int? {
@@ -369,40 +375,8 @@ public enum TodoDueInterpreter {
     return .day(makeDay(shifted, timeZone))
   }
 
-  private static func applyingBoundary(
-    _ resolution: TodoDueResolution,
-    timeZone: TimeZone
-  ) -> TodoDueResolution {
-    switch resolution {
-    case .day(let day):
-      guard let previous = TodoCalendar.addingDays(-1, to: day.day, timeZone: timeZone) else {
-        return .unresolved
-      }
-      return .choose([makeDay(previous, timeZone), day], .inclusiveBoundary)
-    case .choose(let days, let reason):
-      var options: [TodoDay] = []
-      for day in days {
-        if let previous = TodoCalendar.addingDays(-1, to: day.day, timeZone: timeZone) {
-          options.append(makeDay(previous, timeZone))
-        }
-        options.append(day)
-      }
-      let unique = dedupe(options)
-      guard !unique.isEmpty else { return .unresolved }
-      let combined: TodoDueChoiceReason = reason == .missingYear ? .boundaryAndYear : reason
-      return .choose(unique, combined)
-    case .unresolved:
-      return .unresolved
-    }
-  }
-
   private static func makeDay(_ day: String, _ timeZone: TimeZone) -> TodoDay {
     TodoDay(day: day, timeZoneIdentifier: timeZone.identifier)
-  }
-
-  private static func dedupe(_ days: [TodoDay]) -> [TodoDay] {
-    var seen: Set<String> = []
-    return days.filter { seen.insert($0.day).inserted }.sorted { $0.day < $1.day }
   }
 
   private static func captures(_ pattern: String, _ text: String) -> [String]? {

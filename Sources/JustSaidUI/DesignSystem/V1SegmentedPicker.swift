@@ -72,14 +72,24 @@ public struct V1SegmentedPicker<Value: Hashable>: View {
     return Button {
       selection = option.value
     } label: {
+      // 每一格都按加粗后的字宽占位,看得见的字叠在上面:选中只换字重和颜色,不改布局。
+      // 原来直接给字换字重,选中「Auto」比不选宽 1 点,整组跟着变宽,首页左边的
+      // 「语言」标签一起挪(owner 2026-10-03,build 1169)。
       Text(option.title)
-        .font(
-          .system(
-            size: textSize,
-            weight: selected ? .semibold : .medium)
-        )
-        .foregroundStyle(selected ? selectedInk : Tokens.V1.Color.ink2)
+        .font(.system(size: textSize, weight: .semibold))
         .lineLimit(1)
+        .hidden()
+        .accessibilityHidden(true)
+        .overlay {
+          Text(option.title)
+            .font(
+              .system(
+                size: textSize,
+                weight: selected ? .semibold : .medium)
+            )
+            .foregroundStyle(selected ? selectedInk : Tokens.V1.Color.ink2)
+            .lineLimit(1)
+        }
         .padding(.horizontal, fills ? Tokens.V1.Space.xs : Tokens.V1.Space.sm)
         .frame(maxWidth: fills ? .infinity : nil)
         .frame(height: segmentHeight)
@@ -96,6 +106,8 @@ public struct V1SegmentedPicker<Value: Hashable>: View {
         .contentShape(RoundedRectangle(cornerRadius: Tokens.V1.Radius.xs))
     }
     .buttonStyle(.plain)
+    // 标签里有一份隐藏的占位字和一份看得见的字,无障碍名直接写死成选项名,只读一次。
+    .accessibilityLabel(option.title)
     .disabled(!optionEnabled(option.value))
     .modifier(SegmentHelp(text: optionHelp(option.value)))
     .accessibilityAddTraits(selected ? [.isSelected] : [])

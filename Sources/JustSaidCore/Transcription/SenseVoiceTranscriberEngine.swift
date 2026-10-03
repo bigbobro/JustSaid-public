@@ -35,6 +35,7 @@ public final class SenseVoiceTranscriberEngine: TranscriberEngine,
   private var configuredLanguageTokenStorage: String?
 
   public var results: AsyncStream<TranscriptSegment> { runtime.results }
+  public var usesCaptureTime: Bool { true }
 
   public var decodeObservations: AsyncStream<LiveDecodeObservation> {
     runtime.decodeObservations

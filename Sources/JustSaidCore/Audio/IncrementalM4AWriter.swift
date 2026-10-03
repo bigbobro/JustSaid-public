@@ -2,6 +2,7 @@ import AVFAudio
 import AVFoundation
 import CoreMedia
 import Foundation
+import OSLog
 
 public enum IncrementalM4AWriterError: LocalizedError, Sendable {
   case outputAlreadyExists(URL)
@@ -46,6 +47,8 @@ public final class IncrementalM4AWriter: @unchecked Sendable {
   private typealias FinishContinuation = CheckedContinuation<Void, Error>
 
   public static let gapThresholdSeconds: TimeInterval = 0.25
+  /// File alignment tolerance; live ASR keeps its separate 250 ms gap policy.
+  private static let alignmentToleranceSeconds: TimeInterval = 0.02
 
   /// 系统 AAC-LC 编码器对低采样率有码率上限,超限时 `startWriting()` 直接失败
   /// 「无法编码媒体」(2026-08-18 AirPods Pro 麦克风 24kHz 单声道 × 128kbps 实录事故)。
@@ -67,14 +70,18 @@ public final class IncrementalM4AWriter: @unchecked Sendable {
   private let formatDescription: CMAudioFormatDescription
   private let sampleTimeScale: CMTimeScale
   private let gapThresholdFrames: CMTimeValue
+  private let alignmentToleranceFrames: CMTimeValue
   private let assetWriter: AVAssetWriter
   private let assetWriterInput: AVAssetWriterInput
   private let writerQueue: DispatchQueue
   private let stateLock = NSLock()
-  private let lossStatsBox: CaptureLossStatsBox
+  let lossStatsBox: CaptureLossStatsBox
+  private let logger = Logger(subsystem: "com.justsaid.app", category: "IncrementalM4AWriter")
 
   private var state = State.writing
   private var nextSampleFrame: CMTimeValue = 0
+  private var previousAcceptedBlockWasLate = false
+  private var lastAlignmentLogUptime: TimeInterval?
   private var queuedBufferCount = 0
   private var terminalError: Error?
   /// Guarded by `stateLock`; filled in PTS order by `append` and moved to the writer queue
@@ -200,6 +207,9 @@ public final class IncrementalM4AWriter: @unchecked Sendable {
     gapThresholdFrames = CMTimeValue(
       (Self.gapThresholdSeconds * roundedSampleRate).rounded()
     )
+    alignmentToleranceFrames = CMTimeValue(
+      (Self.alignmentToleranceSeconds * roundedSampleRate).rounded()
+    )
     assetWriter = writer
     assetWriterInput = writerInput
     self.lossStatsBox = lossStatsBox
@@ -252,9 +262,17 @@ public final class IncrementalM4AWriter: @unchecked Sendable {
       return
     }
 
-    let gapFrames = frameDelta > gapThresholdFrames ? frameDelta : 0
+    // This delta already carries the uncorrected offset across preceding blocks;
+    // summing it again would count the same residual repeatedly. The first accepted
+    // block must anchor to epoch even when its positive offset is below tolerance.
+    let isFirstBlock = nextSampleFrame == 0
+    let isLate = frameDelta > alignmentToleranceFrames
+    let isLargeGap = frameDelta > gapThresholdFrames
+    let paddingFrames =
+      frameDelta > 0 && (isFirstBlock || isLargeGap || (isLate && previousAcceptedBlockWasLate))
+      ? frameDelta : 0
     let silenceBufferCount = Self.silenceBufferCount(
-      frameCount: gapFrames,
+      frameCount: paddingFrames,
       sampleRate: sampleTimeScale
     )
     let buffersToQueue = silenceBufferCount + 1
@@ -267,14 +285,14 @@ public final class IncrementalM4AWriter: @unchecked Sendable {
     }
 
     let frameCount = CMTimeValue(buffer.frameLength)
-    let presentationFrame = gapFrames > 0 ? expectedFrame : nextSampleFrame
+    let presentationFrame = paddingFrames > 0 ? expectedFrame : nextSampleFrame
     let (nextFrame, overflowed) = presentationFrame.addingReportingOverflow(frameCount)
     guard !overflowed else {
       throw IncrementalM4AWriterError.invalidState("音频时间轴溢出")
     }
 
     var sampleBuffers = try makeSilenceSampleBuffers(
-      frameCount: gapFrames,
+      frameCount: paddingFrames,
       presentationFrame: nextSampleFrame
     )
     let sampleBuffer = try makeCopiedSampleBuffer(
@@ -283,9 +301,28 @@ public final class IncrementalM4AWriter: @unchecked Sendable {
     )
     sampleBuffers.append(sampleBuffer)
     nextSampleFrame = nextFrame
+    // Only successfully admitted blocks participate in the two-block confirmation.
+    previousAcceptedBlockWasLate = paddingFrames == 0 && isLate
     queuedBufferCount += sampleBuffers.count
     lossStatsBox.recordWrittenFrames(UInt64(buffer.frameLength))
-    lossStatsBox.recordGapFrames(UInt64(gapFrames))
+    if frameDelta < 0 {
+      // Accepted PCM is never trimmed or rewritten; rejected old blocks do not
+      // represent a file-alignment error and must not inflate this observation.
+      lossStatsBox.recordWriterEarlyFrames(UInt64(frameDelta.magnitude))
+    }
+    let isAlignment = !isLargeGap
+    lossStatsBox.recordWriterPadding(
+      UInt64(paddingFrames), before: expectedFrame,
+      uncorrectedLateFrames: UInt64(max(0, frameDelta)), isAlignment: isAlignment)
+    if paddingFrames > 0, isAlignment {
+      let uptime = ProcessInfo.processInfo.systemUptime
+      if lastAlignmentLogUptime.map({ uptime - $0 >= 60 }) ?? true {
+        lastAlignmentLogUptime = uptime
+        logger.notice(
+          "文件对齐补零：frames=\(paddingFrames, privacy: .public) captureTime=\(captureTime, privacy: .public) sampleRate=\(self.sampleTimeScale, privacy: .public)"
+        )
+      }
+    }
 
     // Stage while holding stateLock so buffers keep the same order as their PTS; the
     // writer-queue job takes the staged batch under the same lock.
@@ -314,6 +351,16 @@ public final class IncrementalM4AWriter: @unchecked Sendable {
         continuation.resume(throwing: IncrementalM4AWriterError.cancelled)
       }
       stateLock.unlock()
+    }
+  }
+
+  /// 取消并等到写队列上的清理（含删除输出文件）执行完。启动失败后立刻在同一路径重开
+  /// （按 App 录制回退全局）时，必须先等旧文件删掉，否则新 writer 会撞上 `outputAlreadyExists`，
+  /// 或者旧的异步删除把新文件删了。
+  public func cancelAndWait() async {
+    cancel()
+    await withCheckedContinuation { continuation in
+      writerQueue.async { continuation.resume() }
     }
   }
 

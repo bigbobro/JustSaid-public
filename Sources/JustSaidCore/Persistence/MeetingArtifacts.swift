@@ -10,6 +10,8 @@ public struct MeetingSummarySnapshot: Identifiable, Equatable, Sendable {
   public let content: String
   /// 同名 JSON sidecar 里的无损类型化卡片；旧会议只有 Markdown 时为 nil。
   public let structuredTopics: [SummaryTopic]?
+  /// nil 表示没有可解码的 sidecar；v2 起每份都是完整话题快照。
+  public let version: Int?
   public let actionItems: [SummaryActionItem]
 
   public init(
@@ -18,13 +20,15 @@ public struct MeetingSummarySnapshot: Identifiable, Equatable, Sendable {
     label: String,
     content: String,
     structuredTopics: [SummaryTopic]? = nil,
-    actionItems: [SummaryActionItem] = []
+    actionItems: [SummaryActionItem] = [],
+    version: Int? = nil
   ) {
     self.id = id
     self.sequence = sequence
     self.label = label
     self.content = content
     self.structuredTopics = structuredTopics
+    self.version = version
     self.actionItems = actionItems
   }
 
@@ -189,7 +193,8 @@ public struct MeetingArtifacts: Sendable {
             sequence: sequence, timeToken: parts.count > 1 ? String(parts[1]) : ""),
           content: content,
           structuredTopics: sidecar?.topics,
-          actionItems: sidecar?.actionItems ?? []
+          actionItems: sidecar?.actionItems ?? [],
+          version: sidecar?.version
         )
       }
       .sorted { $0.sequence < $1.sequence }

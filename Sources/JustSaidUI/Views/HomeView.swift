@@ -160,6 +160,7 @@ struct HomeView<Notices: View>: View {
         artwork: HomeEntryArtwork.image, alignment: .topLeading, darkWash: Tokens.V1.Color.accent)
     }
     .modifier(EntryCardFrame())
+    .runtimeAccessibilityIdentifier("home.start-card", tracksHitRegion: true)
   }
 
   /// 右卡:找以前的会,或者把一段录音导进来。搜索在上,「或」之下是放录音的虚线框,一直撑到卡底。
@@ -190,6 +191,7 @@ struct HomeView<Notices: View>: View {
       entryBackground(artwork: HomeEntryArtwork.findImage, alignment: .center, darkWash: nil)
     }
     .modifier(EntryCardFrame())
+    .runtimeAccessibilityIdentifier("home.find-card", tracksHitRegion: true)
   }
 
   /// 卡面:浅色下铺背景图(设计系统「主入口」档,全应用只有首页这两张卡用图),深色退回纯
@@ -211,6 +213,9 @@ struct HomeView<Notices: View>: View {
           Image(nsImage: artwork)
             .resizable()
             .scaledToFill()
+            .runtimeAccessibilityIdentifier(
+              alignment == .center ? "home.find-artwork" : "home.start-artwork"
+            )
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: alignment)
             .clipped()
         }
@@ -218,6 +223,9 @@ struct HomeView<Notices: View>: View {
       }
     }
     .clipShape(shape)
+    // scaledToFill 的图片命中范围会伸出裁切后的卡面,右卡曾因此挡住左卡的「英」。
+    // 背景只作装饰;EntryCardFrame 用卡面大小的 contentShape 承接空白区与外层拖放。
+    .allowsHitTesting(false)
   }
 
   /// 闲时左卡:开会表单,标签在左。客户、项目挪到开会前填——开会前你恰恰知道
@@ -265,6 +273,7 @@ struct HomeView<Notices: View>: View {
           // 行内标签只写「语言」:挨着「Auto / 中 / 英」不会有歧义,省下的两个字
           // 让给左边的设备名。控件自己的无障碍名仍是「说话语言」。
           formLabel("语言")
+            .runtimeAccessibilityIdentifier("home.language-label")
           // 摊成分段比下拉好:当前值与可选值一眼同时可见,改一次只要一次点击。
           // 用词全应用统一为 Auto / 中 / 英(owner 2026-09-21 定,和驾驶舱顶栏同一套)。
           // 选中那一格白底加一圈墨青边、墨青字,和旁边的输入框同高(参考稿)。
@@ -272,11 +281,14 @@ struct HomeView<Notices: View>: View {
             "说话语言", selection: $language,
             options: [.init(.auto, "Auto"), .init(.chinese, "中"), .init(.english, "英")],
             style: .accentOutline,
-            segmentHeight: Tokens.V1.Size.homeField - Tokens.V1.Space.s2xs
+            segmentHeight: Tokens.V1.Size.homeField - Tokens.V1.Space.s2xs,
+            optionIdentifier: { "home.language.\($0.rawValue)" }
           )
           .fixedSize()
           .disabled(session.phase.isBusy)
+          .runtimeAccessibilityIdentifier("home.language")
         }
+        .runtimeAccessibilityIdentifier("home.language-row")
         nameAlertBox
       }
     }
@@ -701,6 +713,8 @@ struct HomeView<Notices: View>: View {
 private struct EntryCardFrame: ViewModifier {
   func body(content: Content) -> some View {
     content
+      // 恢复内边距与行间空白的交互,命中区域仍严格限于卡面,不随背景图片向外扩张。
+      .contentShape(RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg))
       .overlay(
         RoundedRectangle(cornerRadius: Tokens.V1.Radius.lg)
           .strokeBorder(Tokens.V1.Color.rule, lineWidth: Tokens.V1.Size.controlRuleWidth)

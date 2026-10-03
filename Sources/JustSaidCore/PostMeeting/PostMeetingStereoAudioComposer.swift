@@ -1,4 +1,4 @@
-import AVFAudio
+import AVFoundation
 import Foundation
 
 enum PostMeetingStereoAudioComposerError: LocalizedError {
@@ -15,10 +15,11 @@ enum PostMeetingStereoAudioComposerError: LocalizedError {
   }
 }
 
-/// 把两路母带先压成 16 kHz 单声道，再从同一零点离线渲染成 AAC 立体声。
+/// 按配置先生成麦克风 AEC 临时副本，失败改用完整原麦克风；
+/// 再把两路输入压成 16 kHz 单声道，从同一零点合成 AAC 立体声。
 ///
-/// 两个 player 均从 frame 0 开始；离线渲染固定跑到较长轨道的帧数，较短 player 结束后
-/// 引擎自然输出静音。先复用单声道压缩器可确保多声道系统母带完整降混；最终 64 kbps
+/// 两路均从 frame 0 开始，合成到较长轨道的帧数，较短轨道尾部补静音。
+/// 复用单声道压缩器可确保多声道系统母带完整降混；最终 64 kbps
 /// 与旧管线两份 32 kbps 上传副本体积同量级。
 enum PostMeetingStereoAudioComposer {
   private static let sampleRate = 16_000.0
@@ -27,10 +28,35 @@ enum PostMeetingStereoAudioComposer {
 
   static func makeUploadCopy(
     microphoneURL: URL,
-    systemURL: URL
-  ) async throws -> URL {
+    systemURL: URL,
+    echoCancellationEnabled: Bool,
+    makeCanceller: @Sendable () throws -> any AcousticEchoCancelling
+  ) async throws -> (url: URL, echoCancellation: PostMeetingMicrophoneAEC.Report) {
+    var report = PostMeetingMicrophoneAEC.Report()
+    var microphoneInput = microphoneURL
+    let processedURL = try makeOutputURL().deletingPathExtension().appendingPathExtension("caf")
+    defer { try? FileManager.default.removeItem(at: processedURL) }
+    if echoCancellationEnabled {
+      do {
+        try await PostMeetingMicrophoneAEC.makeCopy(
+          microphoneURL: microphoneURL, systemURL: systemURL, outputURL: processedURL,
+          makeCanceller: makeCanceller, report: &report
+        )
+        microphoneInput = processedURL
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        try Task.checkCancellation()
+        // AEC is optional; discard the partial copy and compose from the whole original mic.
+        if !report.state.hasPrefix("fallback:") {
+          let failure = error as NSError
+          report.state = "fallback:aecStepFailed(domain=\(failure.domain),code=\(failure.code))"
+        }
+      }
+    }
+    try Task.checkCancellation()
     let microphoneMono = try await PostMeetingAudioCompressor.makeUploadCopy(
-      of: microphoneURL
+      of: microphoneInput
     )
     let systemMono: URL
     do {
@@ -145,7 +171,7 @@ enum PostMeetingStereoAudioComposer {
         try outputFile.write(from: stereoBuffer)
         writtenFrames += AVAudioFramePosition(frameCount)
       }
-      return outputURL
+      return (outputURL, report)
     } catch {
       try? FileManager.default.removeItem(at: outputURL)
       throw error

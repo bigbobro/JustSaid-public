@@ -583,6 +583,15 @@ public final class MeetingStore: @unchecked Sendable {
     }
   }
 
+  /// 录制中刷新系统声录制范围（开录、扩集、回退时）；只写 `meeting.json`。
+  @discardableResult
+  public func recordSystemAudioScope(
+    _ scope: SystemAudioScopeRecord,
+    at paths: MeetingPaths
+  ) throws -> MeetingMetadata {
+    try mutateMetadata(at: paths) { $0.systemAudioScope = scope }
+  }
+
   /// 新增一段纪要排除区间；只写 `meeting.json`，不触碰权威转写或母带。
   @discardableResult
   public func addExcludedRange(
@@ -1378,6 +1387,7 @@ public final class MeetingStore: @unchecked Sendable {
     _ status: MeetingStatus,
     endedAt: Date?,
     captureLossStats: MeetingCaptureLossStats? = nil,
+    liveEchoCancellation: LiveEchoCancellationStatistics? = nil,
     captureLegFailures: [CaptureLegFailure]? = nil,
     captureInterruptions: [CaptureInterruption]? = nil,
     for record: MeetingRecord
@@ -1387,6 +1397,9 @@ public final class MeetingStore: @unchecked Sendable {
       $0.endedAt = endedAt
       if let captureLossStats {
         $0.captureLossStats = captureLossStats
+      }
+      if let liveEchoCancellation {
+        $0.liveEchoCancellation = liveEchoCancellation
       }
       if let captureLegFailures {
         $0.captureLegFailures = captureLegFailures

@@ -2,10 +2,29 @@ import AppKit
 import JustSaidCore
 import SwiftUI
 
+/// 七种表达方式在部件标题旁的类型徽标。用户看到的是中文短名，取自
+/// `docs/design-system/README.md`「表达方式(七种)」的徽标一行；英文代号只留在内部与导出
+/// (`SummaryVisualization.badgeLabel`)。
+enum SummaryWidgetKind {
+  case steps, table, timeline, tree, nums, chain, flow
+
+  var badgeText: String {
+    switch self {
+    case .steps: return "步骤"
+    case .table: return "表格"
+    case .timeline: return "时间线"
+    case .tree: return "层级"
+    case .nums: return "数字"
+    case .chain: return "因果"
+    case .flow: return "流程"
+    }
+  }
+}
+
 /// E3 三类可视化部件的容器外壳（`.wg`/`.wgh`/`.wgb`）：标题 + 类型徽标 + 内容。
 struct SummaryWidgetContainer<Content: View>: View {
   let title: String
-  let badge: String
+  let kind: SummaryWidgetKind
   @ViewBuilder let content: () -> Content
   @Environment(\.textScale) private var textScale
 
@@ -15,8 +34,11 @@ struct SummaryWidgetContainer<Content: View>: View {
         Text(title)
           .font(.system(size: textScale.size(Tokens.FontSize.secondary), weight: .semibold))
           .foregroundStyle(Tokens.Color.ink2)
-        Text(badge)
-          .font(.system(size: Tokens.FontSize.glyphSmall, design: .monospaced))
+        // 中文短名用设计系统 micro 字阶；原 8.5pt 等宽是给英文代号定的，对中文偏小且等宽无效。
+        Text(kind.badgeText)
+          .font(Tokens.V1.Text.micro.font)
+          .lineLimit(1)
+          .fixedSize()
           .foregroundStyle(Tokens.Color.ink4)
           .padding(.horizontal, Tokens.Spacing.xxs)
           .background(Tokens.Color.card)
@@ -47,7 +69,7 @@ struct StepsWidgetView: View {
   var onJumpToTranscript: ((TimeInterval) -> Void)?
 
   var body: some View {
-    SummaryWidgetContainer(title: title, badge: "steps") {
+    SummaryWidgetContainer(title: title, kind: .steps) {
       if items.count <= 4 {
         // 少量步骤先把卡片等分到所在列；最小详情宽度仍放不下时改为纵向堆叠，
         // 确保窄窗完整展示正文而不是裁切或强迫用户横向寻找下一张卡。
@@ -293,7 +315,7 @@ struct TableWidgetView: View {
   @Environment(\.textScale) private var textScale
 
   var body: some View {
-    SummaryWidgetContainer(title: title, badge: "table") {
+    SummaryWidgetContainer(title: title, kind: .table) {
       Grid(alignment: .leading, horizontalSpacing: 7, verticalSpacing: 0) {
         GridRow {
           ForEach(Array(table.headers.enumerated()), id: \.offset) { _, header in
@@ -350,7 +372,7 @@ struct TimelineWidgetView: View {
   private static let singleRowLimit = 4
 
   var body: some View {
-    SummaryWidgetContainer(title: title, badge: "timeline") {
+    SummaryWidgetContainer(title: title, kind: .timeline) {
       if items.count <= Self.singleRowLimit {
         milestoneTrack
       } else {
@@ -514,7 +536,7 @@ struct TreeWidgetView: View {
   var onJumpToTranscript: ((TimeInterval) -> Void)?
 
   var body: some View {
-    SummaryWidgetContainer(title: title, badge: "tree") {
+    SummaryWidgetContainer(title: title, kind: .tree) {
       VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
         ForEach(roots) { node in
           TreeNodeView(
@@ -596,7 +618,7 @@ struct NumbersWidgetView: View {
   private static let cardMinimumWidth: CGFloat = 120
 
   var body: some View {
-    SummaryWidgetContainer(title: title, badge: "nums") {
+    SummaryWidgetContainer(title: title, kind: .nums) {
       if items.count <= Self.singleRowLimit {
         HStack(alignment: .top, spacing: Tokens.Spacing.xsm) {
           ForEach(items) { item in
@@ -665,7 +687,7 @@ struct ChainWidgetView: View {
   @Environment(\.textScale) private var textScale
 
   var body: some View {
-    SummaryWidgetContainer(title: title, badge: "chain") {
+    SummaryWidgetContainer(title: title, kind: .chain) {
       HorizontalOverflowViewport(identifier: "summary.widget.chain.overflow") {
         HStack(alignment: .center, spacing: Tokens.Spacing.xs) {
           ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -1166,7 +1188,7 @@ struct FlowWidgetView: View {
 
   var body: some View {
     let plan = plan
-    SummaryWidgetContainer(title: title, badge: "flow") {
+    SummaryWidgetContainer(title: title, kind: .flow) {
       // 左通道预留在行区之外：通道数在布局阶段已知，先占宽再画行，
       // 边绘制层的坐标系因此能覆盖通道区。
       HStack(spacing: 0) {
@@ -1564,6 +1586,11 @@ private struct EvidenceBadge: View {
 struct TranscriptAnchorButton: View {
   let anchor: TranscriptAnchor?
   let onJump: ((TimeInterval) -> Void)?
+
+  /// 按钮是否会画出来。调用方要在「按钮」与「文字时间」之间二选一时用它,免得时间两头都没了。
+  static func canRender(_ anchor: TranscriptAnchor?, onJump: ((TimeInterval) -> Void)?) -> Bool {
+    anchor?.seconds != nil && onJump != nil
+  }
 
   var body: some View {
     if let anchor, let seconds = anchor.seconds, let onJump {

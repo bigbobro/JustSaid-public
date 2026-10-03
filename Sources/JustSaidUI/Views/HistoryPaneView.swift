@@ -536,8 +536,8 @@ struct SummaryMarkerBadge: View {
     case .disagreement:
       return (
         label ?? "⚑ 分歧",
-        Tokens.Color.disagreement,
-        Tokens.Color.disagreementSoft
+        Tokens.V1.Color.disagreement,
+        Tokens.V1.Color.disagreementSoft
       )
     case .convergence:
       return (label ?? "✓ 已收敛", Tokens.Color.resolved, Tokens.Color.resolvedSoft)
@@ -684,7 +684,7 @@ struct DisagreementTraceView: View {
     .background(
       disagreement.status == .resolved
         ? Tokens.Color.resolvedSoft
-        : Tokens.Color.disagreementSoft
+        : Tokens.V1.Color.disagreementSoft
     )
     .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.chipLarge))
   }

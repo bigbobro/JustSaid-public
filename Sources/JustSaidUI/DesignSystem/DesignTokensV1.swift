@@ -33,6 +33,9 @@ extension Tokens {
       static let recSoft = SwiftUI.Color(light: 0xffe8e4, dark: 0x3a1d1a)
       static let warn = SwiftUI.Color(light: 0x8a5600, dark: 0xe3b667)
       static let warnSoft = SwiftUI.Color(light: 0xfdefd2, dark: 0x332710)
+      /// 分歧（两方未收敛）：tokens.json 里是 warn / warn-soft 的别名，不借录制红。
+      static let disagreement = warn
+      static let disagreementSoft = warnSoft
       static let danger = SwiftUI.Color(light: 0x934400, dark: 0xf0995b)
       static let ok = SwiftUI.Color(light: 0x307041, dark: 0x7cc58c)
       static let okSoft = SwiftUI.Color(light: 0xe0f5e3, dark: 0x152d1a)
@@ -53,6 +56,9 @@ extension Tokens {
       static let knob = SwiftUI.Color(light: 0xfcfdff, dark: 0xe2e5e8)
       static let tip = SwiftUI.Color(lightRGBA: 0x1c1f_25f5, darkRGBA: 0x2a2e_33f7)
       static let tipInk = SwiftUI.Color(light: 0xebeff2, dark: 0xebeff2)
+      /// 第三方品牌例外:「Continue with ChatGPT」按 OpenAI 批准格式,浅色黑底白字、深色白底黑字。
+      static let chatGPTButton = SwiftUI.Color(light: 0x000000, dark: 0xffffff)
+      static let chatGPTButtonInk = SwiftUI.Color(light: 0xffffff, dark: 0x000000)
     }
 
     enum Space {
@@ -161,6 +167,8 @@ extension Tokens {
       static let homeColAction: CGFloat = 78
       static let rowHome: CGFloat = 44
       static let railIcon: CGFloat = 20
+      /// 「Continue with ChatGPT」按钮里官方标识的边长。
+      static let chatGPTLogo: CGFloat = 16
       /// 轨顶应用图标露出来的圆角方块边长,红绿灯正下方,明显大于导航字形。
       static let railBrand: CGFloat = 32
 
@@ -201,6 +209,7 @@ extension Tokens {
       static let todoPopoverWidth: CGFloat = 360
       static let todoListMinWidth: CGFloat = 440
       static let overlayWidth: CGFloat = 408
+      static let promptNameMaxWidth: CGFloat = 160
       static let overlayCloseZone: CGFloat = 44
       static let overlayGripHeight: CGFloat = 3
       static let overlaySummaryMinHeight: CGFloat = 64

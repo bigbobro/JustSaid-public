@@ -290,7 +290,13 @@ EMAIL_RE = re.compile(
 # exact public path and exact address; the same address anywhere else still
 # fails.  Addresses are split so this source file does not match itself.
 REVIEWED_LICENSE_EMAILS = {
-    "Support/ThirdPartyNotices.txt": frozenset({"orsonpeters" + "@" + "gmail.com"}),
+    "Support/ThirdPartyNotices.txt": frozenset({
+        "orsonpeters" + "@" + "gmail.com",
+        "pommier" + "@" + "modartt.com",
+        "olesen" + "@" + "me.QueensU.CA",
+        "Wilco.Dijkstra" + "@" + "ntlworld.com",
+        "kma" + "@" + "google.com",
+    }),
 }
 PRIVATE_HOST_RE = re.compile(
     r"(?i)\b(?:[a-z0-9-]+\.(?:corp|internal|intranet|lan|local)|"

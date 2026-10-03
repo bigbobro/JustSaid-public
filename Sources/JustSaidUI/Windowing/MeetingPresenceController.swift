@@ -45,6 +45,9 @@ public final class MeetingPresenceController: ObservableObject {
 
   let overlayModel: CompactOverlayViewModel
   let panels: CompactPanelController
+  /// 会议提醒胶囊（叠加层，不参与 `surface` 三选一）。
+  let promptPanel = MeetingPromptPanelController()
+  private var promptCancellable: AnyCancellable?
   private(set) weak var recordingSession: RecordingSession?
   private weak var mainWindow: NSWindow?
   private let sound: NameAlertSoundPlaying
@@ -86,7 +89,25 @@ public final class MeetingPresenceController: ObservableObject {
     wireSummaryBridge(recordingSession: recordingSession, summaryFeed: summaryFeed)
     wireNameAlerts(recordingSession: recordingSession)
     panels.preferredScreen = { [weak self] in self?.mainWindow?.screen ?? NSScreen.main }
+    // 与强提醒同一个选屏规则（把手 / 小窗所在的屏，否则主窗所在屏）。
+    promptPanel.preferredScreen = { [weak self] in self?.panels.strongAlertScreen }
     recompute()
+  }
+
+  /// 接入会议检测提醒：提示内容由控制器给，按钮回到控制器。传 nil 解除。
+  /// 与主窗前后台无关（没有内联形态），空闲和记录中都显示。
+  func bindMeetingDetection(_ controller: MeetingDetectionController?) {
+    promptCancellable = nil
+    promptPanel.bindActions(controller)
+    guard let controller else {
+      promptPanel.apply(prompt: nil, belowStrongAlert: false)
+      return
+    }
+    promptCancellable = controller.$prompt
+      .sink { [weak self] prompt in
+        guard let self else { return }
+        self.promptPanel.apply(prompt: prompt, belowStrongAlert: self.surface == .strongAlert)
+      }
   }
 
   isolated deinit {
@@ -100,6 +121,8 @@ public final class MeetingPresenceController: ObservableObject {
     backgroundTask?.cancel()
     sound.stop()
     panels.apply(surface: .none, isPending: false, isRecording: false)
+    promptCancellable = nil
+    promptPanel.invalidate()
   }
 
   // MARK: - 主窗前后台
@@ -292,5 +315,6 @@ public final class MeetingPresenceController: ObservableObject {
       surface = next
     }
     panels.apply(surface: next, isPending: hasPending, isRecording: isRecording)
+    promptPanel.restack(belowStrongAlert: next == .strongAlert)
   }
 }

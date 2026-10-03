@@ -1041,17 +1041,12 @@ enum MeetingCandidateCopy {
   static func choiceLabel(day: TodoDay, reason: TodoDueChoiceReason, options: [TodoDay]) -> String {
     let date = TodoText.monthDay(day.day)
     switch reason {
-    case .inclusiveBoundary:
-      let latest = options.map(\.day).max()
-      return day.day == latest ? "包含当天 · \(date)" : "截至前一天 · \(date)"
     case .withinIncludesReferenceDay:
       let earliest = options.map(\.day).min()
       return day.day == earliest ? "包含当天 · \(date)" : "不含当天 · \(date)"
     case .missingYear:
       let year = TodoCalendar.parts(day.day)?.year ?? 0
       return "\(year)年 · \(date)"
-    case .boundaryAndYear:
-      return "截至 \(day.day)"
     }
   }
 

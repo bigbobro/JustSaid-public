@@ -267,8 +267,12 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
     let provider: String
     let model: String
     let purpose: String?
+    let lane: String?
     let inputTokens: Int?
     let outputTokens: Int?
+    let cacheHitTokens: Int?
+    let cacheMissTokens: Int?
+    let reasoningTokens: Int?
     let audioDurationSeconds: Double?
     let outcome: String?
   }
@@ -303,6 +307,9 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
     let capturedFrames: UInt64
     let writtenFrames: UInt64
     let gapFrames: UInt64
+    let alignmentPadFrames: UInt64?
+    let alignmentPadCount: UInt64?
+    let writerMaxEarlyFrames: UInt64?
     let droppedByBackpressure: UInt64
     let droppedByOverload: UInt64
     let droppedOutOfOrder: UInt64
@@ -383,8 +390,12 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
           provider: DiagnosticSanitizer.token($0.provider, fallback: "unknown"),
           model: DiagnosticSanitizer.token($0.model, fallback: "unknown"),
           purpose: $0.purpose.map { DiagnosticSanitizer.token($0, fallback: "unknown") },
+          lane: $0.lane.map { DiagnosticSanitizer.token($0, fallback: "unknown") },
           inputTokens: $0.inputTokens,
           outputTokens: $0.outputTokens,
+          cacheHitTokens: $0.cacheHitTokens,
+          cacheMissTokens: $0.cacheMissTokens,
+          reasoningTokens: $0.reasoningTokens,
           audioDurationSeconds: $0.audioDurationSeconds,
           outcome: $0.outcome.map { DiagnosticSanitizer.token($0, fallback: "unknown") }
         )
@@ -438,6 +449,9 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
       capturedFrames: stats.capturedFrames,
       writtenFrames: stats.writtenFrames,
       gapFrames: stats.gapFrames,
+      alignmentPadFrames: stats.alignmentPadFrames,
+      alignmentPadCount: stats.alignmentPadCount,
+      writerMaxEarlyFrames: stats.writerMaxEarlyFrames,
       droppedByBackpressure: stats.droppedByBackpressure,
       droppedByOverload: stats.droppedByOverload,
       droppedOutOfOrder: stats.droppedOutOfOrder,

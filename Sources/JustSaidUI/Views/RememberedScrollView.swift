@@ -137,9 +137,17 @@ private final class ListScrollAnchorView: NSView {
     if self.rowIDs != rowIDs || requestedID != retainedID.wrappedValue {
       needsRestore = true
     }
+    // 只在首次挂载或行未变时当场恢复：原地改动列表（同行数重排）时表格还没重载，
+    // 当场按旧几何定位会错，交给下一轮主队列在重载之后恢复（#161 评审 S）。
+    let restoresInThisUpdate = self.rowIDs.isEmpty || self.rowIDs == rowIDs
     self.rowIDs = rowIDs
     self.retainedID = retainedID
     requestedID = retainedID.wrappedValue
+    // 先在这次 SwiftUI 更新里当场恢复:从别的页回到会议库时,表格此刻已装好缓存的行,
+    // 与列表首帧同一个事务提交。只靠下面的下一轮主队列恢复,带行的列表会先在 y=0
+    // 上屏一帧再跳回原处(owner 2026-09-30,build 1162)。表格还没就绪时这里什么都不做,
+    // 仍由下一轮补上。
+    if restoresInThisUpdate { attachAndRestore() }
     DispatchQueue.main.async { [weak self] in self?.attachAndRestore() }
   }
 
