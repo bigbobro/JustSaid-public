@@ -114,7 +114,12 @@ enum ChatGPTCredentialCoding {
 public struct KeychainChatGPTCredentialStore: ChatGPTCredentialStore {
   public static let service = "com.justsaid.chatgpt-plan"
 
-  public init() {}
+  private let security: any SecurityItemAccess
+
+  public init() { security = SystemSecurityItemAccess() }
+
+  @_spi(KeychainVerification)
+  public init(security: any SecurityItemAccess) { self.security = security }
 
   private func query(account: String) -> [CFString: Any] {
     [
@@ -130,18 +135,19 @@ public struct KeychainChatGPTCredentialStore: ChatGPTCredentialStore {
     lookup[kSecReturnData] = true
     lookup[kSecMatchLimit] = kSecMatchLimitOne
     var result: CFTypeRef?
-    let status = SecItemCopyMatching(lookup as CFDictionary, &result)
+    let status = security.copyMatching(lookup as CFDictionary, &result)
     if status == errSecItemNotFound { return nil }
-    guard status == errSecSuccess, let data = result as? Data else {
+    guard status == errSecSuccess else {
       throw ChatGPTCredentialStoreError.keychain(status)
     }
+    guard let data = result as? Data else { throw ChatGPTCredentialStoreError.corrupted }
     return try ChatGPTCredentialCoding.decode(data)
   }
 
   public func save(_ record: ChatGPTCredentialRecord, account: String) throws {
     try ChatGPTCredentialCoding.validate(account: account)
     let data = try ChatGPTCredentialCoding.encode(record)
-    let status = SecItemUpdate(
+    let status = security.update(
       query(account: account) as CFDictionary, [kSecValueData: data] as CFDictionary)
     if status == errSecSuccess { return }
     guard status == errSecItemNotFound else {
@@ -151,13 +157,13 @@ public struct KeychainChatGPTCredentialStore: ChatGPTCredentialStore {
     item[kSecValueData] = data
     item[kSecAttrLabel] = "JustSaid ChatGPT 授权"
     item[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-    let added = SecItemAdd(item as CFDictionary, nil)
+    let added = security.add(item as CFDictionary, nil)
     guard added == errSecSuccess else { throw ChatGPTCredentialStoreError.keychain(added) }
   }
 
   public func delete(account: String) throws {
     try ChatGPTCredentialCoding.validate(account: account)
-    let status = SecItemDelete(query(account: account) as CFDictionary)
+    let status = security.delete(query(account: account) as CFDictionary)
     guard status == errSecSuccess || status == errSecItemNotFound else {
       throw ChatGPTCredentialStoreError.keychain(status)
     }

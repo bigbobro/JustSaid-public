@@ -22,7 +22,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "995ca6c8e3a7f72bcf529600fe6f0a25e95e33ecd327cfc9e76f018e830c92f6"
+      "sha256": "9f04b054bca9b8710bd9c4696f89c669820c833433d42d002007f73b720ce467"
     },
     {
       "path": "LICENSE",
@@ -38,7 +38,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "7fa9b2b988ed7b13740ea96ab3abdd5f6e21af19bfb3af8bc8afd642f78e191c"
+      "sha256": "8d53991c3e2159adb39eaaea37f8bb60a68897bb2d62bcfee18222b5444b9d5c"
     },
     {
       "path": "Scripts/export-public-repo.sh",
@@ -118,7 +118,7 @@
     },
     {
       "path": "Sources/JustSaidCore/ChatGPTPlan/ChatGPTAccountVault.swift",
-      "sha256": "c097fcab44db3c45017143fad69310ce3ec56e8a7f8f7509d055c70393045ba5"
+      "sha256": "60d51ab800c5c533a8b92b2274b79eb72a1dd97c6f46d2f9b5ec9721859525a9"
     },
     {
       "path": "Sources/JustSaidCore/ChatGPTPlan/ChatGPTAuthorizer.swift",
@@ -126,7 +126,7 @@
     },
     {
       "path": "Sources/JustSaidCore/ChatGPTPlan/ChatGPTCredentialStore.swift",
-      "sha256": "e7515a68662cca62bfbd6086d4b844bdfbf6b5e23dc57ae1f1a2c96091f9b1d8"
+      "sha256": "751e53505b117fa5cb150f130baf2ebd05ff4e4030bbb90cf30b436eb7067810"
     },
     {
       "path": "Sources/JustSaidCore/ChatGPTPlan/ChatGPTIDToken.swift",
@@ -142,7 +142,7 @@
     },
     {
       "path": "Sources/JustSaidCore/ChatGPTPlan/ChatGPTPlanContract.swift",
-      "sha256": "63c61490e34cacf94eb786e810c3806fc6501c657932734849270f32bf8a922b"
+      "sha256": "1be059d908b3ab73fc68e6ba6de6a4955fdb27ba7753681a2e9e3d648d615c06"
     },
     {
       "path": "Sources/JustSaidCore/ChatGPTPlan/ChatGPTPlanService.swift",
@@ -198,7 +198,7 @@
     },
     {
       "path": "Sources/JustSaidCore/MeetingDetection/AppFamilyProcessSource.swift",
-      "sha256": "ff628c6e899786469841a7a257786d3073afb2fc1e86ac5f2141792423b5a17b"
+      "sha256": "871be11b67c1b1f1d3ed343b20524c38bf13baa4a357a785c37a44c0d71b2649"
     },
     {
       "path": "Sources/JustSaidCore/MeetingDetection/CoreAudioProcessSnapshotProvider.swift",
@@ -442,11 +442,15 @@
     },
     {
       "path": "Sources/JustSaidCore/Security/KeychainStore.swift",
-      "sha256": "9262a6ba7c7ed8329f634e0d3448c343f8501c032ef66d9d43abb0e884c443a6"
+      "sha256": "25eb76537abb260425f1e047504b5a234351971f58bef3a45988e06a4a311430"
     },
     {
       "path": "Sources/JustSaidCore/Security/SecurityCommandProviderSecretStore.swift",
       "sha256": "4a7ff4763c03f01268d7c20a353117a85b5c7d6b6d43f936d2d07ec4e7946a8e"
+    },
+    {
+      "path": "Sources/JustSaidCore/Security/SecurityItemAccess.swift",
+      "sha256": "95edfe9112078e65963f2b07d1a05918977f6509c4a80ff91756a5a9d1d2fec2"
     },
     {
       "path": "Sources/JustSaidCore/Settings/AudioRetentionPolicy.swift",
@@ -686,7 +690,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/ChatGPTPlanViews.swift",
-      "sha256": "f0a84bee1ba8ce67b7a2c5db8c638c6f801f94ca923abb5afd568acb2e9a560e"
+      "sha256": "c7c54910a29ffd4c1d3be6b75a56e56eb142198baa5360e935b20fc0eecf2f04"
     },
     {
       "path": "Sources/JustSaidUI/Views/ClientProjectDirectory.swift",
@@ -918,7 +922,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/SettingsShared.swift",
-      "sha256": "122fd55af3de1f59954c15d7057b07dde8af10e053adf70ea4e9385a2216e3e4"
+      "sha256": "b5928c3a150f1928bb447e5a20e4acc62da7b578af7b258161761cbaaa4d3c26"
     },
     {
       "path": "Sources/JustSaidUI/Views/SourcePopoverView.swift",
@@ -1102,7 +1106,7 @@
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "995ca6c8e3a7f72bcf529600fe6f0a25e95e33ecd327cfc9e76f018e830c92f6"
+      "sha256": "9f04b054bca9b8710bd9c4696f89c669820c833433d42d002007f73b720ce467"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -1114,14 +1118,14 @@
     },
     {
       "path": "docs/publication/README.public.md",
-      "sha256": "7fa9b2b988ed7b13740ea96ab3abdd5f6e21af19bfb3af8bc8afd642f78e191c"
+      "sha256": "8d53991c3e2159adb39eaaea37f8bb60a68897bb2d62bcfee18222b5444b9d5c"
     }
   ],
   "format": 2,
   "manifest_path_excluded_from_file_hashes": "PUBLIC_EXPORT_MANIFEST.json",
   "package_manifest": {
     "canonical_signature": {
-      "canonical_target_count": 34,
+      "canonical_target_count": 35,
       "dependencies": [
         [
           "https://github.com/k2-fsa/sherpa-onnx",
@@ -1186,6 +1190,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "98d98c967c8c7baf7b7a41a7f105d863ef7d66ee",
+  "source_sha": "ed02d09cd9a077827198c7e1547c346dc1735ecd",
   "source_status": "clean"
 }

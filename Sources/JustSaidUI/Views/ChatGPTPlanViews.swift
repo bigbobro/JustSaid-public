@@ -201,7 +201,7 @@ struct ChatGPTAccountSection: View {
       defer { isSigningOut = false }
       let result = await service.signOut(account: channel.id)
       if !result.localTokensCleared {
-        message = "本机授权没能完全清除，请稍后再试一次退出。"
+        message = "本机授权未清除。请解锁登录钥匙串，点「重试退出」并在系统弹窗中允许访问。"
       } else if !result.remoteRevocationConfirmed {
         message = "已退出。远端撤销未确认，可以在 ChatGPT 设置里断开本应用。"
       } else {

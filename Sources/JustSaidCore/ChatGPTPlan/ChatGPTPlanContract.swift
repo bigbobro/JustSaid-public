@@ -65,7 +65,7 @@ public enum ChatGPTPlanUnavailable: LocalizedError, LLMRequestNotSentError, Equa
     case .reauthorizationRequired:
       return "ChatGPT 授权已失效，请重新登录"
     case .credentialsUnavailable:
-      return "暂时取不到 ChatGPT 授权，凭证已保留，请稍后再试"
+      return "暂时取不到 ChatGPT 授权，凭证已保留，请稍后重试。若出现钥匙串弹窗，请允许访问。"
     case .clientConfigurationInvalid:
       return "ChatGPT 应用注册配置未通过验证，凭证已保留；请检查应用版本与注册配置"
     case .accountChanged:

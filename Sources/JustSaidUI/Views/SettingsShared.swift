@@ -271,7 +271,7 @@ struct SecretRow: View {
   }
 
   private static func saveFailureText(_ error: Error) -> String {
-    "密钥未能写入钥匙串：\(error.localizedDescription)"
+    "保存失败。\(error.localizedDescription)"
   }
 }
 

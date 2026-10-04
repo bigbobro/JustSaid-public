@@ -11,7 +11,7 @@ public protocol AppFamilyProcessSource: Sendable {
 /// 家族按身份 key 计，不按 bundle ID 字面：
 /// - 浏览器：主程序与 `.helper…` 都归到主程序 bundle，整个浏览器是一家（提醒上已写明）。
 /// - 找不到宿主的 WebKit helper：按 pid 各成一家，家族只有它自己，不会吸进别的 App。
-/// - 飞书、Lark、三一 Lark 共用 `com.electron.lark`：身份无法区分，同 key 的进程全部算进来。
+/// - 飞书、Lark、企业定制版 Lark 共用 `com.electron.lark`：身份无法区分，同 key 的进程全部算进来。
 ///   宁可多录一个同时在跑的同类 App 的声音，也不漏掉会议那一侧；漏录不可补，多录只是范围比预期宽。
 /// - 无 bundle ID 的命令行进程按进程名成家（真机验证用的测试进程靠这条）。
 /// 每次调用用全新的解析器：解析器带缓存且非线程安全，这里不和检测监视器共用。

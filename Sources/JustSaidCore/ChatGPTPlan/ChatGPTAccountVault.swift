@@ -281,21 +281,12 @@ public actor ChatGPTAccountVault {
     do {
       try ensureLoaded()
     } catch {
-      // 无法读取令牌时不能确认远端撤销,仍尝试按账户删除本地项。
-      let localCleared: Bool
-      do {
-        try store.delete(account: account)
-        localCleared = true
-      } catch {
-        localCleared = false
-      }
-      record = nil
-      loaded = localCleared
-      cleanupPending = !localCleared
+      // 读取失败不等于没有凭证；保留完整条目和重读机会，授权恢复后再退出。
+      cleanupPending = true
       reauthRequired = false
       signingOut = false
       return ChatGPTSignOutResult(
-        remoteRevocationConfirmed: false, localTokensCleared: localCleared)
+        remoteRevocationConfirmed: false, localTokensCleared: false)
     }
     guard let current = record, current.hasTokens || reauthRequired || cleanupPending else {
       reauthRequired = false
