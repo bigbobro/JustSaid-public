@@ -18,7 +18,7 @@ An open-source meeting notes app for macOS. It transcribes on your Mac as people
 
 <div align="center">
 
-https://github.com/user-attachments/assets/356ccce0-4baf-4b5b-b275-606df49b80fd
+https://github.com/user-attachments/assets/727ede23-8b84-4038-97d8-15843f28d2a2
 
 </div>
 

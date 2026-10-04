@@ -38,11 +38,11 @@
     },
     {
       "path": "README.en.md",
-      "sha256": "2704377bb7f0d9389a236832989ced8b784d7bfb66c003d538399faedc59d960"
+      "sha256": "aadc7e25f59305fb48356fa1401e898f72001fa605242ba39716bbbf19d12d60"
     },
     {
       "path": "README.md",
-      "sha256": "ed4deab42b12c76d5c368e474955ff6491e8fa587a05ad1de54f1e3e3e75f711"
+      "sha256": "825061a9f951449b4500a6364f19f583e1a66ece67a13ba1f40ccf57affb12e3"
     },
     {
       "path": "Scripts/export-public-repo.sh",
@@ -1122,11 +1122,11 @@
     },
     {
       "path": "docs/publication/README.en.public.md",
-      "sha256": "2704377bb7f0d9389a236832989ced8b784d7bfb66c003d538399faedc59d960"
+      "sha256": "aadc7e25f59305fb48356fa1401e898f72001fa605242ba39716bbbf19d12d60"
     },
     {
       "path": "docs/publication/README.public.md",
-      "sha256": "ed4deab42b12c76d5c368e474955ff6491e8fa587a05ad1de54f1e3e3e75f711"
+      "sha256": "825061a9f951449b4500a6364f19f583e1a66ece67a13ba1f40ccf57affb12e3"
     }
   ],
   "format": 2,
@@ -1198,6 +1198,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "39baf36a7a08c56ba03bee1319625a9461f68f5f",
+  "source_sha": "7faf9a5e433373f7ee1d5424b802ddd29689567b",
   "source_status": "clean"
 }
