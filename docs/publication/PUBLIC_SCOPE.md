@@ -28,7 +28,7 @@ canonical repository；公开仓库只接受导出脚本生成、扫描通过并
 
 可以公开但需要去除内部语境或机器依赖后再复制的内容：
 
-- `README.md` 和 `CHANGELOG.md`：使用公开模板，不复制 private 内测叙述；
+- `README.md`、`README.en.md` 和 `CHANGELOG.md`：使用公开模板，不复制 private 内测叙述；
 - `Package.swift`：从公开 manifest 模板生成，模板必须恰好是 canonical target graph
   去掉全部 `Verification/` 目标后的图。校验分两层：包级校验包名、依赖地址、依赖
   revision、产品列表和 Swift language mode；target 级对每一个存活 target 逐个比对
@@ -82,7 +82,7 @@ canonical repository；公开仓库只接受导出脚本生成、扫描通过并
 | `Scripts/` | `PUBLIC_COPY` | 只复制 exporter、scanner 和低风险通用策略脚本 |
 | `Support/` | `PUBLIC_COPY` | 只复制审查过的文本、JSON 和必要 plist |
 | `.github/workflows/` | `PUBLIC_COPY` | 只复制低权限 public workflow |
-| `README.md` / `CHANGELOG.md` | `PUBLIC_REWRITE` | 由公开模板生成 |
+| `README.md` / `README.en.md` / `CHANGELOG.md` | `PUBLIC_REWRITE` | 由公开模板生成 |
 | `research/` / `example/` | `PRIVATE_ONLY` / `PUBLIC_EXCLUDE` | 不复制真实场景资料 |
 | `.trellis/` | `PRIVATE_ONLY` / `PUBLIC_EXCLUDE` | 不复制 workspace、journal 或任务上下文 |
 | `Distribution/` | `PUBLIC_EXCLUDE` | 当前内部分发资料不进入候选树 |

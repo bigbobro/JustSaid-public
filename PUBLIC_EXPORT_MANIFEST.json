@@ -37,8 +37,12 @@
       "sha256": "acbae89b31648eab213b248f0c391dc02ac7cbe23eb788306e776f6f05015617"
     },
     {
+      "path": "README.en.md",
+      "sha256": "2704377bb7f0d9389a236832989ced8b784d7bfb66c003d538399faedc59d960"
+    },
+    {
       "path": "README.md",
-      "sha256": "8d53991c3e2159adb39eaaea37f8bb60a68897bb2d62bcfee18222b5444b9d5c"
+      "sha256": "ed4deab42b12c76d5c368e474955ff6491e8fa587a05ad1de54f1e3e3e75f711"
     },
     {
       "path": "Scripts/export-public-repo.sh",
@@ -54,7 +58,7 @@
     },
     {
       "path": "Scripts/verify-public-tree.py",
-      "sha256": "d75d4bec1bfb5cdcd992abf121ea4efce5604ff09ec1c8fef957fec21508df59"
+      "sha256": "a974325c9934e285d407526b3a5819d0da82d42a8500b8139fd1fefac08d7bae"
     },
     {
       "path": "Sources/JustSaidApp/AppUpdater.swift",
@@ -1110,15 +1114,19 @@
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
-      "sha256": "4fc1104fa33e5d55f31a871169378e6c45d819ba7cb290688746b57421c1df0c"
+      "sha256": "b0c6f52a9d1eedb025087399d9bf4c30ca9660c53a80141b5e6b9f18eb5c6ca8"
     },
     {
       "path": "docs/publication/Package.public.swift",
       "sha256": "acbae89b31648eab213b248f0c391dc02ac7cbe23eb788306e776f6f05015617"
     },
     {
+      "path": "docs/publication/README.en.public.md",
+      "sha256": "2704377bb7f0d9389a236832989ced8b784d7bfb66c003d538399faedc59d960"
+    },
+    {
       "path": "docs/publication/README.public.md",
-      "sha256": "8d53991c3e2159adb39eaaea37f8bb60a68897bb2d62bcfee18222b5444b9d5c"
+      "sha256": "ed4deab42b12c76d5c368e474955ff6491e8fa587a05ad1de54f1e3e3e75f711"
     }
   ],
   "format": 2,
@@ -1190,6 +1198,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "ed02d09cd9a077827198c7e1547c346dc1735ecd",
+  "source_sha": "39baf36a7a08c56ba03bee1319625a9461f68f5f",
   "source_status": "clean"
 }

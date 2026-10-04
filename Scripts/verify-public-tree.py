@@ -40,6 +40,7 @@ PUBLIC_FILES = (
     POLICY_PATH,
     PUBLIC_PACKAGE_TEMPLATE,
     "docs/publication/README.public.md",
+    "docs/publication/README.en.public.md",
     "docs/publication/CHANGELOG.public.md",
     "Scripts/export-public-repo.sh",
     "Scripts/verify-public-tree.py",
@@ -58,6 +59,7 @@ PUBLIC_FILES = (
 PUBLIC_TEMPLATE_MAP = {
     PUBLIC_PACKAGE_TEMPLATE: "Package.swift",
     "docs/publication/README.public.md": "README.md",
+    "docs/publication/README.en.public.md": "README.en.md",
     "docs/publication/CHANGELOG.public.md": "CHANGELOG.md",
 }
 
