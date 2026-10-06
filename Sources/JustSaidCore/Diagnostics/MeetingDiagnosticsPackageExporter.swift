@@ -291,6 +291,8 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
     let attempt: Int
     let kind: String
     let category: String
+    let elapsedMs: Int?
+    let reasoning: String?
   }
 
   private struct StageProjection: Codable {
@@ -415,7 +417,15 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
           language: DiagnosticSanitizer.token($0.language, fallback: "unknown"),
           attempt: $0.attempt,
           kind: DiagnosticSanitizer.token($0.kind, fallback: "unknown"),
-          category: category(from: $0.detail)
+          // 10-06 起记录自带账本同口径分类;旧记录才回退到文本推断。meeting.json 可被改写,
+          // 两个字符串都只认闭合取值,其余记 other。
+          category: $0.category.map {
+            DiagnosticSanitizer.knownCategories.contains($0) ? $0 : "other"
+          } ?? category(from: $0.detail),
+          elapsedMs: $0.elapsedMs,
+          reasoning: $0.reasoning.map {
+            ReasoningEffortLevel(rawValue: $0) == nil ? "other" : $0
+          }
         )
       },
       stages: (metadata.postMeetingStageHistory ?? []).map {

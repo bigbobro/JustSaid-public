@@ -198,6 +198,10 @@ public protocol LLMClient: Sendable {
   /// 设置页辅助能力:返回服务商可用模型列表。不支持或失败时返回 nil,
   /// 调用方必须降级为手填,不得因此阻断配置保存。
   func availableModels() async -> [String]?
+  /// 会后纪要第二跳用的降档副本(10-06):长推理被切断后原样重放大概率再被切。
+  /// 只改实际发出的档位,`requestedReasoningEffort` 保持用户所选;不能或不该降时返回 nil。
+  /// 默认 nil:其他供应商与桩原样重试。
+  func reasoningDowngradedForRetry() -> (any LLMClient)?
 }
 
 extension LLMClient {
@@ -208,6 +212,8 @@ extension LLMClient {
   public var streamsProgress: Bool { false }
 
   public func availableModels() async -> [String]? { nil }
+
+  public func reasoningDowngradedForRetry() -> (any LLMClient)? { nil }
 }
 
 public struct OpenAICompatibleLLMClient: LLMClient {

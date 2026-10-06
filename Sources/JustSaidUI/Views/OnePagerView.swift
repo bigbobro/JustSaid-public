@@ -7,6 +7,8 @@ import SwiftUI
 struct OnePagerView<Trailing: View>: View {
   let document: MeetingMinutesDocument
   let isLegacyFallback: Bool
+  /// 退化来源是会中速记(正式纪要还没生成),不是没有骨架的旧会议(10-06)。
+  let isQuickDraft: Bool
   /// 落盘留痕话题，只用于给既有 topicTrail 证明章节起点；不改写一页纸内容。
   let topics: [SummaryTopic]
   let onJumpToTranscript: (TimeInterval) -> Void
@@ -21,6 +23,7 @@ struct OnePagerView<Trailing: View>: View {
   init(
     document: MeetingMinutesDocument,
     isLegacyFallback: Bool,
+    isQuickDraft: Bool = false,
     topics: [SummaryTopic] = [],
     onJumpToTranscript: @escaping (TimeInterval) -> Void,
     scrollOffset: Binding<CGFloat>? = nil,
@@ -28,6 +31,7 @@ struct OnePagerView<Trailing: View>: View {
   ) {
     self.document = document
     self.isLegacyFallback = isLegacyFallback
+    self.isQuickDraft = isQuickDraft
     self.topics = topics
     self.onJumpToTranscript = onJumpToTranscript
     self.scrollOffset = scrollOffset
@@ -105,14 +109,20 @@ struct OnePagerView<Trailing: View>: View {
     HStack(spacing: Tokens.Spacing.xs) {
       Image(systemName: "list.bullet.rectangle")
         .foregroundStyle(Tokens.Color.ac)
-      Text("这场旧会议没有类型化骨架，已退化为纪要要点；原文没有被改写。")
-        .font(.system(size: textScale.size(Tokens.FontSize.secondary)))
-        .foregroundStyle(Tokens.Color.ink3)
+      // 纪要生成失败时盘上只有速记:说它是「旧会议」会误导(10-06 现场截图)。
+      Text(
+        isQuickDraft
+          ? "正式纪要还没生成，下面是会中速记拼出的要点，未经精转核对。"
+          : "这场旧会议没有类型化骨架，已退化为纪要要点；原文没有被改写。"
+      )
+      .font(.system(size: textScale.size(Tokens.FontSize.secondary)))
+      .foregroundStyle(Tokens.Color.ink3)
     }
     .padding(.horizontal, Tokens.Spacing.sm)
     .padding(.vertical, Tokens.Spacing.xs)
     .background(Tokens.Color.acSoft, in: RoundedRectangle(cornerRadius: Tokens.Radius.widget))
-    .runtimeAccessibilityIdentifier("one-page.legacy-fallback")
+    .runtimeAccessibilityIdentifier(
+      isQuickDraft ? "one-page.quick-draft-notice" : "one-page.legacy-fallback")
   }
 
   private var conclusionsBand: some View {

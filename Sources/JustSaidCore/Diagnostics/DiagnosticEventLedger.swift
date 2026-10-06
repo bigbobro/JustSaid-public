@@ -52,6 +52,27 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
   public var droppedCount: Int?
   public var charged: String?
   public var errorSummary: String?
+  /// 流时间线(10-06):只记数字与固定事件类型,不含正文。毫秒均从调用开始计,
+  /// `maxGapMs` 是开流后相邻两次收到数据的最长间隔(含开流到第一行),
+  /// `lastByteAgoMs` 是结束(成功或失败)时距最后一次收到数据的时长。
+  public var reasoningSummaryRequested: Bool?
+  public var firstReasoningMs: Int?
+  public var firstOutputMs: Int?
+  public var reasoningSummaryEvents: Int?
+  public var outputDeltaEvents: Int?
+  public var keepaliveLines: Int?
+  public var maxGapMs: Int?
+  public var lastByteAgoMs: Int?
+  /// 最后收到的 SSE 事件类型,取自固定白名单,白名单外记 `other`,注释行记 `comment`。
+  public var lastEventType: String?
+  /// 服务端结构化错误的参数名,只保留闭合白名单(`knownErrorParams`),其余记 `other`。
+  public var providerErrorParam: String?
+
+  /// 允许原样进账本的错误参数名。参数名由服务端给出,可能回显请求里的任意文本,
+  /// 因此不做 token 消毒后放行,只认这几个已知字段名(10-06 PR #179 评审 F3)。
+  public static let knownErrorParams: Set<String> = [
+    "reasoning.summary", "reasoning.effort", "text.format", "input", "instructions", "model",
+  ]
 
   public init(
     family: String? = nil,
@@ -91,6 +112,16 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
     droppedCount: Int? = nil,
     charged: String? = nil,
     errorSummary: String? = nil,
+    reasoningSummaryRequested: Bool? = nil,
+    firstReasoningMs: Int? = nil,
+    firstOutputMs: Int? = nil,
+    reasoningSummaryEvents: Int? = nil,
+    outputDeltaEvents: Int? = nil,
+    keepaliveLines: Int? = nil,
+    maxGapMs: Int? = nil,
+    lastByteAgoMs: Int? = nil,
+    lastEventType: String? = nil,
+    providerErrorParam: String? = nil,
     safeErrorSummary: SafeErrorSummary? = nil
   ) {
     self.family = family
@@ -129,6 +160,20 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
     self.parseShape = parseShape
     self.droppedCount = droppedCount
     self.charged = charged
+    self.reasoningSummaryRequested = reasoningSummaryRequested
+    self.firstReasoningMs = firstReasoningMs
+    self.firstOutputMs = firstOutputMs
+    self.reasoningSummaryEvents = reasoningSummaryEvents
+    self.outputDeltaEvents = outputDeltaEvents
+    self.keepaliveLines = keepaliveLines
+    self.maxGapMs = maxGapMs
+    self.lastByteAgoMs = lastByteAgoMs
+    self.lastEventType = lastEventType.map {
+      ResponsesStreamTimeline.recordableEventTypes.contains($0) ? $0 : "other"
+    }
+    self.providerErrorParam = providerErrorParam.map {
+      Self.knownErrorParams.contains($0) ? $0 : "other"
+    }
     // 出处靠类型，不靠文本形状：SafeErrorSummary 只能由本文件的 sanitizer 构造，因此按原样落库；
     // 任意 String 入口一律再脱敏一次（对所有其他调用方保持纵深防御）。
     self.errorSummary = safeErrorSummary?.value ?? errorSummary.map(DiagnosticSanitizer.summary)
@@ -678,6 +723,13 @@ public enum DiagnosticSanitizer {
   private static func identityComponent<S: StringProtocol>(_ value: S) -> String {
     String(value.filter { identityComponentCharacters.contains($0) })
   }
+
+  /// `category(for:)` 与诊断包文本推断可能给出的全部分类;导出时不在此集合的记 `other`。
+  public static let knownCategories: Set<String> = [
+    "network", "http4xx", "http5xx", "configuration", "timeout", "stream", "invalidResponse",
+    "empty", "reasoningOnly", "cancelled", "notSent", "quota", "incomplete", "refused",
+    "provider", "unknown",
+  ]
 
   public static func category(for error: Error) -> String {
     if let transport = error as? HTTPTransportError {

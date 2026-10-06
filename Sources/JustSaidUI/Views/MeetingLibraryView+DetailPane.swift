@@ -85,6 +85,7 @@ extension MeetingLibraryView {
           OnePagerView(
             document: onePager,
             isLegacyFallback: model.isLegacyOnePager(selected),
+            isQuickDraft: model.isQuickDraftOnePager(selected),
             topics: model.selectedHistoryTopics,
             onJumpToTranscript: model.jumpToTranscript,
             scrollOffset: tabScrollBinding(for: .onePage)

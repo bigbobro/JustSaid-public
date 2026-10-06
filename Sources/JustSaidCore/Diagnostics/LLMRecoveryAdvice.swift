@@ -84,6 +84,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case unsupported, unavailable, offline, connection, unknown, history
     /// ChatGPT 计划用量(10-01):额度用尽;需要重新登录或开启计划用量授权。
     case chatGPTUsageLimit, chatGPTSignIn
+    /// 纪要重试耗尽(10-06):有一跳长时间运行后被截断/超时/断开;其余传输类中断。
+    case reasoningTooLong, connectionInterrupted
   }
   public enum Action: String, Sendable {
     case steps, editKey, editModel, editConfiguration, chooseChannel, exportDiagnostics
@@ -109,6 +111,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case .missingKey: return .editKey
     case .missingModel: return .editModel
     case .configuration: return .editConfiguration
+    // 推理档位在这一路的设置里;有角色时导航到该路(不是渠道编辑器)。
+    case .reasoningTooLong: return .editModel
     case .unsupported where context.role != nil: return .chooseChannel
     case .connection, .unknown, .history: return .exportDiagnostics
     default: return .steps
@@ -131,6 +135,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case .unavailable: return "渠道无法处理当前请求，请检查渠道状态或联系渠道服务商"
     case .offline: return "当前未连接网络，请连接网络后再试"
     case .connection: return "连接未完成，原因尚不明确；请导出诊断包交给 JustSaid 开发者排查"
+    case .reasoningTooLong: return "模型思考时间过长，结果出来前连接被中断"
+    case .connectionInterrupted: return "连接中途断开，常见于网络或代理不稳定"
     case .unknown: return "暂时无法判断失败原因，请导出诊断包交给 JustSaid 开发者排查"
     case .history: return "历史失败缺少精确上下文，请导出诊断包交给 JustSaid 开发者排查"
     }
@@ -148,7 +154,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case .concurrency, .rateLimit: return "检查上游并发限制"
     case .unsupported: return context.role == nil ? "查看渠道排查步骤" : "更换渠道"
     case .unavailable: return "查看渠道排查步骤"
-    case .offline: return "查看网络检查步骤"
+    case .offline, .connectionInterrupted: return "查看网络检查步骤"
+    case .reasoningTooLong: return "调低推理档位"
     case .connection, .unknown, .history: return "导出诊断包"
     }
   }
@@ -179,6 +186,13 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
       return ["到渠道后台检查当前状态及出错时刻的日志。", "复制渠道排查信息交给渠道服务商；也可手动更换渠道。"]
     case .offline:
       return ["检查本机网络是否已连接，再按原入口重试。", "若网络恢复后仍失败，可导出诊断包。"]
+    case .reasoningTooLong:
+      return [
+        "在这一路的设置里把推理档位调低一档，再点「重新生成纪要」。",
+        "长会议在高推理档位下的思考时间可能超过连接能维持的时长。",
+      ]
+    case .connectionInterrupted:
+      return ["检查网络或代理后，点「重新生成纪要」重试。", "反复在相近时长断开时，导出诊断包交给 JustSaid 开发者。"]
     case .missingKey, .missingModel, .configuration:
       if context.providerID == ChatGPTPlanContract.providerID {
         return [
@@ -219,6 +233,34 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
       cause: .history, context: .init(feature: feature, occurredAt: occurredAt), httpStatus: nil,
       providerCode: nil,
       eventID: nil)
+  }
+
+  /// 纪要传输类重试耗尽时按整组归因(10-06,PR #179 评审 F4 修订):
+  /// 1. 最后一跳投影出的明确原因(如 offline)永远优先,它说的是用户此刻能做什么;
+  /// 2. 否则看整组:某一跳是截断、空闲超时或连接断开,运行到 `longRunThreshold` 以上,
+  ///    实际开着推理,且失败前还没开始写正文 → 思考过久;其余 → 连接中途断开。
+  /// 长耗时只是线索:推理关闭或已经在写正文时,调低推理档位解决不了问题。
+  public static func minutesTransportExhausted(
+    attempts: [MinutesTransportAttempt], context: LLMFailureContext,
+    longRunThreshold: TimeInterval = 300
+  ) -> Self {
+    if let last = attempts.last, let projected = project(last.error, context: context),
+      ![.connection, .unknown].contains(projected.cause)
+    {
+      return projected
+    }
+    let longCut = attempts.contains { attempt in
+      guard attempt.elapsed >= longRunThreshold, attempt.reasoning != .off, !attempt.wroteOutput
+      else { return false }
+      if case .streamTruncated? = attempt.error as? LLMClientError { return true }
+      if let url = attempt.error as? URLError {
+        return url.code == .timedOut || url.code == .networkConnectionLost
+      }
+      return false
+    }
+    return Self(
+      cause: longCut ? .reasoningTooLong : .connectionInterrupted, context: context,
+      httpStatus: nil, providerCode: nil, eventID: nil)
   }
 
   public static func project(_ error: Error, context: LLMFailureContext) -> Self? {

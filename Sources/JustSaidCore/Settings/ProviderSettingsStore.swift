@@ -1640,7 +1640,10 @@ public final class ProviderSettingsStore: ObservableObject {
       onUsageLimit: onUsageLimit,
       transport: transport,
       idleTimeout: live ? OpenAICompatibleLLMClient.liveSummaryIdleTimeout : 600,
-      firstFrameTimeout: live ? OpenAICompatibleLLMClient.liveSummaryFirstFrameTimeout : nil
+      firstFrameTimeout: live ? OpenAICompatibleLLMClient.liveSummaryFirstFrameTimeout : nil,
+      // 会后调用(纪要、认名)请求推理摘要保活;会中快慢路要跟上会议节奏,不改。
+      requestsReasoningSummary: !live,
+      supportedReasoningLevels: channel.modelReasoningLevels?[model]
     )
   }
 

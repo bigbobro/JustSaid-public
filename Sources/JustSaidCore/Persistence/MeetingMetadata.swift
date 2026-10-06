@@ -122,19 +122,31 @@ public struct MinutesFailureAttempt: Codable, Equatable, Sendable {
   /// 人话失败原因(底层错误描述)。
   public let detail: String
   public let failedAt: Date
+  /// 与诊断账本同口径的分类(`DiagnosticSanitizer.category(for:)`,10-06);旧记录为 nil。
+  public let category: String?
+  /// 本跳从发出到失败的耗时(毫秒);旧记录为 nil。
+  public let elapsedMs: Int?
+  /// 本跳实际发出的推理档(`ReasoningEffortLevel.rawValue`),第二跳可能已降档;旧记录为 nil。
+  public let reasoning: String?
 
   public init(
     language: String,
     attempt: Int,
     kind: String,
     detail: String,
-    failedAt: Date = Date()
+    failedAt: Date = Date(),
+    category: String? = nil,
+    elapsedMs: Int? = nil,
+    reasoning: String? = nil
   ) {
     self.language = language
     self.attempt = attempt
     self.kind = kind
     self.detail = detail
     self.failedAt = failedAt
+    self.category = category
+    self.elapsedMs = elapsedMs
+    self.reasoning = reasoning
   }
 }
 

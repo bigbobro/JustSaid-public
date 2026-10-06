@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import OSLog
+import Synchronization
 
 public struct PostMeetingPipelineConfiguration: Equatable, Sendable {
   public let microphoneEchoCancellationEnabled: Bool
@@ -219,6 +220,8 @@ public struct PostMeetingPipeline: Sendable {
   private let dictionaryStore: DictionaryStore
   /// 瞬时进度观测。默认 nil 时行为与今天逐字节等同;抛错被 report() 吞掉。
   private var onProgress: (@Sendable (PostMeetingProgress) throws -> Void)?
+  /// 纪要逐跳计时用的时钟;只服务失败痕耗时与整组归因,验证可注入(10-06)。
+  private var now: @Sendable () -> Date = { Date() }
 
   public init(
     storage: any StorageProvider,
@@ -267,12 +270,21 @@ public struct PostMeetingPipeline: Sendable {
     return copy
   }
 
+  /// 换纪要逐跳计时的时钟(写法同 `reportingProgress`)。生产不调用,保持系统时间。
+  public func usingClock(_ clock: @escaping @Sendable () -> Date) -> PostMeetingPipeline {
+    var copy = self
+    copy.now = clock
+    return copy
+  }
+
   private func minutesAdvice(_ error: Error, language: MeetingLanguage) -> LLMRecoveryAdvice? {
-    LLMRecoveryAdvice.project(
-      error,
-      context: LLMFailureContext(
-        feature: language == .english ? .englishMinutes : .minutes,
-        configuration: minutesClient.configuration))
+    LLMRecoveryAdvice.project(error, context: minutesFailureContext(language: language))
+  }
+
+  private func minutesFailureContext(language: MeetingLanguage) -> LLMFailureContext {
+    LLMFailureContext(
+      feature: language == .english ? .englishMinutes : .minutes,
+      configuration: minutesClient.configuration)
   }
 
   /// 进度是观测:回调抛错绝不能成为管线失败源(红线 R5)。
@@ -1469,11 +1481,19 @@ public struct PostMeetingPipeline: Sendable {
     let maxCallAttempts = 2
     var attempt = 1
     let retryGroup = UUID().uuidString.lowercased()
+    // 本跳实际使用的客户端:第二跳可能是降档副本(10-06,见下方重试处)。
+    var callClient = minutesClient
+    // 本组已失败的跳与归因材料,重试耗尽时整组归因。
+    var failedAttempts: [MinutesTransportAttempt] = []
     while true {
       let response: LLMResponse
+      let attemptStartedAt = now()
+      let wroteOutput = MinutesOutputFlag()
       do {
         response = try await completeMinutesCall(
           request,
+          client: callClient,
+          wroteOutput: wroteOutput,
           outputLanguage: outputLanguage,
           meetingHash: (try? meetingStore.read(from: paths).id)
             .map(MeetingDiagnosticsPackageExporter.meetingHash),
@@ -1484,25 +1504,44 @@ public struct PostMeetingPipeline: Sendable {
       } catch let error as PostMeetingRecoveryError {
         // 续查被抢占是正常竞态,不是调用失败:不留痕、不记账、不重试。
         throw error
-      } catch {
+      } catch let caught {
+        // 发送事实取自原错误:归一成取消之后就看不出「请求根本没发出」了(PR #179 第二轮评审 F6)。
+        let notSent = minutesFailureIsPreSend(caught)
+        // 任务已取消时,底层流可能只是安静结束、被报成截断这类可重试错误;一律按取消处理,
+        // 不发重试信号、不起第二跳(PR #179 评审要求的取消断言揭出,2026-10-06)。
+        let error: Error = Task.isCancelled ? CancellationError() : caught
         let verdict = classifyMinutesFailure(error)
+        let elapsed = now().timeIntervalSince(attemptStartedAt)
+        failedAttempts.append(
+          MinutesTransportAttempt(
+            error: error, elapsed: elapsed, reasoning: callClient.configuration.reasoningEffort,
+            wroteOutput: wroteOutput.isSet))
         try recordMinutesCallFailure(
           error,
           verdict: verdict,
           outputLanguage: outputLanguage,
           attempt: attempt,
+          elapsed: elapsed,
+          reasoning: callClient.configuration.reasoningEffort,
+          notSent: notSent,
           paths: paths,
           recoveryCandidate: recoveryCandidate
         )
         guard case .retryable = verdict, attempt < maxCallAttempts else {
           if case .retryable = verdict {
             // R4:传输族重试耗尽,换成说人话的包装错误;底层细节已进失败痕。
+            // 10-06:归因看整组,长时间运行后被切与普通断连给不同出路。
             throw MinutesTransportExhaustedError(
-              underlying: error, recoveryAdvice: minutesAdvice(error, language: outputLanguage))
+              underlying: error,
+              recoveryAdvice: .minutesTransportExhausted(
+                attempts: failedAttempts, context: minutesFailureContext(language: outputLanguage)))
           }
           throw error
         }
         attempt += 1
+        // 10-06 现场:max 档纪要三次都在约 900s 被切断,原样重放只会再烧 15 分钟。
+        // 能降档的客户端(ChatGPT 计划渠道)第二跳降一档;其余原样重试。
+        callClient = minutesClient.reasoningDowngradedForRetry() ?? minutesClient
         report(.minutesRetrying(language: outputLanguage, attempt: attempt))
         continue
       }
@@ -1529,6 +1568,8 @@ public struct PostMeetingPipeline: Sendable {
   /// 一次也不强行补进度。重试循环在 `generateMinutes`,本函数不感知 attempt。
   private func completeMinutesCall(
     _ request: LLMRequest,
+    client: any LLMClient,
+    wroteOutput: MinutesOutputFlag,
     outputLanguage: MeetingLanguage,
     meetingHash: String?,
     attempt: Int,
@@ -1544,8 +1585,8 @@ public struct PostMeetingPipeline: Sendable {
       attempt: attempt,
       retryGroup: retryGroup
     )
-    if minutesClient.streamsProgress {
-      return try await minutesClient.complete(
+    if client.streamsProgress {
+      return try await client.complete(
         request,
         options: LLMCallOptions(context: context) { [self] streamProgress in
           let elapsed = Date().timeIntervalSince(minutesStartedAt)
@@ -1555,6 +1596,7 @@ public struct PostMeetingPipeline: Sendable {
               .minutesThinking(language: outputLanguage, elapsed: elapsed)
             )
           case .writing(_, let accumulatedContent):
+            wroteOutput.set()
             onAccumulatedContent?(accumulatedContent)
             self.report(
               .minutesWriting(
@@ -1567,7 +1609,7 @@ public struct PostMeetingPipeline: Sendable {
         }
       )
     }
-    let response = try await minutesClient.complete(
+    let response = try await client.complete(
       request, options: LLMCallOptions(context: context))
     // 非流式:至少报一次 writing,便于语种横幅与 AC10/AC13 断言。
     if !response.text.isEmpty {
@@ -1590,6 +1632,9 @@ public struct PostMeetingPipeline: Sendable {
     verdict: MinutesCallVerdict,
     outputLanguage: MeetingLanguage,
     attempt: Int,
+    elapsed: TimeInterval,
+    reasoning: ReasoningEffortLevel,
+    notSent: Bool,
     paths: MeetingPaths,
     recoveryCandidate: PostMeetingRecoveryCandidate?
   ) throws {
@@ -1599,14 +1644,18 @@ public struct PostMeetingPipeline: Sendable {
           language: outputLanguage.rawValue,
           attempt: attempt,
           kind: verdict.kind,
-          detail: error.localizedDescription
+          detail: error.localizedDescription,
+          category: DiagnosticSanitizer.category(for: error),
+          elapsedMs: Int(elapsed * 1_000),
+          reasoning: reasoning.rawValue
         ),
         at: paths,
         ifCurrentRecoveryJobs: recoveryCandidate?.jobs
       )
       // R3:请求已发出就可能已计费,失败也记一笔(token 拿不到保持 nil,不用 0 兜底);
-      // 发出前的失败(端点拼装/HTTPS 校验)不记账,只留失败痕。
-      if !minutesFailureIsPreSend(error) {
+      // 发出前的失败(端点拼装/HTTPS 校验/取令牌)不记账,只留失败痕。`notSent` 由调用方
+      // 在取消归一化之前从原错误取得。
+      if !notSent {
         _ = try meetingStore.appendUsage(
           CloudUsageRecord(
             role: .minutesLLM,
@@ -3680,4 +3729,11 @@ private struct MinutesResponseWire: Decodable {
         forKey: .speakerSuggestions
       ))?.compactMap(\.value) ?? []
   }
+}
+
+/// 一跳纪要调用是否已开始写正文(流式回调里置位,失败后读)。
+final class MinutesOutputFlag: Sendable {
+  private let value = Mutex(false)
+  func set() { value.withLock { $0 = true } }
+  var isSet: Bool { value.withLock { $0 } }
 }

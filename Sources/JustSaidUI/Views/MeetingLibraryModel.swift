@@ -1529,6 +1529,11 @@ public final class MeetingLibraryModel: ObservableObject {
     artifacts(for: item).structuredMinutes == nil
   }
 
+  /// 「这场会」只有会中速记、正式纪要还没生成(例如生成失败)时为真。
+  func isQuickDraftOnePager(_ item: MeetingLibraryItem) -> Bool {
+    artifacts(for: item).minutes.map(MinutesHistoryWriter.isQuickDraftPlaceholder) ?? false
+  }
+
   func noteEntries(for item: MeetingLibraryItem) -> [MeetingNoteEntry] {
     guard let notes = artifacts(for: item).notes else { return [] }
     return notes.components(separatedBy: .newlines).enumerated().compactMap { index, rawLine in

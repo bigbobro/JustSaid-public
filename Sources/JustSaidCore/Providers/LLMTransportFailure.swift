@@ -61,6 +61,23 @@ public func minutesFailureIsPreSend(_ error: Error) -> Bool {
   }
 }
 
+/// 纪要一跳失败的归因材料(10-06):错误、耗时、实际发出的推理档,以及失败前是否已开始写正文。
+public struct MinutesTransportAttempt: Sendable {
+  public let error: Error
+  public let elapsed: TimeInterval
+  public let reasoning: ReasoningEffortLevel
+  public let wroteOutput: Bool
+
+  public init(
+    error: Error, elapsed: TimeInterval, reasoning: ReasoningEffortLevel, wroteOutput: Bool
+  ) {
+    self.error = error
+    self.elapsed = elapsed
+    self.reasoning = reasoning
+    self.wroteOutput = wroteOutput
+  }
+}
+
 /// R4:传输族自动重试耗尽后的用户可见错误。文案说人话并指明出路;
 /// 底层错误细节已逐跳写入 `minutesFailureAttempts`,不再拼进用户文案。
 public struct MinutesTransportExhaustedError: LocalizedError, Sendable {
@@ -74,7 +91,8 @@ public struct MinutesTransportExhaustedError: LocalizedError, Sendable {
     underlyingDescription = underlying.localizedDescription
   }
 
+  /// 有整组归因时用它的人话(10-06),没有时保留原文案。
   public var errorDescription: String? {
-    "网络通道中断（常见于 VPN/代理环境），已自动重试仍失败；换个网络环境后可再试"
+    recoveryAdvice?.message ?? "网络通道中断（常见于 VPN/代理环境），已自动重试仍失败；换个网络环境后可再试"
   }
 }

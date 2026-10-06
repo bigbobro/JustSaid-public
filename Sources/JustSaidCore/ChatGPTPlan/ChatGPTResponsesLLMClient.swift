@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// ChatGPT 计划用量的 Responses 适配器:固定 `POST https://api.openai.com/v1/responses`,
 /// Bearer 取自调用开始时绑定账户的令牌来源;`store:false`、`stream:true`、`input` 数组。
@@ -6,10 +7,18 @@ import Foundation
 /// 成功只有一种:收到 `response.completed` 且正文非空、不是拒绝。`response.failed`、
 /// `response.incomplete`、`error` 事件与未完成就断流各自报错,半截不交。期限语义由
 /// `LLMStreamLiveness` 统一执行;本类型只解析事件并报告首帧与解码进展。
+///
+/// 会后调用(`requestsReasoningSummary`)额外请求 `reasoning.summary: "auto"`:长时间推理期间
+/// 有摘要增量就有字节,空闲超时与代理掐空闲连接都少一些(10-06 现场:max 档纪要连续 600s 无字节)。
+/// 只有开流前的非 2xx 拒绝(流从未打开、服务端没开始推理)才去掉它重发一次;流打开后的任何失败
+/// 都原样交给管线分类与双账,流内明确点名 `reasoning.summary` 时只记住此后不带。
 public struct ChatGPTResponsesLLMClient: LLMClient {
-  public let configuration: LLMClientConfiguration
+  public private(set) var configuration: LLMClientConfiguration
   public let idleTimeout: TimeInterval
   public let firstFrameTimeout: TimeInterval?
+  public let requestsReasoningSummary: Bool
+  /// 账户目录声明的该模型档位;nil 表示未知,此时不降档。
+  public let supportedReasoningLevels: [ReasoningEffortLevel]?
   private let transport: any HTTPTransport
   private let tokenSource: @Sendable () async throws -> String
   private let onUsageLimit: (@Sendable () async -> Void)?
@@ -22,9 +31,13 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
     transport: any HTTPTransport = URLSessionHTTPTransport(),
     idleTimeout: TimeInterval = 600,
     firstFrameTimeout: TimeInterval? = nil,
+    requestsReasoningSummary: Bool = false,
+    supportedReasoningLevels: [ReasoningEffortLevel]? = nil,
     diagnosticsLedger: DiagnosticEventLedger = .shared
   ) {
     self.configuration = configuration
+    self.requestsReasoningSummary = requestsReasoningSummary
+    self.supportedReasoningLevels = supportedReasoningLevels
     self.tokenSource = tokenSource
     self.onUsageLimit = onUsageLimit
     self.transport = transport
@@ -34,6 +47,25 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
   }
 
   public var streamsProgress: Bool { true }
+
+  /// 降一档:取低于当前、不低于 medium、且目录声明支持的最高一档(max→xhigh→high→medium)。
+  /// medium 及以下、或目录档位未知时不降。
+  public func reasoningDowngradedForRetry() -> (any LLMClient)? {
+    let current = configuration.reasoningEffort
+    guard current > .medium,
+      let lower = supportedReasoningLevels?.filter({ $0 < current && $0 >= .medium }).max()
+    else { return nil }
+    var copy = self
+    let base = configuration
+    copy.configuration = LLMClientConfiguration(
+      providerID: base.providerID, baseURL: base.baseURL, apiKey: base.apiKey, model: base.model,
+      reasoningEffort: lower, requestedReasoningEffort: base.requestedReasoningEffort,
+      diagnosticRole: base.diagnosticRole, diagnosticPurpose: base.diagnosticPurpose,
+      diagnosticOrigin: base.diagnosticOrigin, diagnosticMeetingHash: base.diagnosticMeetingHash,
+      recoveryChannelID: base.recoveryChannelID, lane: base.lane,
+      billingSource: base.billingSource)
+    return copy
+  }
 
   public func complete(_ request: LLMRequest) async throws -> LLMResponse {
     try await complete(request, options: LLMCallOptions())
@@ -46,8 +78,9 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
     let wire = ChatGPTModelCatalogParser.wire(configuration.reasoningEffort)
     func fields(
       stage: String? = nil, outcome: String? = nil, category: String? = nil, status: Int? = nil,
-      code: String? = nil, response: LLMResponse? = nil, firstFrameMs: Int? = nil,
-      bytes: Int? = nil, charged: String? = nil, error: Error? = nil
+      code: String? = nil, param: String? = nil, response: LLMResponse? = nil,
+      timeline: ResponsesStreamTimeline.Snapshot? = nil, charged: String? = nil,
+      summary: Bool? = nil, error: Error? = nil
     ) -> DiagnosticEventFields {
       DiagnosticEventFields(
         family: "llm", operation: "complete",
@@ -70,12 +103,24 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
         outputTokens: response?.outputTokens, cacheHitTokens: response?.cacheHitTokens,
         cacheMissTokens: response?.cacheMissTokens, reasoningTokens: response?.reasoningTokens,
         latencyMs: stage == nil ? nil : Int(Date().timeIntervalSince(startedAt) * 1_000),
-        firstFrameMs: firstFrameMs, responseBytes: bytes, charged: charged,
+        firstFrameMs: timeline?.firstFrameMs, responseBytes: timeline?.responseBytes,
+        charged: charged,
+        reasoningSummaryRequested: summary,
+        firstReasoningMs: timeline?.firstReasoningMs, firstOutputMs: timeline?.firstOutputMs,
+        reasoningSummaryEvents: timeline?.reasoningSummaryEvents,
+        outputDeltaEvents: timeline?.outputDeltaEvents, keepaliveLines: timeline?.keepaliveLines,
+        maxGapMs: timeline?.maxGapMs, lastByteAgoMs: timeline?.lastByteAgoMs,
+        lastEventType: timeline?.lastEventType, providerErrorParam: param,
         safeErrorSummary: error.map(DiagnosticSanitizer.summary(for:)))
     }
+    var includeSummary =
+      requestsReasoningSummary && wire != "none"
+      && !ReasoningSummaryRejections.shared.contains(configuration.model)
     diagnosticsLedger.append(
       event: "modelCall.start", source: "ChatGPTResponsesLLMClient", correlationID: callID,
-      fields: fields())
+      fields: fields(summary: includeSummary))
+    // 兼容探测(无参数名的拒绝)去掉摘要重发时为真:只有重发成功才确认是摘要的问题。
+    var probingSummary = false
 
     let token: String
     do {
@@ -90,43 +135,115 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
           category: DiagnosticSanitizer.category(for: error), charged: "notSent", error: error))
       throw error
     }
-    do {
-      let urlRequest = try makeRequest(request, token: token)
-      let transport = self.transport
-      let accumulated = try await LLMStreamLiveness.run(
-        firstFrameTimeout: firstFrameTimeout,
-        progressTimeout: options.progressTimeout,
-        open: { try await Self.openStream(urlRequest, transport: transport) },
-        consume: { stream, hooks in
-          try await Self.consume(
-            stream, hooks: hooks, onStreamProgress: options.onStreamProgress,
-            startedAt: startedAt)
-        })
-      let response = try Self.response(from: accumulated, configuration: configuration)
-      diagnosticsLedger.append(
-        event: "modelCall.finish", source: "ChatGPTResponsesLLMClient", correlationID: callID,
-        fields: fields(
-          stage: "complete", outcome: "success", category: "success", response: response,
-          firstFrameMs: accumulated.firstFrameMs, bytes: accumulated.responseBytes,
-          charged: "completed"))
-      return response
-    } catch {
-      let service = error as? ChatGPTPlanServiceError
-      if service?.kind == .usageLimitExceeded { await onUsageLimit?() }
-      diagnosticsLedger.append(
-        event: "modelCall.finish", severity: .error, source: "ChatGPTResponsesLLMClient",
-        correlationID: callID,
-        fields: fields(
-          stage: service == nil ? "stream" : "response",
-          outcome: error is CancellationError ? "cancelled" : "failure",
-          category: DiagnosticSanitizer.category(for: error), status: service?.httpStatus,
-          code: service?.code,
-          charged: error is CancellationError ? "unknown" : "possiblySent", error: error))
-      throw error
+    while true {
+      let timeline = ResponsesStreamTimeline(startedAt: startedAt)
+      do {
+        let urlRequest = try makeRequest(request, token: token, includeSummary: includeSummary)
+        let transport = self.transport
+        let accumulated = try await LLMStreamLiveness.run(
+          firstFrameTimeout: firstFrameTimeout,
+          progressTimeout: options.progressTimeout,
+          open: { try await Self.openStream(urlRequest, transport: transport) },
+          consume: { stream, hooks in
+            try await Self.consume(
+              stream, hooks: hooks, onStreamProgress: options.onStreamProgress,
+              timeline: timeline)
+          })
+        let response = try Self.response(from: accumulated, configuration: configuration)
+        if probingSummary { ReasoningSummaryRejections.shared.insert(configuration.model) }
+        diagnosticsLedger.append(
+          event: "modelCall.finish", source: "ChatGPTResponsesLLMClient", correlationID: callID,
+          fields: fields(
+            stage: "complete", outcome: "success", category: "success", response: response,
+            timeline: timeline.snapshot(), charged: "completed", summary: includeSummary))
+        return response
+      } catch {
+        let service = error as? ChatGPTPlanServiceError
+        // 10-06 评审 F1:流一旦打开,服务端可能已经开始推理(还没正文也不能证明没开始),
+        // 重发就是暗中重放、绕过管线的失败痕与失败账。只认开流前的非 2xx。
+        if includeSummary, let service, service.httpStatus != nil, !timeline.streamOpened,
+          let rejection = Self.summaryRejection(service)
+        {
+          // 10-06 评审 F2:点名 summary 才当场记住;无参数名的拒绝只是探测,
+          // 重发仍失败说明问题不在摘要,不能让本进程此后都不带摘要。
+          if rejection == .confirmed {
+            ReasoningSummaryRejections.shared.insert(configuration.model)
+          }
+          probingSummary = rejection == .probe
+          diagnosticsLedger.append(
+            event: "modelCall.summaryFallback", source: "ChatGPTResponsesLLMClient",
+            correlationID: callID,
+            fields: fields(
+              stage: "response",
+              outcome: rejection == .confirmed ? "summaryRejected" : "summaryProbe",
+              category: DiagnosticSanitizer.category(for: error), status: service.httpStatus,
+              code: service.code, param: service.param, timeline: timeline.snapshot(),
+              charged: "possiblySent", summary: true, error: error))
+          includeSummary = false
+          continue
+        }
+        if includeSummary, timeline.streamOpened, let service,
+          Self.mayConcernReasoningSummary(service), let param = service.param,
+          Self.namesReasoningSummary(param)
+        {
+          // 流内明确点名 summary:不重发,错误照常上抛;只让此后的调用不再携带。
+          ReasoningSummaryRejections.shared.insert(configuration.model)
+        }
+        if service?.kind == .usageLimitExceeded { await onUsageLimit?() }
+        diagnosticsLedger.append(
+          event: "modelCall.finish", severity: .error, source: "ChatGPTResponsesLLMClient",
+          correlationID: callID,
+          fields: fields(
+            stage: service == nil ? "stream" : "response",
+            outcome: error is CancellationError ? "cancelled" : "failure",
+            category: DiagnosticSanitizer.category(for: error), status: service?.httpStatus,
+            code: service?.code, param: service?.param, timeline: timeline.snapshot(),
+            charged: error is CancellationError ? "unknown" : "possiblySent",
+            summary: includeSummary, error: error))
+        throw error
+      }
     }
   }
 
-  private func makeRequest(_ request: LLMRequest, token: String) throws -> URLRequest {
+  enum SummaryRejection: Equatable {
+    /// 参数名点名 `reasoning.summary`:确证,去掉重发并当场记住。
+    case confirmed
+    /// 没给参数名的 400 或订阅通道「不支持的能力」:去掉重发一次,成功才记住。
+    case probe
+  }
+
+  /// 开流前非 2xx 是否与 `reasoning.summary` 有关。先过 `mayConcernReasoningSummary`,
+  /// 再看参数名:点名 summary 为确证;参数名指向别处(`reasoning.effort`、`text.format` 等)不回退;
+  /// 没有参数名的 400 或「不支持的能力」为探测。
+  static func summaryRejection(_ error: ChatGPTPlanServiceError) -> SummaryRejection? {
+    guard mayConcernReasoningSummary(error) else { return nil }
+    if let param = error.param { return namesReasoningSummary(param) ? .confirmed : nil }
+    return error.httpStatus == 400 || error.kind == .unsupportedCapability ? .probe : nil
+  }
+
+  /// 这条错误是否可能与摘要有关。5xx 与明确的额度、用量、账户、权限、准入类错误一律无关,
+  /// 即使参数名点名了 summary(PR #179 第二轮评审 F5)。开流前回退与流内「只记住」共用。
+  static func mayConcernReasoningSummary(_ error: ChatGPTPlanServiceError) -> Bool {
+    if let status = error.httpStatus, status >= 500 { return false }
+    switch error.kind {
+    case .usageLimitExceeded, .usageUnavailable, .userUnavailable, .notAuthorized, .invalidUser,
+      .notEligible, .routeNotSupported, .admissionRejected:
+      return false
+    case .unsupportedCapability, .responseFailed, .responseIncomplete, .refused, .other:
+      return true
+    }
+  }
+
+  /// 结构化错误的参数名是否点名 `reasoning.summary`:精确字段,或 `.` / `[` 起头的子路径;
+  /// `reasoning.summary_suffix` 这类同前缀的别的字段不算。
+  static func namesReasoningSummary(_ param: String) -> Bool {
+    param == "reasoning.summary" || param.hasPrefix("reasoning.summary.")
+      || param.hasPrefix("reasoning.summary[")
+  }
+
+  private func makeRequest(_ request: LLMRequest, token: String, includeSummary: Bool) throws
+    -> URLRequest
+  {
     var urlRequest = URLRequest(
       url: ChatGPTPlanContract.responsesURL,
       cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
@@ -140,13 +257,17 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
       request.expectsJSON
       ? "Respond with JSON matching the requested structure.\n\n" + request.userPrompt
       : request.userPrompt
+    var reasoning: [String: Any] = [
+      "effort": ChatGPTModelCatalogParser.wire(configuration.reasoningEffort)
+    ]
+    if includeSummary { reasoning["summary"] = "auto" }
     var body: [String: Any] = [
       "model": configuration.model,
       // 每次请求自带所需上下文;system 角色消息会被拒,系统提示放 instructions。
       "input": [["role": "user", "content": input]],
       "store": false,
       "stream": true,
-      "reasoning": ["effort": ChatGPTModelCatalogParser.wire(configuration.reasoningEffort)],
+      "reasoning": reasoning,
     ]
     let instructions = request.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
     if !instructions.isEmpty { body["instructions"] = request.systemPrompt }
@@ -181,8 +302,6 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
     var outputTokens: Int?
     var cachedTokens: Int?
     var reasoningTokens: Int?
-    var firstFrameMs: Int?
-    var responseBytes = 0
   }
 
   static func response(from accumulated: Accumulated, configuration: LLMClientConfiguration)
@@ -210,21 +329,25 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
   }
 
   /// 按 SSE 规范切事件(空行为界,同一事件多行 data 拼接),按负载里的 `type` 处理。
+  /// 每行与每个事件同步记进 `timeline`,失败路径因此也有完整的时间线。
   static func consume(
     _ stream: AsyncThrowingStream<String, Error>,
     hooks: LLMStreamLiveness.Hooks,
     onStreamProgress: (@Sendable (LLMStreamProgress) throws -> Void)?,
-    startedAt: Date
+    timeline: ResponsesStreamTimeline
   ) async throws -> Accumulated {
     var accumulated = Accumulated()
     var dataLines: [String] = []
+    var sawFrame = false
     var emitter = LLMStreamProgressEmitter(onStreamProgress: onStreamProgress)
+    timeline.opened()
 
     func flush() throws {
       defer { dataLines.removeAll(keepingCapacity: true) }
       guard !dataLines.isEmpty, !accumulated.completed else { return }
-      if accumulated.firstFrameMs == nil {
-        accumulated.firstFrameMs = Int(Date().timeIntervalSince(startedAt) * 1_000)
+      if !sawFrame {
+        sawFrame = true
+        timeline.firstFrame()
         hooks.onFirstFrame()
       }
       let payload = dataLines.joined(separator: "\n")
@@ -232,16 +355,19 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
         let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
         let type = event["type"] as? String
       else { throw LLMClientError.malformedResponse }
+      timeline.event(type)
       switch type {
       case "response.output_text.delta":
         let delta = event["delta"] as? String ?? ""
         guard !delta.isEmpty else { return }
+        timeline.outputDelta()
         try hooks.onDecodedProgress()
         accumulated.content += delta
         emitter.emit(content: accumulated.content, thinking: accumulated.hasReasoningSummary)
       case "response.reasoning_summary_text.delta":
         let delta = event["delta"] as? String ?? ""
         guard !delta.isEmpty else { return }
+        timeline.reasoningDelta()
         try hooks.onDecodedProgress()
         accumulated.hasReasoningSummary = true
         emitter.emit(content: accumulated.content, thinking: true)
@@ -290,7 +416,7 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
 
     var isFirstLine = true
     for try await rawLine in stream {
-      accumulated.responseBytes += rawLine.utf8.count + 1
+      timeline.line(bytes: rawLine.utf8.count + 1, isComment: rawLine.hasPrefix(":"))
       var line = rawLine
       if isFirstLine {
         isFirstLine = false
@@ -307,7 +433,11 @@ public struct ChatGPTResponsesLLMClient: LLMClient {
       dataLines.append(value)
     }
     try flush()
-    guard accumulated.completed else { throw LLMClientError.streamTruncated }
+    guard accumulated.completed else {
+      // 消费方被取消时异步序列会安静结束;那是取消,不是可重试的截断。
+      try Task.checkCancellation()
+      throw LLMClientError.streamTruncated
+    }
     return accumulated
   }
 }
@@ -400,4 +530,15 @@ enum ChatGPTResponsesErrorMapper {
       param: param.map { DiagnosticSanitizer.token($0, fallback: "unknown") },
       requestID: requestID)
   }
+}
+
+/// 本进程内已被服务端拒绝 `reasoning.summary` 的模型。不落盘:下次启动重新探测一次,
+/// 代价至多是一条开流前就被拒的请求。
+final class ReasoningSummaryRejections: Sendable {
+  static let shared = ReasoningSummaryRejections()
+
+  private let models = Mutex<Set<String>>([])
+
+  func contains(_ model: String) -> Bool { models.withLock { $0.contains(model) } }
+  func insert(_ model: String) { _ = models.withLock { $0.insert(model) } }
 }
