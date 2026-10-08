@@ -86,6 +86,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case chatGPTUsageLimit, chatGPTSignIn
     /// 纪要重试耗尽(10-06):有一跳长时间运行后被截断/超时/断开;其余传输类中断。
     case reasoningTooLong, connectionInterrupted
+    /// Anthropic(10-08):模型拒答;输出达到长度上限(思考也计入上限)。
+    case contentRefused, outputTooLong
   }
   public enum Action: String, Sendable {
     case steps, editKey, editModel, editConfiguration, chooseChannel, exportDiagnostics
@@ -112,8 +114,9 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case .missingModel: return .editModel
     case .configuration: return .editConfiguration
     // 推理档位在这一路的设置里;有角色时导航到该路(不是渠道编辑器)。
-    case .reasoningTooLong: return .editModel
-    case .unsupported where context.role != nil: return .chooseChannel
+    case .reasoningTooLong, .outputTooLong: return .editModel
+    case .unsupported where context.role != nil, .contentRefused where context.role != nil:
+      return .chooseChannel
     case .connection, .unknown, .history: return .exportDiagnostics
     default: return .steps
     }
@@ -137,6 +140,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case .connection: return "连接未完成，原因尚不明确；请导出诊断包交给 JustSaid 开发者排查"
     case .reasoningTooLong: return "模型思考时间过长，结果出来前连接被中断"
     case .connectionInterrupted: return "连接中途断开，常见于网络或代理不稳定"
+    case .contentRefused: return "模型拒绝处理这次内容，已生成的部分未采用"
+    case .outputTooLong: return "模型输出达到长度上限，内容不完整，未采用"
     case .unknown: return "暂时无法判断失败原因，请导出诊断包交给 JustSaid 开发者排查"
     case .history: return "历史失败缺少精确上下文，请导出诊断包交给 JustSaid 开发者排查"
     }
@@ -155,7 +160,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     case .unsupported: return context.role == nil ? "查看渠道排查步骤" : "更换渠道"
     case .unavailable: return "查看渠道排查步骤"
     case .offline, .connectionInterrupted: return "查看网络检查步骤"
-    case .reasoningTooLong: return "调低推理档位"
+    case .reasoningTooLong, .outputTooLong: return "调低推理档位"
+    case .contentRefused: return context.role == nil ? "查看处理步骤" : "更换渠道或模型"
     case .connection, .unknown, .history: return "导出诊断包"
     }
   }
@@ -193,6 +199,10 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
       ]
     case .connectionInterrupted:
       return ["检查网络或代理后，点「重新生成纪要」重试。", "反复在相近时长断开时，导出诊断包交给 JustSaid 开发者。"]
+    case .contentRefused:
+      return ["拒答随内容与模型而定，原样重试通常仍会被拒。", "可在这一路换一个模型或渠道后重试。"]
+    case .outputTooLong:
+      return ["在这一路的设置里把推理档位调低一档，再重试。", "思考内容也计入输出上限，长会议在高推理档位下更容易触发。"]
     case .missingKey, .missingModel, .configuration:
       if context.providerID == ChatGPTPlanContract.providerID {
         return [
@@ -307,6 +317,12 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
         cause = service.httpStatus == 503 ? .unavailable : .permission
       case .responseFailed, .responseIncomplete, .refused, .other: cause = .unknown
       }
+    } else if let anthropic = error as? AnthropicMessagesError {
+      code = anthropic.category
+      switch anthropic.kind {
+      case .refused: cause = .contentRefused
+      case .outputLimitReached: cause = .outputTooLong
+      }
     } else if let url = error as? URLError {
       cause = url.code == .notConnectedToInternet ? .offline : .connection
     } else if let http = error as? HTTPTransportError,
@@ -324,13 +340,18 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
         case 403: cause = .permission
         case 429: cause = .rateLimit
         case 501: cause = .unsupported
-        case 500, 502, 503, 504: cause = .unavailable
+        // 529:Anthropic 的 overloaded_error。
+        case 500, 502, 503, 504, 529: cause = .unavailable
         default: cause = .unknown
         }
       }
     } else if let client = error as? LLMClientError {
       switch client {
       case .invalidEndpoint, .insecureEndpoint: cause = .configuration
+      // 流内错误只认闭合的类型短码(Anthropic 的 error.type,等同开流前的 529/500/429);
+      // 其余供应商放进来的自由文本不解析。
+      case .streamFailed("overloaded_error"), .streamFailed("api_error"): cause = .unavailable
+      case .streamFailed("rate_limit_error"): cause = .rateLimit
       default: cause = .unknown
       }
     }
@@ -346,6 +367,8 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     let candidates = [object["code"], nested?["code"], nested?["type"]].compactMap { $0 as? String }
     let quota: Set<String> = [
       "insufficient_quota", "quota_exceeded", "insufficient_balance", "balance_not_enough",
+      // Anthropic 402 的 error.type。
+      "billing_error",
     ]
     let concurrency: Set<String> = ["concurrency_limit_exceeded", "too_many_concurrent_requests"]
     let rate: Set<String> = ["rate_limit_exceeded", "rate_limit_error", "too_many_requests"]

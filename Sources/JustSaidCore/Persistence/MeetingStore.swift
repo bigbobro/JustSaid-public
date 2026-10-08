@@ -708,6 +708,7 @@ public final class MeetingStore: @unchecked Sendable {
       try Self.requireCurrentRecoveryJobs(candidate.jobs, in: $0)
       $0.postMeetingFailureReason = nil
       $0.postMeetingFailureLogID = nil
+      $0.postMeetingFailureCause = nil
       $0.postMeetingFailedAt = nil
       $0.status = .processing
     }
@@ -851,6 +852,8 @@ public final class MeetingStore: @unchecked Sendable {
       )
       $0.postMeetingFailureAttempts = attempts
       $0.status = .failed
+      $0.postMeetingFailureCause = PostMeetingFailureAdvice.volcengine(
+        code: PostMeetingFailureAdvice.volcengineCode(in: detail))
       $0.postMeetingFailureReason = reason
       $0.postMeetingFailureLogID = Self.logID(in: reason)
       $0.postMeetingFailedAt = failedAt
@@ -933,9 +936,25 @@ public final class MeetingStore: @unchecked Sendable {
     }
   }
 
+  /// 散会时把会中出过的问题并进 meeting.json(按类别加原因合并,次数相加)。
+  /// 已定稿的会议也照写:这是事实留痕,不改纪要。
+  @discardableResult
+  public func recordInMeetingFailures(
+    _ records: [InMeetingFailureRecord],
+    at paths: MeetingPaths
+  ) throws -> MeetingMetadata {
+    guard !records.isEmpty else { return try read(from: paths) }
+    return try mutateMetadata(at: paths) {
+      $0.inMeetingFailures = InMeetingFailureRecord.merging($0.inMeetingFailures ?? [], with: records)
+    }
+  }
+
+  /// `cause` 跟着它被记下时的那句 `reason` 走:管线带着失败步骤先写一次精确原因,
+  /// 协调者随后用同一句 reason 兜底再写时不得把它覆盖成不分步骤的结果。
   @discardableResult
   public func failPostMeetingProcessing(
     reason: String,
+    cause: PostMeetingFailureCause? = nil,
     failedAt: Date = Date(),
     at paths: MeetingPaths,
     ifCurrentRecoveryJobs expectedJobs: [PostMeetingRecoveryJob]? = nil
@@ -943,6 +962,9 @@ public final class MeetingStore: @unchecked Sendable {
     try mutateMetadata(at: paths) {
       try Self.requireCurrentRecoveryJobs(expectedJobs, in: $0)
       guard !$0.finalized else { return }
+      let keepsRecordedCause =
+        $0.postMeetingFailureReason == reason && $0.postMeetingFailureCause != nil
+      if !keepsRecordedCause { $0.postMeetingFailureCause = cause }
       $0.status = .failed
       $0.postMeetingFailureReason = reason
       $0.postMeetingFailureLogID = Self.logID(in: reason)

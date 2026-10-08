@@ -86,6 +86,8 @@ public final class PostMeetingTaskCoordinator {
   private var snapshots: [String: PostMeetingTaskSnapshot] = [:]
   private var recoveryAdviceByIdentity: [String: [LLMFailureContext.Feature: LLMRecoveryAdvice]] =
     [:]
+  /// 精转失败的闭合原因,写盘后从 meeting.json 读回(管线按步骤记的才准),与失败快照同生同灭。
+  private var transcriptionFailureCauseByIdentity: [String: PostMeetingFailureCause] = [:]
   private var liveMinutes: [String: PostMeetingLiveMinutesDraft] = [:]
   /// 运行中任务占用的会议目录,供 `reconcileInterruptedMeetings` 排除集使用。
   private var runningDirectories: [String: URL] = [:]
@@ -175,6 +177,11 @@ public final class PostMeetingTaskCoordinator {
     recoveryAdviceByIdentity[Self.identity(for: directory)]?[feature]
   }
 
+  /// 精转失败快照对应的原因;nil 时界面回落会议库条目上的磁盘值。
+  public func transcriptionFailureCause(for directory: URL) -> PostMeetingFailureCause? {
+    transcriptionFailureCauseByIdentity[Self.identity(for: directory)]
+  }
+
   public var isImporting: Bool {
     snapshots.contains { key, snapshot in
       snapshot.kind == .importRecording && tasks[key] != nil
@@ -206,6 +213,7 @@ public final class PostMeetingTaskCoordinator {
       snapshots.removeValue(forKey: identity)
       liveMinutes.removeValue(forKey: identity)
       recoveryAdviceByIdentity.removeValue(forKey: identity)
+      transcriptionFailureCauseByIdentity.removeValue(forKey: identity)
       noticeDismissal.cancel(identity: identity)
     }
     if lastImportError != nil, !importing {
@@ -322,8 +330,8 @@ public final class PostMeetingTaskCoordinator {
       directory: paths.directory,
       kind: .fullPostMeeting,
       broadcastsRecovery: false,
-      onFailureWriteDisk: { [meetingStore] reason in
-        _ = try? meetingStore.failPostMeetingProcessing(reason: reason, at: paths)
+      onFailureWriteDisk: { [meetingStore] reason, cause in
+        _ = try? meetingStore.failPostMeetingProcessing(reason: reason, cause: cause, at: paths)
       },
       body: { pipeline in
         try await pipeline.run(input).notice
@@ -364,8 +372,8 @@ public final class PostMeetingTaskCoordinator {
       directory: paths.directory,
       kind: .fullPostMeeting,
       broadcastsRecovery: true,
-      onFailureWriteDisk: { reason in
-        _ = try? store.failPostMeetingProcessing(reason: reason, at: paths)
+      onFailureWriteDisk: { reason, cause in
+        _ = try? store.failPostMeetingProcessing(reason: reason, cause: cause, at: paths)
       },
       body: { pipeline in
         let input = try PostMeetingInput.rebuild(from: paths, meetingStore: store)
@@ -412,10 +420,11 @@ public final class PostMeetingTaskCoordinator {
       directory: paths.directory,
       kind: .recovery,
       broadcastsRecovery: true,
-      onFailureWriteDisk: { reason in
+      onFailureWriteDisk: { reason, cause in
         do {
           _ = try store.failPostMeetingProcessing(
             reason: reason,
+            cause: cause,
             at: paths,
             ifCurrentRecoveryJobs: candidate.jobs
           )
@@ -505,7 +514,7 @@ public final class PostMeetingTaskCoordinator {
     directory: URL?,
     kind: PostMeetingOperationKind,
     broadcastsRecovery: Bool,
-    onFailureWriteDisk: (@MainActor (String) -> Void)?,
+    onFailureWriteDisk: (@MainActor (String, PostMeetingFailureCause?) -> Void)?,
     body: @escaping @Sendable (PostMeetingPipeline) async throws -> String
   ) -> Bool {
     // App 为纯纪要提供独立工厂,已有转写不依赖 ASR/存储配置与凭证。
@@ -575,7 +584,14 @@ public final class PostMeetingTaskCoordinator {
           recoveryAdviceByIdentity[identity, default: [:]][failureContext.feature] = advice
         }
         // 终态写盘先于任何身份/世代卫:孤立的失败运行不得只留下无诊断的 `.processing`。
-        onFailureWriteDisk?(error.localizedDescription)
+        onFailureWriteDisk?(
+          error.localizedDescription, PostMeetingFailureAdvice.classify(error, step: nil))
+        if onFailureWriteDisk != nil, let directory, snapshots[identity]?.runID == runID,
+          let cause = (try? meetingStore.read(from: MeetingPaths(directory: directory)))?
+            .postMeetingFailureCause
+        {
+          transcriptionFailureCauseByIdentity[identity] = cause
+        }
         self.completeRun(
           identity: identity,
           runID: runID,
@@ -605,6 +621,7 @@ public final class PostMeetingTaskCoordinator {
     // 新一轮开跑:上一轮失败保留的取证副本到此为止,别让旧半成品盖住新产物。
     liveMinutes[identity] = nil
     recoveryAdviceByIdentity[identity] = nil
+    transcriptionFailureCauseByIdentity[identity] = nil
     if let directory {
       runningDirectories[identity] = directory.standardizedFileURL
     }
@@ -685,6 +702,7 @@ public final class PostMeetingTaskCoordinator {
     snapshots.removeValue(forKey: identity)
     liveMinutes.removeValue(forKey: identity)
     recoveryAdviceByIdentity[identity] = nil
+    transcriptionFailureCauseByIdentity[identity] = nil
     noticeDismissal.cancel(identity: identity)
     // 只摘句柄,**不 cancel**;句柄留着会永久挡住这场会议后续所有启动。
     tasks[identity] = nil

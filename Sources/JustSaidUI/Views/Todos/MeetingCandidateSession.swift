@@ -11,7 +11,6 @@ public enum MeetingCandidateSurface: Equatable {
   case meeting
   case clean
   case reconcile
-  case receipt
 }
 
 public struct MeetingCandidateNotice: Equatable, Identifiable {
@@ -76,6 +75,8 @@ public struct MeetingCandidateLineVM: Equatable, Identifiable {
   public var primaryIdentifier: String
   public var note: String?
   public var permanentlyDeleted = false
+  /// 信息齐全、可以不开表单直接加入的候选（#146）。
+  public var quickAdd = false
 }
 
 public struct MeetingLegacyLineVM: Equatable, Identifiable {
@@ -339,6 +340,38 @@ extension TodoPageModel {
     openClean()
   }
 
+  /// 一键加入（#146）：负责人和截止都已确定、没有要你选的，才不开表单。
+  /// 判断复用表单自己的规则：能存、不缺负责人、日期是明确的一天且不早于会议当天、
+  /// 负责人和会议原话没有冲突。缺任何一样都走「补全后加入」。
+  func quickAddEligible(_ row: TodoCandidateRow) -> Bool {
+    guard candidateWritable, row.disposition == .pending, row.snapshotIndex != nil,
+      row.relation != .suspect, snapshot?.state.isPermanentlyDeleted(row.disposition) != true,
+      let line = makeCleanLine(candidateID: row.id),
+      case .day(let day) = line.resolution,
+      line.draft.assigneeKind != .pending, lineCanSave(line)
+    else { return false }
+    let reference = candidateContext?.startedAt ?? now
+    return !TodoDueInterpreter.isBeforeReference(
+      day, reference: reference,
+      timeZone: TimeZone(identifier: day.timeZoneIdentifier) ?? .current)
+  }
+
+  public func quickAddCandidate(_ id: UUID) {
+    guard let row = row(id), quickAddEligible(row), let line = makeCleanLine(candidateID: id)
+    else {
+      beginCandidateClean([id])
+      return
+    }
+    cleanLines = [line]
+    cleanError = nil
+    cleanRetry = false
+    candidateReceipt = nil
+    reconcileID = nil
+    candidateActionError = nil
+    // 失败时落进表单：输入和原因都在那里，主按钮是「重新保存」。
+    if !saveClean() { candidateSurface = .clean }
+  }
+
   public func beginCandidateReadd(_ id: UUID) {
     guard candidateWritable, let row = row(id),
       snapshot?.state.isPermanentlyDeleted(row.disposition) == true,
@@ -477,7 +510,7 @@ extension TodoPageModel {
         canUndo: !steps.isEmpty
       )
       candidateSelection.subtract(active.compactMap(\.candidateID))
-      candidateSurface = .receipt
+      candidateSurface = .meeting
       cleanError = nil
       cleanRetry = false
       return true
@@ -514,7 +547,7 @@ extension TodoPageModel {
       }
       candidateReceipt = MeetingCandidateReceipt(
         message: "已关联到现有待办，事项没有改动", steps: [], canUndo: false)
-      candidateSurface = .receipt
+      candidateSurface = .meeting
       cleanError = nil
     } catch {
       cleanError = TodoText.saveFailure(TodoText.reason(of: error))
@@ -589,8 +622,8 @@ extension TodoPageModel {
       candidateSurface = .meeting
       cleanError = nil
     } catch {
-      cleanError = TodoText.saveFailure(TodoText.reason(of: error))
-      cleanRetry = true
+      // 回执浮在会议上，没有表单可落；原因报在右栏顶部。
+      candidateActionError = TodoText.saveFailure(TodoText.reason(of: error))
     }
   }
 
@@ -700,7 +733,8 @@ extension TodoPageModel {
       ?? variant?.anchor.flatMap { value in
         value == "无" ? nil : TranscriptAnchor(timecode: value)
       }
-    let primary = row.relation == .suspect ? "核对" : "加入待办"
+    let quick = quickAddEligible(row)
+    let primary = row.relation == .suspect ? "核对" : (quick ? "加入待办" : "补全后加入")
     let primaryID =
       row.relation == .suspect
       ? "meeting.candidates.review.\(row.id.uuidString)"
@@ -718,7 +752,7 @@ extension TodoPageModel {
       id: row.id, title: title, owner: owner,
       deadline: deadline.map { "原截止：\($0)" } ?? "原截止：待确认",
       anchor: anchor, primaryTitle: primary, primaryIdentifier: primaryID, note: note,
-      permanentlyDeleted: permanentlyDeleted
+      permanentlyDeleted: permanentlyDeleted, quickAdd: quick
     )
   }
 
@@ -1037,16 +1071,36 @@ public struct MeetingReconcileComparison: Equatable {
   public var cards: [MeetingReconcileCard]
 }
 
+extension TodoDue {
+  /// 日期框里显示的月日写法；不是具体日期时为 nil。
+  var monthDayLabel: String? {
+    if case .date(let day) = self { return TodoText.monthDay(day.day) }
+    return nil
+  }
+}
+
 enum MeetingCandidateCopy {
+  /// 截止框下的会议原话；原话本身就是「待确认」时不重复一遍。
+  static func spokenDeadline(_ text: String?) -> String? {
+    guard let text = text?.nilIfBlank, text != "待确认" else { return nil }
+    return "会议原话：\(text)"
+  }
+
+  /// 二选一的问题句。只剩「N 天内」含不含会议当天这一种。
+  static func choicePrompt(_ text: String?, reason: TodoDueChoiceReason) -> String {
+    switch reason {
+    case .withinIncludesReferenceDay:
+      let spoken = text?.nilIfBlank.map { "「\($0)」" } ?? "这个期限"
+      return "\(spoken)算不算会议当天？"
+    }
+  }
+
   static func choiceLabel(day: TodoDay, reason: TodoDueChoiceReason, options: [TodoDay]) -> String {
     let date = TodoText.monthDay(day.day)
     switch reason {
     case .withinIncludesReferenceDay:
       let earliest = options.map(\.day).min()
-      return day.day == earliest ? "包含当天 · \(date)" : "不含当天 · \(date)"
-    case .missingYear:
-      let year = TodoCalendar.parts(day.day)?.year ?? 0
-      return "\(year)年 · \(date)"
+      return day.day == earliest ? "算当天 · \(date)" : "不算当天 · \(date)"
     }
   }
 

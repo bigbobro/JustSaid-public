@@ -7,6 +7,7 @@ struct MeetingCandidateRailList: View {
   var onRefresh: () -> Void
   var onToggle: (UUID) -> Void
   var onPrimary: (UUID) -> Void
+  var onEdit: (UUID) -> Void
   var onIgnore: (UUID) -> Void
   var onUndoAdd: (UUID) -> Void
   var onReadd: (UUID) -> Void
@@ -144,10 +145,16 @@ struct MeetingCandidateRailList: View {
       }
       HStack(spacing: Tokens.V1.Space.xs) {
         Spacer(minLength: Tokens.V1.Space.xs)
-        if line.primaryTitle == "加入待办" {
+        if line.primaryTitle != "核对" {
           Button("忽略") { onIgnore(line.id) }
             .buttonStyle(.v1Quiet)
             .runtimeAccessibilityIdentifier("meeting.candidates.ignore.\(line.id.uuidString)")
+        }
+        // 信息齐全的候选一键加入；想改再点「编辑」。缺东西的直接进表单补。
+        if line.quickAdd {
+          Button("编辑") { onEdit(line.id) }
+            .buttonStyle(.v1Quiet)
+            .runtimeAccessibilityIdentifier("meeting.candidates.edit.\(line.id.uuidString)")
         }
         Button(line.primaryTitle) { onPrimary(line.id) }
           .buttonStyle(.v1Outline)
@@ -280,12 +287,16 @@ struct MeetingCandidateModelRail: View {
       onRefresh: onRefresh,
       onToggle: { model.toggleCandidateSelection($0) },
       onPrimary: { id in
-        if model.candidateBoard.pending.first(where: { $0.id == id })?.primaryTitle == "核对" {
+        let line = model.candidateBoard.pending.first(where: { $0.id == id })
+        if line?.primaryTitle == "核对" {
           model.beginReconcile(id)
+        } else if line?.quickAdd == true {
+          model.quickAddCandidate(id)
         } else {
           model.beginCandidateClean([id])
         }
       },
+      onEdit: { model.beginCandidateClean([$0]) },
       onIgnore: { model.ignoreCandidate($0) },
       onUndoAdd: { model.undoAddedCandidate($0) },
       onReadd: { model.beginCandidateReadd($0) },
@@ -315,6 +326,7 @@ struct MeetingCandidateFallbackRail: View {
         if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
       },
       onPrimary: { _ in },
+      onEdit: { _ in },
       onIgnore: { _ in },
       onUndoAdd: { _ in },
       onReadd: { _ in },
@@ -364,113 +376,127 @@ struct MeetingCandidateFallbackRail: View {
   }
 }
 
+/// 会议右栏的两种样子：平时是候选列表，点开编辑或核对时同一栏原位换成表单（#146）。
+/// 左边的纪要与转写不被盖住，可以边看边填。
+struct MeetingCandidateRailSwitch<Normal: View>: View {
+  @ObservedObject var page: TodoPageModel
+  var meetingID: UUID
+  var onJump: (TimeInterval) -> Void
+  @ViewBuilder var normal: () -> Normal
+
+  var body: some View {
+    if page.candidateSurface != .meeting, page.candidateContext?.meetingID == meetingID {
+      MeetingCandidateEditorRail(model: page, onJump: onJump)
+    } else {
+      normal()
+    }
+  }
+}
+
 extension View {
+  /// 加入后的就地回执，浮在阅读列右下角、贴着右栏左沿，不换页。
   @ViewBuilder
-  func meetingCandidateCover(
-    page: TodoPageModel?, meetingID: UUID, onShowTodos: @escaping () -> Void,
-    onJump: @escaping (TimeInterval) -> Void, onRefresh: @escaping () -> Void
+  func meetingCandidateReceipt(
+    page: TodoPageModel?, meetingID: UUID, trailingInset: CGFloat,
+    onShowTodos: @escaping () -> Void
   ) -> some View {
     if let page {
-      modifier(
-        MeetingCandidateCover(
-          page: page, meetingID: meetingID,
-          onShowTodos: onShowTodos, onJump: onJump, onRefresh: onRefresh))
+      overlay(alignment: .bottomTrailing) {
+        MeetingCandidateReceiptToast(
+          page: page, meetingID: meetingID, onShowTodos: onShowTodos
+        )
+        .padding(.trailing, trailingInset)
+      }
     } else {
       self
     }
   }
 }
 
-private struct MeetingCandidateCover: ViewModifier {
+private struct MeetingCandidateReceiptToast: View {
   @ObservedObject var page: TodoPageModel
   var meetingID: UUID
   var onShowTodos: () -> Void
-  var onJump: (TimeInterval) -> Void
-  var onRefresh: () -> Void
 
-  func body(content: Content) -> some View {
-    let showing = page.candidateSurface != .meeting && page.candidateContext?.meetingID == meetingID
-    content
-      .accessibilityHidden(showing)
-      .allowsHitTesting(!showing)
-      .overlay {
-        if showing {
-          MeetingCandidateLayerView(
-            model: page, onShowTodos: onShowTodos,
-            onJump: onJump, onRefresh: onRefresh)
+  var body: some View {
+    if page.candidateSurface == .meeting, page.candidateContext?.meetingID == meetingID,
+      let receipt = page.candidateReceipt
+    {
+      HStack(spacing: Tokens.V1.Space.sm) {
+        Text(receipt.message)
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink)
+          .lineLimit(1)
+        if receipt.canUndo {
+          Button("撤销") { page.undoCandidateReceipt() }
+            .buttonStyle(.v1Quiet)
+            .runtimeAccessibilityIdentifier("meeting.candidates.receipt.undo")
         }
+        Button("查看待办", action: onShowTodos)
+          .buttonStyle(.v1Quiet)
+          .runtimeAccessibilityIdentifier("meeting.candidates.receipt.view-todos")
       }
+      .padding(.horizontal, Tokens.V1.Space.sm)
+      .padding(.vertical, Tokens.V1.Space.s2xs)
+      .background(Tokens.V1.Color.raised, in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.md))
+      .overlay(
+        RoundedRectangle(cornerRadius: Tokens.V1.Radius.md).strokeBorder(
+          Tokens.V1.Color.rule, lineWidth: Tokens.V1.Size.controlRuleWidth)
+      )
+      .padding(Tokens.V1.Space.md)
+      .runtimeAccessibilityIdentifier("meeting.candidates.receipt")
+    }
   }
 }
 
-struct MeetingCandidateLayerView: View {
+struct MeetingCandidateEditorRail: View {
   @ObservedObject var model: TodoPageModel
-  @FocusState private var focusedAssignee: UUID?
-  var onShowTodos: () -> Void
   var onJump: (TimeInterval) -> Void
-  var onRefresh: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      layerBar
-      HStack(alignment: .top, spacing: 0) {
-        ScrollView {
-          switch model.candidateSurface {
-          case .clean: cleanForm
-          case .reconcile: reconcileForm
-          case .receipt: receipt
-          case .meeting: EmptyView()
-          }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // 原会议右栏仍挂在下面，返回时它的选择与滚动位置保持不变。
-        ScrollView {
-          MeetingCandidateModelRail(
-            model: model,
-            onJump: { seconds in
-              model.returnToCandidates()
-              onJump(seconds)
-            }, onRefresh: onRefresh
-          )
-          .padding(Tokens.V1.Space.md)
-        }
-        .frame(width: Tokens.V1.Size.meetingRailWidth)
-        .frame(maxHeight: .infinity)
-        .background(Tokens.V1.Color.paper2)
-        .overlay(alignment: .leading) {
-          Rectangle().fill(Tokens.V1.Color.rule).frame(width: Tokens.V1.Size.controlRuleWidth)
+      header
+      ScrollView {
+        switch model.candidateSurface {
+        case .clean: cleanForm
+        case .reconcile: reconcileForm
+        case .meeting: EmptyView()
         }
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      if model.candidateSurface == .clean { footer }
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(Tokens.V1.Color.paper)
+    .frame(width: Tokens.V1.Size.meetingEditorWidth)
+    .frame(maxHeight: .infinity)
+    .background(Tokens.V1.Color.paper2)
+    .overlay(alignment: .leading) {
+      Rectangle().fill(Tokens.V1.Color.rule).frame(width: Tokens.V1.Size.controlRuleWidth)
+    }
+    // 表单里 Esc 回到候选列表（取消按钮的快捷键之外再兜一层，焦点在非按钮控件上也生效）。
+    .onExitCommand { model.returnToCandidates() }
+    .runtimeAccessibilityIdentifier("meeting.candidate-editor")
   }
 
-  private var layerBar: some View {
+  private var header: some View {
     HStack(spacing: Tokens.V1.Space.sm) {
       Button(action: model.returnToCandidates) {
         Image(systemName: "chevron.left")
       }
       .buttonStyle(.v1Quiet)
-      .accessibilityLabel("返回会议右栏")
+      .help("返回待办候选 Esc")
+      .accessibilityLabel("返回待办候选")
       .runtimeAccessibilityIdentifier("meeting.clean.back")
       Text(title)
         .font(Tokens.V1.Text.barTitle.font)
         .foregroundStyle(Tokens.V1.Color.ink)
       Spacer()
-      if model.candidateSurface == .clean {
-        if model.cleanLines.filter({ !$0.removed }).count > 1 {
-          Text("已核对 \(model.cleanReviewedCount) / \(model.cleanLines.filter { !$0.removed }.count)")
-            .font(Tokens.V1.Text.meta.font)
-            .foregroundStyle(Tokens.V1.Color.ink2)
-            .runtimeAccessibilityIdentifier("meeting.clean.reviewed")
-        }
-        Button("取消", action: model.returnToCandidates).buttonStyle(.v1Quiet)
-        Button(model.cleanSaveTitle) { model.saveClean() }
-          .buttonStyle(.v1Primary)
-          .disabled(!model.cleanSaveEnabled)
-          .runtimeAccessibilityIdentifier(
-            model.cleanSaveEnabled ? "meeting.clean.save" : "meeting.clean.save.disabled")
+      if model.candidateSurface == .clean,
+        model.cleanLines.filter({ !$0.removed }).count > 1
+      {
+        Text("已核对 \(model.cleanReviewedCount) / \(model.cleanLines.filter { !$0.removed }.count)")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink2)
+          .runtimeAccessibilityIdentifier("meeting.clean.reviewed")
       }
     }
     .padding(.horizontal, Tokens.V1.Space.md)
@@ -480,10 +506,19 @@ struct MeetingCandidateLayerView: View {
     }
   }
 
+  /// 确认钉在栏底，填完表单视线和鼠标都不用回到顶上。⌘↩ 提交，Esc 取消。
+  private var footer: some View {
+    TodoComposeFooter(
+      error: model.cleanError, errorIdentifier: "meeting.clean.error",
+      saveTitle: model.cleanSaveTitle, saveEnabled: model.cleanSaveEnabled,
+      cancelIdentifier: "meeting.clean.cancel", saveIdentifier: "meeting.clean.save",
+      disabledSaveIdentifier: "meeting.clean.save.disabled",
+      onCancel: model.returnToCandidates, onSave: { model.saveClean() })
+  }
+
   private var title: String {
     switch model.candidateSurface {
     case .reconcile: "核对候选"
-    case .receipt: "加入待办"
     case .clean:
       model.cleanLines.contains(where: { $0.legacyKey != nil && !$0.removed }) ? "带入待办" : "加入待办"
     case .meeting: "待办候选"
@@ -493,49 +528,22 @@ struct MeetingCandidateLayerView: View {
   private var cleanForm: some View {
     let active = model.cleanLines.filter { !$0.removed }
     let batch = active.count > 1
-    return VStack(alignment: .leading, spacing: Tokens.V1.Space.md) {
-      Text("待办事项确认")
-        .font(Tokens.V1.Text.heading.font)
-        .foregroundStyle(Tokens.V1.Color.ink)
-      if let context = model.candidateContext {
-        Text("按会议日期 \(context.referenceDay) 计算")
-          .font(Tokens.V1.Text.meta.font)
-          .foregroundStyle(Tokens.V1.Color.ink2)
-          .runtimeAccessibilityIdentifier("meeting.clean.basis")
-        timeZoneControl(context)
+    return VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
+      ForEach(Array(active.enumerated()), id: \.element.id) { index, line in
+        cleanLine(line, batch: batch, focusTitle: index == 0)
       }
-      ForEach(model.cleanLines) { line in
-        if !line.removed {
-          cleanLine(line, batch: batch)
-        }
-      }
-      if let error = model.cleanError {
-        Text(error)
-          .font(Tokens.V1.Text.body.font)
-          .foregroundStyle(Tokens.V1.Color.ink)
-          .runtimeAccessibilityIdentifier("meeting.clean.error")
-      }
-
     }
-    .padding(Tokens.V1.Space.lg)
-    .frame(maxWidth: batch ? Tokens.V1.Size.reading : Tokens.V1.Size.settingsForm)
+    .padding(Tokens.V1.Space.md)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .runtimeAccessibilityIdentifier(batch ? "meeting.clean.batch" : "meeting.clean.single")
-    .frame(maxWidth: .infinity)
   }
 
-  private func timeZoneControl(_ context: MeetingCandidateContext) -> some View {
-    HStack(spacing: Tokens.V1.Space.xs) {
-      Text(context.timeZoneIdentifier)
-        .font(Tokens.V1.Text.meta.font)
-        .foregroundStyle(Tokens.V1.Color.ink2)
-      Menu("改这次的计算时区") {
-        ForEach(Self.zones(current: context.timeZoneIdentifier), id: \.self) { zone in
-          Button(zone) { model.setCandidateTimeZone(zone) }
-        }
-      }
-      .font(Tokens.V1.Text.meta.font)
-    }
-    .runtimeAccessibilityIdentifier("meeting.clean.timezone")
+  private var basis: TodoDeadlineBasis? {
+    guard let context = model.candidateContext else { return nil }
+    return TodoDeadlineBasis(
+      referenceDay: context.referenceDay, timeZoneIdentifier: context.timeZoneIdentifier,
+      timeZones: Self.zones(current: context.timeZoneIdentifier),
+      onSelectTimeZone: { model.setCandidateTimeZone($0) })
   }
 
   private static func zones(current: String) -> [String] {
@@ -544,205 +552,88 @@ struct MeetingCandidateLayerView: View {
     return values
   }
 
-  private func cleanLine(_ line: MeetingCandidateCleanLine, batch: Bool) -> some View {
-    VStack(alignment: .leading, spacing: Tokens.V1.Space.md) {
-      VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-        HStack {
-          Text("来源候选").font(Tokens.V1.Text.meta.font)
-          Spacer()
-          if let anchor = line.anchor {
-            Text(TodoClock.sourceTime(anchor))
-              .font(Tokens.V1.Text.timecode.font)
+  private func cleanLine(_ line: MeetingCandidateCleanLine, batch: Bool, focusTitle: Bool)
+    -> some View
+  {
+    TodoComposeForm(
+      draft: Binding(
+        get: { model.cleanLines.first { $0.id == line.id }?.draft ?? line.draft },
+        // 失焦时输入框会把没变的值再写一遍；只在真有改动时更新，免得把保存失败的原因清掉。
+        set: { value in
+          guard model.cleanLines.first(where: { $0.id == line.id })?.draft != value else { return }
+          model.updateCleanLine(line.id) { $0.draft = value }
+        }),
+      due: cleanDue(line.id),
+      source: TodoComposeSource(
+        text: line.sourceText, anchor: line.anchor, missingContext: line.missingContext,
+        identifier: "meeting.clean.source.\(line.id.uuidString)"),
+      onJump: onJump,
+      identifiers: .meeting(line.id),
+      assigneeSuggestions: model.assigneeSuggestions(including: line.ownerText),
+      clients: model.tagDirectory.clients,
+      projects: model.tagDirectory.projects(for: line.draft.client),
+      onSelectClient: { model.selectCleanClient($0, lineID: line.id) },
+      onSelectProject: { model.selectCleanProject($0, lineID: line.id) },
+      now: model.candidateContext?.startedAt ?? model.now,
+      dueHint: dueHint(line),
+      dueBasis: basis,
+      focusTitle: focusTitle,
+      spokenAssignee: line.ownerText?.nilIfBlank,
+      // 在负责人框里亲手选了或新建了名字，就算确认过，不再追问和会议原话的冲突。
+      onAssigneeChosen: { model.confirmCleanAssignee(line.id, useOriginal: false) },
+      sourceAccessory: {
+        if batch {
+          Button("取消加入这一条") { model.removeCleanLine(line.id) }
+            .buttonStyle(.v1Quiet.height(Tokens.V1.Size.controlSm))
+            // 安静按钮自带横内距；往外让出这一截，字的右沿和下面时间码的右沿对齐。
+            .padding(.trailing, -Tokens.V1.Space.sm)
+            .runtimeAccessibilityIdentifier("meeting.clean.remove.\(line.id.uuidString)")
+        }
+      },
+      followup: { followup(line) },
+      trailing: {
+        if line.legacyKey != nil {
+          TodoComposeField("完成") {
+            V1SegmentedPicker(
+              "完成",
+              selection: Binding(
+                get: { line.markCompleted },
+                set: { value in model.updateCleanLine(line.id) { $0.markCompleted = value } }
+              ), options: [.init(true, "已完成"), .init(false, "未完成")]
+            )
+            .runtimeAccessibilityIdentifier("meeting.clean.completed.\(line.id.uuidString)")
           }
         }
-        .foregroundStyle(Tokens.V1.Color.ink3)
-        Text("「\(line.sourceText)」")
-          .font(Tokens.V1.Text.body.font)
-          .foregroundStyle(Tokens.V1.Color.ink)
-          .fixedSize(horizontal: false, vertical: true)
-          .runtimeAccessibilityIdentifier("meeting.clean.source.\(line.id.uuidString)")
-        if line.missingContext {
-          Text("原负责人、截止和位置无法恢复")
-            .font(Tokens.V1.Text.meta.font)
-            .foregroundStyle(Tokens.V1.Color.ink2)
-        }
       }
-      .padding(Tokens.V1.Space.md)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Tokens.V1.Color.paper2, in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.md))
-      field("事项") {
-        TextField(
-          "要跟进的事", text: cleanText(line.id, \.title) { $0.draft.title = $1 }, axis: .vertical
-        )
-        .lineLimit(2...5)
-        .textFieldStyle(.plain)
-        .font(Tokens.V1.Text.body.font)
-        .padding(Tokens.V1.Space.sm)
-        .background(fieldBackground)
-        .runtimeAccessibilityIdentifier("meeting.clean.title.\(line.id.uuidString)")
-      }
-      HStack(alignment: .top, spacing: Tokens.V1.Space.md) {
-        field("负责人") { assigneeField(line) }
-        field("截止日期") { deadlineField(line) }
-      }
-      HStack(alignment: .top, spacing: Tokens.V1.Space.md) {
-        field("优先级") {
-          Menu {
-            ForEach([TodoPriority.high, .normal, .low], id: \.rawValue) { value in
-              Button {
-                model.updateCleanLine(line.id) { $0.draft.priority = value }
-              } label: {
-                if value == line.draft.priority {
-                  Label(TodoText.priority(value), systemImage: "checkmark")
-                } else {
-                  Text(TodoText.priority(value))
-                }
-              }
-            }
-          } label: {
-            Text(TodoText.priorityPhrase(line.draft.priority))
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
-          .menuStyle(.borderlessButton).menuIndicator(.hidden)
-          .frame(maxWidth: .infinity, minHeight: Tokens.V1.Size.control)
-          .modifier(TodoFieldSurface())
-          .overlay(alignment: .trailing) { cleanMenuIndicator }
-          .accessibilityLabel("优先级")
-          .runtimeAccessibilityIdentifier("meeting.clean.priority.\(line.id.uuidString)")
-        }
-        VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-          field("客户 / 项目") {
-            V1ComboBox(
-              label: "客户", value: line.draft.client, suggestions: model.tagDirectory.clients,
-              identifier: "meeting.clean.client.\(line.id.uuidString)"
-            ) { value in
-              model.selectCleanClient(value, lineID: line.id)
-            }
-            V1ComboBox(
-              label: "项目", value: line.draft.project,
-              suggestions: model.tagDirectory.projects(for: line.draft.client),
-              identifier: "meeting.clean.project.\(line.id.uuidString)"
-            ) { value in
-              model.selectCleanProject(value, lineID: line.id)
-            }
-          }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-      }
-      field("备注") {
-        TextField("补充说明", text: cleanText(line.id, \.note) { $0.draft.note = $1 }, axis: .vertical)
-          .lineLimit(3...6)
-          .textFieldStyle(.plain)
-          .font(Tokens.V1.Text.body.font)
-          .padding(Tokens.V1.Space.sm)
-          .background(fieldBackground)
-          .runtimeAccessibilityIdentifier("meeting.clean.note.\(line.id.uuidString)")
-      }
-      if line.legacyKey != nil {
-        V1SegmentedPicker(
-          "完成",
-          selection: Binding(
-            get: { line.markCompleted },
-            set: { value in model.updateCleanLine(line.id) { $0.markCompleted = value } }
-          ), options: [.init(true, "已完成"), .init(false, "未完成")]
-        )
-        .runtimeAccessibilityIdentifier("meeting.clean.completed.\(line.id.uuidString)")
-      }
-      if batch {
-        Button("取消加入这一条") { model.removeCleanLine(line.id) }
-          .buttonStyle(.v1Quiet)
-          .runtimeAccessibilityIdentifier("meeting.clean.remove.\(line.id.uuidString)")
-        Divider()
-      }
-    }
+    )
     .runtimeAccessibilityIdentifier("meeting.clean.line.\(line.id.uuidString)")
   }
 
-  private func assigneeField(_ line: MeetingCandidateCleanLine) -> some View {
-    VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-      Menu {
-        ForEach(TodoEditorDraft.AssigneeKind.allCases, id: \.self) { kind in
-          Button {
-            model.updateCleanLine(line.id) { $0.draft.assigneeKind = kind }
-            focusedAssignee = kind == .named ? line.id : nil
-          } label: {
-            let title =
-              kind == .named && !line.draft.assigneeName.isEmpty
-              ? line.draft.assigneeName : kind.title
-            if kind == line.draft.assigneeKind {
-              Label(title, systemImage: "checkmark")
-            } else {
-              Text(title)
-            }
-          }
-        }
-      } label: {
-        Text(TodoText.assignee(model.assignee(from: line.draft)))
-          .frame(maxWidth: .infinity, alignment: .leading)
-      }
-      .menuStyle(.borderlessButton).menuIndicator(.hidden)
-      .frame(maxWidth: .infinity, minHeight: Tokens.V1.Size.control)
-      .modifier(TodoFieldSurface())
-      .overlay(alignment: .trailing) { cleanMenuIndicator }
-      .accessibilityLabel("负责人")
-      .runtimeAccessibilityIdentifier("meeting.clean.assignee.\(line.id.uuidString)")
-      if line.draft.assigneeKind == .named {
-        TextField("姓名", text: cleanText(line.id, \.assigneeName) { $0.draft.assigneeName = $1 })
-          .textFieldStyle(.plain)
-          .focused($focusedAssignee, equals: line.id)
-          .font(Tokens.V1.Text.body.font)
-          .padding(Tokens.V1.Space.sm)
-          .background(fieldBackground)
-          .runtimeAccessibilityIdentifier("meeting.clean.assignee-name.\(line.id.uuidString)")
-      }
-      if model.cleanNeedsAssigneeConfirmation(line) {
-        VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-          Text(
-            "会议里说的负责人是\(line.ownerText ?? "待确认")，你选的是\(TodoText.assignee(model.assignee(from: line.draft)))，请确认用哪个"
-          )
-          .font(Tokens.V1.Text.meta.font)
-          .fixedSize(horizontal: false, vertical: true)
-          .foregroundStyle(Tokens.V1.Color.warn)
-          Button("用\(line.ownerText ?? "原负责人")") {
-            model.confirmCleanAssignee(line.id, useOriginal: true)
-          }
-          .buttonStyle(.v1Outline)
+  /// 要你确认负责人、要你选日期时，用「表单里的待确认行」整行放在负责人｜截止下面，答了就消失。
+  @ViewBuilder
+  private func followup(_ line: MeetingCandidateCleanLine) -> some View {
+    if model.cleanNeedsAssigneeConfirmation(line) {
+      let spoken = line.ownerText ?? "待确认"
+      let selected = TodoText.assignee(model.assignee(from: line.draft))
+      TodoComposeNotice(
+        level: .warn, text: "会议里说负责人是\(spoken)",
+        identifier: "meeting.clean.assignee-conflict.\(line.id.uuidString)"
+      ) {
+        Button("改用\(spoken)") { model.confirmCleanAssignee(line.id, useOriginal: true) }
+          .buttonStyle(.v1Outline.height(Tokens.V1.Size.controlSm))
           .runtimeAccessibilityIdentifier("meeting.clean.assignee-original.\(line.id.uuidString)")
-          Button("用\(TodoText.assignee(model.assignee(from: line.draft)))") {
-            model.confirmCleanAssignee(line.id, useOriginal: false)
-          }
-          .buttonStyle(.v1Outline)
+        Button("就用\(selected)") { model.confirmCleanAssignee(line.id, useOriginal: false) }
+          .buttonStyle(.v1Quiet.height(Tokens.V1.Size.controlSm))
           .runtimeAccessibilityIdentifier("meeting.clean.assignee-selected.\(line.id.uuidString)")
-        }
-        .padding(Tokens.V1.Space.sm)
-        .background(
-          Tokens.V1.Color.warnSoft, in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.sm)
-        )
-        .runtimeAccessibilityIdentifier("meeting.clean.assignee-conflict.\(line.id.uuidString)")
       }
     }
-  }
-
-  private var cleanMenuIndicator: some View {
-    Image(systemName: "chevron.down")
-      .font(Tokens.V1.Text.meta.font)
-      .foregroundStyle(Tokens.V1.Color.ink3)
-      .padding(.trailing, Tokens.V1.Space.sm)
-      .allowsHitTesting(false)
-      .accessibilityHidden(true)
-  }
-
-  private func deadlineField(_ line: MeetingCandidateCleanLine) -> some View {
-    VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-      if let deadline = line.deadlineText?.nilIfBlank {
-        Text("原截止：\(deadline)")
-          .font(Tokens.V1.Text.meta.font)
-          .foregroundStyle(Tokens.V1.Color.ink2)
-      }
-      if case .choose(let days, let reason) = line.resolution {
-        Text(reason.detail)
-          .font(Tokens.V1.Text.meta.font)
-          .foregroundStyle(Tokens.V1.Color.ink2)
+    if case .choose(let days, let reason) = line.resolution, line.chosenDay == nil {
+      TodoComposeNotice(
+        level: .neutral,
+        text: MeetingCandidateCopy.choicePrompt(line.deadlineText, reason: reason),
+        stacked: true,
+        identifier: "meeting.clean.choices.\(line.id.uuidString)"
+      ) {
         ForEach(days, id: \.day) { day in
           Button {
             model.updateCleanLine(line.id) {
@@ -752,66 +643,68 @@ struct MeetingCandidateLayerView: View {
               $0.draft.timeZoneIdentifier = day.timeZoneIdentifier
             }
           } label: {
-            HStack(alignment: .top, spacing: Tokens.V1.Space.xs) {
-              Image(systemName: line.chosenDay == day.day ? "largecircle.fill.circle" : "circle")
-                .foregroundStyle(
-                  line.chosenDay == day.day ? Tokens.V1.Color.accent : Tokens.V1.Color.ink3)
-              Text(MeetingCandidateCopy.choiceLabel(day: day, reason: reason, options: days))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            // 日期就是这两颗按钮的意义：等分撑满整行，标签不省略。
+            Text(MeetingCandidateCopy.choiceLabel(day: day, reason: reason, options: days))
+              .frame(maxWidth: .infinity)
           }
-          .buttonStyle(.v1Outline)
+          .buttonStyle(.v1Outline.height(Tokens.V1.Size.controlSm))
           .runtimeAccessibilityIdentifier("meeting.clean.choice.\(line.id.uuidString).\(day.day)")
         }
-      }
-      TodoDeadlinePicker(
-        due: Binding(
-          get: { cleanDue(line) },
-          set: { value in
-            model.updateCleanLine(line.id) { edited in
-              switch value {
-              case .date(let day):
-                edited.draft.dueKind = .date
-                edited.draft.dueDate = TodoClock.pickerDate(day: day.day)
-                edited.draft.timeZoneIdentifier = day.timeZoneIdentifier
-                edited.chosenDay = day.day
-              case .none:
-                edited.draft.dueKind = .none
-                edited.chosenDay = nil
-              case .pending:
-                edited.draft.dueKind = .pending
-                edited.chosenDay = nil
-              }
-            }
-          }),
-        now: model.candidateContext?.startedAt ?? model.now,
-        timeZoneIdentifier: line.draft.timeZoneIdentifier,
-        identifier: "meeting.clean.due.\(line.id.uuidString)"
-      )
-      if case .day(let day) = line.resolution,
-        TodoDueInterpreter.isBeforeReference(
-          day, reference: model.candidateContext?.startedAt ?? model.now,
-          timeZone: TimeZone(identifier: day.timeZoneIdentifier) ?? .current)
-      {
-        Text("这个日期已经过去")
-          .font(Tokens.V1.Text.meta.font)
-          .foregroundStyle(Tokens.V1.Color.ink)
       }
     }
   }
 
-  private func cleanDue(_ line: MeetingCandidateCleanLine) -> TodoDue {
-    switch line.draft.dueKind {
-    case .none: return .none
-    case .pending: return .pending
-    case .date:
-      if case .choose = line.resolution, line.chosenDay == nil { return .pending }
-      return .date(
-        TodoDay(
-          day: line.chosenDay ?? TodoClock.dayString(from: line.draft.dueDate),
-          timeZoneIdentifier: line.draft.timeZoneIdentifier))
+  /// 截止框下一行：会议原话，日期早于会议当天时接一句「这个日期已经过去」。
+  private func dueHint(_ line: MeetingCandidateCleanLine) -> String? {
+    var parts: [String] = []
+    // 原话和算好的日期写法一样（「9月24日」）时不重复一遍。
+    if let spoken = MeetingCandidateCopy.spokenDeadline(line.deadlineText),
+      cleanDue(line.id).wrappedValue.monthDayLabel != line.deadlineText?.nilIfBlank
+    {
+      parts.append(spoken)
     }
+    if case .day(let day) = line.resolution,
+      TodoDueInterpreter.isBeforeReference(
+        day, reference: model.candidateContext?.startedAt ?? model.now,
+        timeZone: TimeZone(identifier: day.timeZoneIdentifier) ?? .current)
+    {
+      parts.append("这个日期已经过去")
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+  }
+
+  private func cleanDue(_ id: UUID) -> Binding<TodoDue> {
+    Binding(
+      get: {
+        guard let line = model.cleanLines.first(where: { $0.id == id }) else { return .pending }
+        switch line.draft.dueKind {
+        case .none: return .none
+        case .pending: return .pending
+        case .date:
+          if case .choose = line.resolution, line.chosenDay == nil { return .pending }
+          return .date(
+            TodoDay(
+              day: line.chosenDay ?? TodoClock.dayString(from: line.draft.dueDate),
+              timeZoneIdentifier: line.draft.timeZoneIdentifier))
+        }
+      },
+      set: { value in
+        model.updateCleanLine(id) { edited in
+          switch value {
+          case .date(let day):
+            edited.draft.dueKind = .date
+            edited.draft.dueDate = TodoClock.pickerDate(day: day.day)
+            edited.draft.timeZoneIdentifier = day.timeZoneIdentifier
+            edited.chosenDay = day.day
+          case .none:
+            edited.draft.dueKind = .none
+            edited.chosenDay = nil
+          case .pending:
+            edited.draft.dueKind = .pending
+            edited.chosenDay = nil
+          }
+        }
+      })
   }
 
   private var reconcileForm: some View {
@@ -875,10 +768,9 @@ struct MeetingCandidateLayerView: View {
         .buttonStyle(.v1Quiet)
         .runtimeAccessibilityIdentifier("meeting.reconcile.defer")
     }
-    .padding(Tokens.V1.Space.lg)
-    .frame(maxWidth: Tokens.V1.Size.reading, alignment: .leading)
-    .runtimeAccessibilityIdentifier("meeting.reconcile")
+    .padding(Tokens.V1.Space.md)
     .frame(maxWidth: .infinity, alignment: .leading)
+    .runtimeAccessibilityIdentifier("meeting.reconcile")
   }
 
   private enum CompareSide { case old, new }
@@ -935,62 +827,4 @@ struct MeetingCandidateLayerView: View {
       "\(TodoText.assignee(todo.assignee)) · \(TodoText.duePhrase(todo.due, now: model.now, item: todo)) · \(TodoText.priorityPhrase(todo.priority)) · \(status)"
   }
 
-  private var receipt: some View {
-    VStack(alignment: .leading, spacing: Tokens.V1.Space.md) {
-      Text(model.candidateReceipt?.message ?? "已加入")
-        .font(Tokens.V1.Text.heading.font)
-        .foregroundStyle(Tokens.V1.Color.ink)
-      if let error = model.cleanError {
-        Text(error)
-          .font(Tokens.V1.Text.body.font)
-          .runtimeAccessibilityIdentifier("meeting.clean.error")
-      }
-      HStack(spacing: Tokens.V1.Space.sm) {
-        Button("查看待办", action: onShowTodos)
-          .buttonStyle(.v1Primary)
-          .runtimeAccessibilityIdentifier("meeting.clean.view-todos")
-        if model.candidateReceipt?.canUndo == true {
-          Button("撤销") { model.undoCandidateReceipt() }
-            .buttonStyle(.v1Outline)
-            .runtimeAccessibilityIdentifier("meeting.clean.undo")
-        }
-      }
-    }
-    .padding(Tokens.V1.Space.lg)
-    .frame(maxWidth: Tokens.V1.Size.settingsForm, alignment: .leading)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .runtimeAccessibilityIdentifier("meeting.clean.receipt")
-  }
-
-  private var fieldBackground: some View {
-    RoundedRectangle(cornerRadius: Tokens.V1.Radius.sm)
-      .fill(Tokens.V1.Color.raised)
-      .overlay(
-        RoundedRectangle(cornerRadius: Tokens.V1.Radius.sm)
-          .strokeBorder(Tokens.V1.Color.controlRule, lineWidth: Tokens.V1.Size.controlRuleWidth)
-      )
-  }
-
-  private func field<Control: View>(_ label: String, @ViewBuilder control: () -> Control)
-    -> some View
-  {
-    VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-      Text(label)
-        .font(Tokens.V1.Text.meta.font)
-        .foregroundStyle(Tokens.V1.Color.ink2)
-      control().frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  private func cleanText(
-    _ id: UUID,
-    _ keyPath: WritableKeyPath<TodoEditorDraft, String>,
-    assign: @escaping (inout MeetingCandidateCleanLine, String) -> Void
-  ) -> Binding<String> {
-    Binding(
-      get: { model.cleanLines.first { $0.id == id }?.draft[keyPath: keyPath] ?? "" },
-      set: { value in model.updateCleanLine(id) { assign(&$0, value) } }
-    )
-  }
 }

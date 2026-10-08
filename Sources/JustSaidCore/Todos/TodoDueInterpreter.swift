@@ -3,15 +3,11 @@ import Foundation
 public enum TodoDueChoiceReason: String, Equatable, Sendable {
   /// 「三天内」这一类是否把参照日当天算进去。
   case withinIncludesReferenceDay
-  /// 没写年份，参照日之前的月日可能是今年或明年。
-  case missingYear
 
   public var detail: String {
     switch self {
     case .withinIncludesReferenceDay:
       return "「以内」是否包含当天还没确定"
-    case .missingYear:
-      return "没写年份，可能是今年或明年"
     }
   }
 }
@@ -334,26 +330,23 @@ public enum TodoDueInterpreter {
     return explicit(year: year, month: month, day: day, timeZone: timeZone)
   }
 
+  /// 没写年份：参照日当天或之后最近的那一天（2026-10-08 owner：开会不会说「明年」的事，不问年份）。
+  /// 10 月开会说「12月5号」是当年；12 月底说「1月5号」是次年。
   private static func missingYear(
     month: Int,
     day: Int,
     referenceDay: String,
     timeZone: TimeZone
   ) -> TodoDueResolution {
-    guard let reference = TodoCalendar.parts(referenceDay),
-      let thisYear = TodoCalendar.make(
-        year: reference.year, month: month, day: day, timeZone: timeZone
-      )
-    else { return .unresolved }
-    if thisYear >= referenceDay {
-      return .day(makeDay(thisYear, timeZone))
+    guard let reference = TodoCalendar.parts(referenceDay) else { return .unresolved }
+    for year in reference.year...(reference.year + 4) {
+      if let candidate = TodoCalendar.make(year: year, month: month, day: day, timeZone: timeZone),
+        candidate >= referenceDay
+      {
+        return .day(makeDay(candidate, timeZone))
+      }
     }
-    guard let nextYear = TodoCalendar.make(
-      year: reference.year + 1, month: month, day: day, timeZone: timeZone
-    ) else {
-      return .day(makeDay(thisYear, timeZone))
-    }
-    return .choose([makeDay(thisYear, timeZone), makeDay(nextYear, timeZone)], .missingYear)
+    return .unresolved
   }
 
   private static func explicit(

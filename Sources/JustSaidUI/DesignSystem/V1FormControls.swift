@@ -113,8 +113,13 @@ struct V1ComboBox: View {
   let label: String
   let value: String
   let suggestions: [String]
+  /// 选项右侧的一行灰字说明，例如负责人列表里「会议里说的」。
+  var details: [String: String] = [:]
   var size: V1FormSize = .regular
   var identifier: String
+  /// 「补全」等入口要直接展开时用，与日期框同一套请求方式。
+  var focusRequested = false
+  var focusRequest = 0
   var onSelect: (String) -> Void
   @State private var presented = false
   @State private var hovering = false
@@ -134,8 +139,14 @@ struct V1ComboBox: View {
     .accessibilityLabel("\(label)：\(value.isEmpty ? "选择或新建" : value)")
     .runtimeAccessibilityIdentifier(identifier)
     .runtimeAccessibilityIdentifier("\(identifier).control.combo")
+    .onAppear { if focusRequested { presented = true } }
+    .onChange(of: focusRequested) { _, value in if value { presented = true } }
+    .onChange(of: focusRequest) { _, _ in if focusRequested { presented = true } }
     .popover(isPresented: $presented, arrowEdge: .bottom) {
-      V1ComboOptions(label: label, value: value, suggestions: suggestions, identifier: identifier) {
+      V1ComboOptions(
+        label: label, value: value, suggestions: suggestions, details: details,
+        identifier: identifier
+      ) {
         onSelect($0)
         presented = false
       }
@@ -147,9 +158,11 @@ struct V1ComboOptions: View {
   let label: String
   let value: String
   let suggestions: [String]
+  var details: [String: String] = [:]
   let identifier: String
   var onSelect: (String) -> Void
   @State private var query = ""
+  @State private var listHeight: CGFloat = 0
   @Environment(\.dismiss) private var dismiss
 
   private var name: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -179,6 +192,9 @@ struct V1ComboOptions: View {
               HStack {
                 Text(option)
                 Spacer(minLength: Tokens.V1.Space.xs)
+                if let detail = details[option] {
+                  Text(detail).font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
+                }
                 if option == value { Image(systemName: "checkmark") }
               }.frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -188,9 +204,14 @@ struct V1ComboOptions: View {
           if matches.isEmpty {
             Text("没有匹配的\(label)").font(Tokens.V1.Text.meta.font)
               .foregroundStyle(Tokens.V1.Color.ink3)
+              .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
-      }.frame(maxHeight: Tokens.V1.Size.sideWidth)
+        // 偏好值传不出 macOS 的 ScrollView，直接量内容高度。
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
+      }
+      // 列表按内容收放（最多 side-w 高再滚动），输入新名字时弹层跟着变矮，不留一块空白。
+      .frame(height: min(listHeight, Tokens.V1.Size.sideWidth))
       Divider()
       Button(name.isEmpty ? "新建\(label)…" : "新建「\(name)」") { onSelect(name) }
         .buttonStyle(.v1Quiet)

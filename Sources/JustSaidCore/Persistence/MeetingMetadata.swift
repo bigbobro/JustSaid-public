@@ -434,6 +434,8 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
   public var finalized: Bool
   public var postMeetingFailureReason: String?
   public var postMeetingFailureLogID: String?
+  /// 失败原因的闭合分类(B2,2026-10-08),只给会议页的处理建议用;旧档没有,按历史失败展示。
+  public var postMeetingFailureCause: PostMeetingFailureCause?
   public var postMeetingFailedAt: Date?
   public var postMeetingMicrophoneRequestID: String?
   public var postMeetingSystemRequestID: String?
@@ -472,6 +474,8 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
   public var liveEchoCancellation: LiveEchoCancellationStatistics?
   /// 单路采集失败清单(部分完成语义)。旧档案缺字段解码为 nil = 无路级失败。
   public var captureLegFailures: [CaptureLegFailure]?
+  /// 会中出过的问题(会中总结、本地速记、麦克风静音、系统声音),散会时按类别加原因合并写入。
+  public var inMeetingFailures: [InMeetingFailureRecord]?
   /// 自动重建额度耗尽后确认过的中断区间；恢复后仍保留历史。nil = 无此类中断。
   public var captureInterruptions: [CaptureInterruption]?
   /// 本场系统声的录制范围（全局，或只录某个 App 家族）。nil = 旧档案或导入的录音，无迁移。
@@ -510,6 +514,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     finalized: Bool = false,
     postMeetingFailureReason: String? = nil,
     postMeetingFailureLogID: String? = nil,
+    postMeetingFailureCause: PostMeetingFailureCause? = nil,
     postMeetingFailedAt: Date? = nil,
     postMeetingMicrophoneRequestID: String? = nil,
     postMeetingSystemRequestID: String? = nil,
@@ -527,6 +532,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     microphonePauseIntervals: [MicrophonePauseInterval]? = nil,
     captureLossStats: MeetingCaptureLossStats? = nil,
     captureLegFailures: [CaptureLegFailure]? = nil,
+    inMeetingFailures: [InMeetingFailureRecord]? = nil,
     captureInterruptions: [CaptureInterruption]? = nil,
     systemAudioScope: SystemAudioScopeRecord? = nil,
     partialArtifactFailures: [PartialArtifactFailure]? = nil,
@@ -548,6 +554,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     self.finalized = finalized
     self.postMeetingFailureReason = postMeetingFailureReason
     self.postMeetingFailureLogID = postMeetingFailureLogID
+    self.postMeetingFailureCause = postMeetingFailureCause
     self.postMeetingFailedAt = postMeetingFailedAt
     self.postMeetingMicrophoneRequestID = postMeetingMicrophoneRequestID
     self.postMeetingSystemRequestID = postMeetingSystemRequestID
@@ -565,6 +572,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
     self.microphonePauseIntervals = microphonePauseIntervals
     self.captureLossStats = captureLossStats
     self.captureLegFailures = captureLegFailures
+    self.inMeetingFailures = inMeetingFailures
     self.captureInterruptions = captureInterruptions
     self.systemAudioScope = systemAudioScope
     self.partialArtifactFailures = partialArtifactFailures
@@ -652,6 +660,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
   public mutating func clearPostMeetingDiagnostics() {
     postMeetingFailureReason = nil
     postMeetingFailureLogID = nil
+    postMeetingFailureCause = nil
     postMeetingFailedAt = nil
     postMeetingMicrophoneRequestID = nil
     postMeetingSystemRequestID = nil
@@ -666,6 +675,7 @@ public struct MeetingMetadata: Codable, Equatable, Identifiable, Sendable {
   public mutating func clearPostMeetingFailureBanner() {
     postMeetingFailureReason = nil
     postMeetingFailureLogID = nil
+    postMeetingFailureCause = nil
     postMeetingFailedAt = nil
     partialArtifactFailures = nil
   }

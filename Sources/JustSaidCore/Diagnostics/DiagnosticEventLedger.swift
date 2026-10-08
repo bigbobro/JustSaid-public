@@ -761,6 +761,12 @@ public enum DiagnosticSanitizer {
       default: return "provider"
       }
     }
+    if let anthropic = error as? AnthropicMessagesError {
+      switch anthropic.kind {
+      case .refused: return "refused"
+      case .outputLimitReached: return "incomplete"
+      }
+    }
     if (error as NSError).domain == NSURLErrorDomain { return "network" }
     return "unknown"
   }

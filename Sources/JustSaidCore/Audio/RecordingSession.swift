@@ -292,6 +292,8 @@ public final class RecordingSession: ObservableObject {
   /// 自动重建额度耗尽后确认过的中断。每路同一时刻至多一个未闭合区间；
   /// 只在 stop 的 meeting.json 原子提交中落盘，不在会中增加写盘系统。
   private var captureInterruptions: [CaptureInterruption] = []
+  /// 本场会中出过的问题(本地速记、麦克风静音、系统声音),散会时写进 meeting.json。
+  private var inMeetingFailures = InMeetingFailureLog()
   /// stop 尾部派发的完备度落盘任务(utility 级 detached,stop 不等它,异步性保留)。
   /// 废弃路径删目录前必须收敛它:重载下该任务可被推迟进删除窗口,atomic 写
   /// completeness.json 与 removeItem 互撞 → 废弃失败(08-20 高负载 3/30 实证)。
@@ -560,6 +562,7 @@ public final class RecordingSession: ObservableObject {
     systemScope = nil
     _ = tapPeakProbe.drain()
     issue = nil
+    inMeetingFailures.reset()
     partialCaptureNotice = nil
     currentRecord = nil
     currentMeetingDirectory = nil
@@ -697,6 +700,7 @@ public final class RecordingSession: ObservableObject {
           logger.error("麦克风连续 30 秒纯静音——疑似被通话应用独占")
           Task { @MainActor [weak self] in
             guard let self, self.phase == .recording else { return }
+            self.inMeetingFailures.note(.microphoneSilent)
             self.issue = RecordingSessionIssue(
               title: "录不到你的声音",
               message: "麦克风已连续 30 秒纯静音,很可能被通话应用(微信/腾讯会议等)独占了。"
@@ -744,7 +748,10 @@ public final class RecordingSession: ObservableObject {
             record: SystemAudioScopeRecord(
               mode: .perApp, appName: sourceApp.app.displayName, bundleID: sourceApp.app.bundleID),
             appKey: sourceApp.app.key, source: systemAudioFamily, planner: nil)
-          let family = systemAudioFamily.familyProcesses(appKey: sourceApp.app.key)
+          // 枚举进程是同步 Core Audio 调用，与范围采样一样挪出主线程。
+          let appKey = sourceApp.app.key
+          let family = await Task.detached { systemAudioFamily.familyProcesses(appKey: appKey) }
+            .value
           let pids = Set(family.map(\.pid)).sorted()
           var fallback: SystemAudioScopeFallbackReason?
           if pids.isEmpty {
@@ -1021,12 +1028,16 @@ public final class RecordingSession: ObservableObject {
         )
       }
       if let transcriptionError {
+        inMeetingFailures.note(.liveTranscriber)
         issue = RecordingSessionIssue(
           title: "速记保存失败",
           message: "\(transcriptionError.localizedDescription)\n\n双路录音已经保存。",
           settingsDestination: nil
         )
       }
+      // 留痕不挡结束流程。
+      _ = try? store.recordInMeetingFailures(inMeetingFailures.records, at: record.paths)
+      inMeetingFailures.reset()
       logger.info(
         "双路录音完成：\(record.paths.directory.path, privacy: .public)"
       )
@@ -1328,6 +1339,13 @@ public final class RecordingSession: ObservableObject {
     persistSystemAudioScope()
   }
 
+  /// 改录全局重建失败后，看门狗把系统声重建成功、重新出帧：此时录的就是全部系统声音，
+  /// 「可能没有录上」不再成立，降回信息级的「已改为录制全部系统声音」。
+  private func clearSystemAudioRebuildFailedNotice(after leg: CaptureLeg) {
+    guard leg == .systemAudio, case .rebuildFailed = systemAudioScopeNotice else { return }
+    systemAudioScopeNotice = .fellBackToGlobal
+  }
+
   /// 用户在零声提示上选「改录全部系统声音」。重建失败会有界重试，仍失败就提示（不静默）。
   public func switchSystemAudioToGlobal() async {
     guard phase == .recording, systemScope?.record.mode == .perApp else { return }
@@ -1367,6 +1385,7 @@ public final class RecordingSession: ObservableObject {
     state.planner = nil
     systemScope = state
     systemAudioScopeNotice = .rebuildFailed(appName: state.record.appName ?? state.appKey ?? "")
+    inMeetingFailures.note(.systemAudio)
     persistSystemAudioScope()
     logger.error("系统声改录全局连续 \(attemptLimit, privacy: .public) 次重建失败，交给路级健康看门狗恢复")
     return false
@@ -1538,6 +1557,7 @@ public final class RecordingSession: ObservableObject {
         state.recoveredAt = now
         state.isGivenUp = false
         legHealth[leg] = .recovered(gapSeconds: gapSeconds, cause: state.cause)
+        clearSystemAudioRebuildFailedNotice(after: leg)
         appendCaptureDiagnostic(
           event: "audioLeg.recovered",
           leg: leg,
@@ -1560,6 +1580,7 @@ public final class RecordingSession: ObservableObject {
         state.nextRetryAt = nil
         state.recoveredAt = now
         legHealth[leg] = .recovered(gapSeconds: gapSeconds, cause: state.cause)
+        clearSystemAudioRebuildFailedNotice(after: leg)
         appendCaptureDiagnostic(
           event: "audioLeg.recovered",
           leg: leg,
@@ -2173,6 +2194,7 @@ public final class RecordingSession: ObservableObject {
         return firstError
       }
     } catch {
+      inMeetingFailures.note(.liveTranscriber)
       issue = RecordingSessionIssue(
         title: "本地速记不可用",
         message: "\(error.localizedDescription)\n\n双路录音仍会继续保存。",
@@ -2537,10 +2559,34 @@ public final class RecordingSession: ObservableObject {
       )
     }
 
+    // B2(2026-10-08):磁盘写满是能确认的原因,单独给办法。
+    if isOutOfDiskSpace(error) {
+      return RecordingSessionIssue(
+        title: "\(action)失败",
+        message: "磁盘空间不足，录音写不进去了。\n\n清理出空间后重新开始录制；已写下的录音会保留在会议目录。",
+        settingsDestination: nil
+      )
+    }
+
     return RecordingSessionIssue(
       title: "\(action)失败",
       message: "\(error.localizedDescription)\n\n已有可用录音片段会保留在会议目录。",
       settingsDestination: nil
     )
+  }
+
+  /// 只认系统给出的「空间不足」错误码,沿 underlying 链往下找;不解析错误文字。
+  private static func isOutOfDiskSpace(_ error: Error) -> Bool {
+    var current: NSError? = error as NSError
+    var depth = 0
+    while let nsError = current, depth < 4 {
+      if nsError.domain == NSCocoaErrorDomain, nsError.code == NSFileWriteOutOfSpaceError {
+        return true
+      }
+      if nsError.domain == NSPOSIXErrorDomain, nsError.code == Int(ENOSPC) { return true }
+      current = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
+      depth += 1
+    }
+    return false
   }
 }

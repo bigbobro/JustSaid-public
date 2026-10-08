@@ -267,7 +267,7 @@ public struct ChannelRoleCard<Extra: View>: View {
           .foregroundStyle(Tokens.V1.Color.ink3)
       } else if effectiveChannel.availableModels.isEmpty {
         V1TextField(
-          placeholder: "自由填写，如 deepseek-v4-flash", text: modelTextBinding,
+          placeholder: "自由填写，如 deepseek-flash", text: modelTextBinding,
           identifier: "settings.model-input.\(identifierKey)"
         )
         .frame(width: Tokens.V1.Size.settingsModelField)

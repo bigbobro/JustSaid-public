@@ -259,6 +259,8 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
     let capture: CaptureProjection?
     let captureLegFailures: [CaptureFailureProjection]
     let partialArtifacts: [PartialArtifactProjection]
+    /// 会中出过的问题:只有类别、闭合原因码、次数和首末时间,本身就不含正文。
+    let inMeetingFailures: [InMeetingFailureRecord]
   }
 
   private struct UsageProjection: Codable {
@@ -450,7 +452,8 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
           failedAt: $0.failedAt,
           category: category(from: $0.detail)
         )
-      }
+      },
+      inMeetingFailures: metadata.inMeetingFailures ?? []
     )
   }
 

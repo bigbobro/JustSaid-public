@@ -186,9 +186,9 @@ extension MeetingLibraryView {
         .onChange(of: model.artifactLoadRevision) { _, _ in syncCandidates(selected) }
         }
       }
-      .meetingCandidateCover(
-        page: todoPage, meetingID: selected.meetingID, onShowTodos: { onShowTodos?() },
-        onJump: model.jumpToTranscript, onRefresh: { syncCandidates(selected) })
+      .meetingCandidateReceipt(
+        page: todoPage, meetingID: selected.meetingID,
+        trailingInset: candidateReceiptInset, onShowTodos: { onShowTodos?() })
       .focusable(true)
       .focused($focusedPane, equals: .detail)
       .focusEffectDisabled()
@@ -567,6 +567,26 @@ extension MeetingLibraryView {
   /// owner 2026-09-20 走查:「右侧栏不会跟着转到转写这里…这个体验又不一致」。
   @ViewBuilder
   func detailRail(_ item: MeetingLibraryItem) -> some View {
+    // 点开「加入待办」「核对」时右栏原位换成表单，任何页签都一样：
+    // 从表单里回跳转写，表单也留在右栏。
+    if let todoPage {
+      MeetingCandidateRailSwitch(
+        page: todoPage, meetingID: item.meetingID, onJump: model.jumpToTranscript
+      ) {
+        normalDetailRail(item)
+      }
+    } else {
+      normalDetailRail(item)
+    }
+  }
+
+  /// 加入后的回执贴着右栏左沿；这一页没有右栏时贴窗口边。
+  var candidateReceiptInset: CGFloat {
+    model.tab == .transcript && !showsSpeakerNaming ? 0 : Tokens.V1.Size.meetingRailWidth
+  }
+
+  @ViewBuilder
+  func normalDetailRail(_ item: MeetingLibraryItem) -> some View {
     switch model.tab {
     case .transcript:
       // 认名开着时正文保持原宽、可读可滚,一边扫正文一边填名

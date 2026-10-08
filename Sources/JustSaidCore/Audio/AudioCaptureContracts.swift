@@ -711,14 +711,19 @@ public enum AudioCaptureError: LocalizedError {
     case .systemAudioProcessUnavailable:
       return "请确认目标会议应用仍在运行并正在播放音频，或改用默认的全局系统音频采集。"
     case .systemAudioTapFailed:
-      return
-        "请到“系统设置 > 隐私与安全性 > 屏幕与系统音频录制”允许 JustSaid。"
-        + "若 Core Audio process tap 仍不可用，可切换 ScreenCaptureKit 路线；"
-        + "本版本仅提示该路线，尚未实现。"
+      // 不提 ScreenCaptureKit:那条路线没做,给用户一个点不到的选项只会添乱(backlog A7 / B8)。
+      return "请到“系统设置 > 隐私与安全性 > 屏幕与系统音频录制”允许 JustSaid，然后重新开始录制。"
     // 08-05 事故教训:旧文案「请结束其他独占音频设备的应用」是未经证实的归因,
     // 真实根因(VPIO 挤开 tap 流)与设备独占无关。只说确知的事实,不猜原因。
-    case .microphoneUnavailable, .audioWriteFailed:
-      return "录音通道数据出现异常；已捕获的可用录音会保留在会议目录。"
+    // B2(2026-10-08):按原因分开给办法。仍只说用户能核对的事,不猜根因。
+    case .microphoneUnavailable:
+      return
+        "请确认麦克风已连接，并在“系统设置 > 声音 > 输入”里选一个能看到电平的设备，再重新开始录制。"
+        + "已捕获的可用录音会保留在会议目录。"
+    case .audioWriteFailed:
+      return
+        "录音通道数据出现异常；已捕获的可用录音会保留在会议目录。"
+        + "反复出现时，请到“设置 > 通用 > 诊断”导出诊断包发给 JustSaid 开发者。"
     }
   }
 

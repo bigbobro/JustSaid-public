@@ -40,8 +40,6 @@ public final class RecordingStartupTrace: @unchecked Sendable {
   static let maximumIncidentLinesPerDay = 200
   /// 单场轨迹允许追加的迟到行上限。
   static let maximumLateLines = 8
-  /// `start-failures-*.log` 的保留天数。
-  static let retentionDays = 14
 
   private let startedAt: Date
   private let device: AudioInputDeviceSummary
@@ -219,42 +217,10 @@ public final class RecordingStartupTrace: @unchecked Sendable {
     }
   }
 
-  /// 只清理本类自己的 `start-failures-*.log`(AC9 不加新债);
-  /// hang-*/retention-* 的保留期是既有债,另立小单,不在这里顺手扫。
+  /// 只清理本类自己的 `start-failures-*.log`(AC9 不加新债);hang-*/retention-* 由各自的写者清。
   private func pruneOldFilesLocked(now: Date) {
-    guard
-      let names = try? fileManager.contentsOfDirectory(atPath: diagnosticsRoot.path)
-    else {
-      return
-    }
-    guard
-      let cutoff = Calendar(identifier: .gregorian).date(
-        byAdding: .day,
-        value: -Self.retentionDays,
-        to: now
-      )
-    else {
-      return
-    }
-    let cutoffStamp = Self.dayStamp(cutoff)
-    for name in names {
-      guard name.hasPrefix("start-failures-"), name.hasSuffix(".log") else { continue }
-      let stamp =
-        name
-        .replacingOccurrences(of: "start-failures-", with: "")
-        .replacingOccurrences(of: ".log", with: "")
-      guard stamp.count == 8, stamp.allSatisfy(\.isNumber) else { continue }
-      guard stamp < cutoffStamp else { continue }
-      do {
-        try fileManager.removeItem(
-          at: diagnosticsRoot.appendingPathComponent(name)
-        )
-      } catch {
-        logger.error(
-          "start-failures 过期文件清理失败:\(error.localizedDescription, privacy: .public)"
-        )
-      }
-    }
+    DiagnosticLogRetention.prune(
+      prefix: "start-failures-", in: diagnosticsRoot, now: now, fileManager: fileManager)
   }
 
   // MARK: - 工具

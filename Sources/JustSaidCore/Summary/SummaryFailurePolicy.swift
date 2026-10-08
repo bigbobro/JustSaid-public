@@ -85,6 +85,10 @@ enum SummaryFailurePolicy {
         return .configuration
       }
     }
+    // Anthropic:拒答与长度上限都是「答完了但结果不能用」,同 ChatGPT 的 refused/incomplete。
+    if error is AnthropicMessagesError {
+      return .invalidResponse
+    }
     return .unknown
   }
 

@@ -56,6 +56,26 @@ public final class Qwen3ASRTranscriberEngine: TranscriberEngine,
     }
   }
 
+  /// Qwen 的输出协议头 `language Chinese<asr_text>`。sherpa 只在前 16 个生成 ID 里
+  /// 认到专用 marker 时剥一次,头出现在正文中间、重复出现或由普通 token 拼成时会漏进转写(#71)。
+  /// 说话不会产出 `<asr_text>` 这种尖括号标记,所以只删「language 名称<asr_text>」与落单的
+  /// `<asr_text>`;不带标记的 `language Chinese` 当正文保留。
+  static func removingProtocolHeaders(from text: String) -> String {
+    guard text.range(of: "<asr_text>", options: .caseInsensitive) != nil,
+      let pattern = try? NSRegularExpression(
+        pattern: #"(?:language\s*[A-Za-z]+\s*)?<asr_text>"#,
+        options: [.caseInsensitive]
+      )
+    else {
+      return text
+    }
+    return pattern.stringByReplacingMatches(
+      in: text,
+      range: NSRange(text.startIndex..., in: text),
+      withTemplate: ""
+    )
+  }
+
   private let modelDirectory: URL
   private let vadModelURL: URL
   private let observationBox = Qwen3ASRObservationBox()
@@ -285,7 +305,8 @@ private actor Qwen3ASRRecognizer: OfflineSpeechRecognizer {
         event: "nativeReturn", origin: "native", source: "recognizer",
         sampleCount: samples.count)
     #endif
-    return recognizer.getResult(stream: stream).text
+    return Qwen3ASRTranscriberEngine.removingProtocolHeaders(
+      from: recognizer.getResult(stream: stream).text)
   }
 
   private static func isDigitalSilence(_ samples: [Float]) -> Bool {

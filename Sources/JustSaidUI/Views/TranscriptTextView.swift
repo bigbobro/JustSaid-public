@@ -1223,9 +1223,9 @@ private final class InteractiveTranscriptTextView: NSTextView {
       }
     }
     addAction("新名字…", to: menu) { [actions] in actions.onRequestNewName(line) }
-    if line.speaker != line.originalSpeaker {
+    if line.hasOverride {
       menu.addItem(.separator())
-      addAction("撤销这段的更正（回到「\(line.originalSpeaker)」）", to: menu) { [actions] in
+      addAction("撤销这段的更正（回到「\(line.speakerWithoutOverride)」）", to: menu) { [actions] in
         actions.onOverride(line, nil)
       }
     }
@@ -1273,8 +1273,8 @@ private final class InteractiveTranscriptTextView: NSTextView {
       }
     }
     addAction("其实是别人说的…", to: menu) { [actions] in actions.onRequestNewName(line) }
-    if line.speaker != line.originalSpeaker {
-      addAction("撤销这段的更正（回到「\(line.originalSpeaker)」）", to: menu) { [actions] in
+    if line.hasOverride {
+      addAction("撤销这段的更正（回到「\(line.speakerWithoutOverride)」）", to: menu) { [actions] in
         actions.onOverride(line, nil)
       }
     }

@@ -50,6 +50,8 @@ public struct MeetingLibraryView: View {
   @State var suppressNextSelectionScroll = false
   @State var showsSpeakerNaming = false
   @State var processingInfoMeeting: MeetingLibraryItem?
+  /// 会后处理失败行展开了「处理建议」的那场会议;换一场会就收起。
+  @State var expandedFailureAdviceID: String?
   @Binding var retainedQueueFilter: LibraryQueueFilter
   let returnsToTodos: Bool
   let onReturnToTodos: (() -> Void)?
@@ -143,7 +145,15 @@ public struct MeetingLibraryView: View {
     meetingActionDialogs(libraryBody)
   }
 
+  // 修饰链按原顺序拆成几段，各段分别类型检查：托管 macOS runner 的工具链对整条约 30 个
+  // 修饰符的单一表达式类型检查超时（MeetingLibraryView.swift:207，2026-10-08）。
+  // 基视图与修饰符的种类、参数、顺序都与拆分前一致；顺序即行为，勿重排、勿合并。
   private var libraryBody: some View {
+    librarySheets(libraryDetailSync(librarySelectionSync(libraryLifecycle(libraryLayout))))
+  }
+
+  /// 列表与详情叠放、背景与拖入导入。
+  private var libraryLayout: some View {
     GeometryReader { geometry in
       // 列表一直挂着,进会议只是把详情盖在上面(owner 2026-09-20)。
       // 原来是 if/else 换视图:列表被拆掉,滚动位置只能事后靠锚点恢复,于是返回时
@@ -185,125 +195,145 @@ public struct MeetingLibraryView: View {
       model.beginImport(sourceFileURL: url)
       return true
     }
-    .onAppear {
-      model.filterSelection = retainedFilters
-      model.reload()
-      onFilterActionReady?({
-        showsFilterPanel.toggle()
+  }
+
+  /// 出现、消失与筛选/场数回写。
+  private func libraryLifecycle<Content: View>(_ content: Content) -> some View {
+    content
+      .onAppear {
+        model.filterSelection = retainedFilters
+        model.reload()
+        onFilterActionReady?({
+          showsFilterPanel.toggle()
+          onFilterPanelVisibilityChange?(showsFilterPanel)
+        })
         onFilterPanelVisibilityChange?(showsFilterPanel)
-      })
-      onFilterPanelVisibilityChange?(showsFilterPanel)
-    }
-    .onChange(of: model.filterSelection) { _, filters in retainedFilters = filters }
-    .onAppear {
-      onMeetingsCountChange?(model.meetings.count)
-      onChromeActionsReady?({ pickImportFile() }, { model.reload() })
-    }
-    .onChange(of: model.meetings.count) { _, count in
-      onMeetingsCountChange?(count)
-    }
-    .onAppear {
-      if focusedPane == nil {
-        focusedPane = .list
       }
-    }
-    .onDisappear {
-      returnTrailTask?.cancel()
-      model.cancelViewScopedWork()
-    }
-    .onChange(of: model.selectedID) { _, selectedID in
-      retainedSelectedMeetingID = selectedID
-      // 消费点击/成功删除的单次抑制;其余选中仍把目标带进视口。
-      if suppressNextSelectionScroll {
-        suppressNextSelectionScroll = false
-      } else {
-        retainedListScrollPosition = selectedID
+      .onChange(of: model.filterSelection) { _, filters in retainedFilters = filters }
+      .onAppear {
+        onMeetingsCountChange?(model.meetings.count)
+        onChromeActionsReady?({ pickImportFile() }, { model.reload() })
       }
-      // 换场后正文长度全变,上一场的四页签滚动不得带到下一场。
-      retainedTabScrollOffsets = [:]
-      closeTranscriptSearch()
-      isShowingChapterDirectory = false
-    }
-    .onChange(of: model.returnTrail) { _, trail in
-      scheduleReturnTrailDismissal(trail)
-    }
-    .onChange(of: model.librarySearchQuery) { _, query in
-      // 回写 AppCoordinator(G3):⌘L 往返后新 model 用它恢复并重扫。
-      retainedGlobalSearchQuery = query
-      // 展开态与说话人 chip 是对某一次结果集的呈现选择,换词即清。
-      searchMeetingFilter = nil
-      expandedSearchGroups = []
-      librarySearchSpeakerFilter = nil
-    }
-    .onChange(of: model.groupsByClient) { _, groups in
-      // 回写 AppCoordinator(G3):分组开关随 remount 存活。
-      retainedGroupByClient = groups
-    }
-    .onChange(of: model.queueFilter) { _, filter in
-      // 回写 AppCoordinator(G3):指挥台滤镜随 remount 存活。
-      retainedQueueFilter = filter
-    }
-    .onChange(of: transcriptSearchQuery) { _, _ in
-      model.cancelTranscriptBatch()
-    }
-    .onChange(of: model.transcriptContextRevision) { _, _ in
-      closeTranscriptSearch()
-    }
-    .onChange(of: model.tab) { _, tab in
-      retainedSelectedTab = tab
-      if tab != .transcript {
+      .onChange(of: model.meetings.count) { _, count in
+        onMeetingsCountChange?(count)
+      }
+      .onAppear {
+        if focusedPane == nil {
+          focusedPane = .list
+        }
+      }
+      .onDisappear {
+        returnTrailTask?.cancel()
+        model.cancelViewScopedWork()
+      }
+  }
+
+  /// 选中、回程、全库搜索、分组与滤镜的回写。
+  private func librarySelectionSync<Content: View>(_ content: Content) -> some View {
+    content
+      .onChange(of: model.selectedID) { _, selectedID in
+        retainedSelectedMeetingID = selectedID
+        // 消费点击/成功删除的单次抑制;其余选中仍把目标带进视口。
+        if suppressNextSelectionScroll {
+          suppressNextSelectionScroll = false
+        } else {
+          retainedListScrollPosition = selectedID
+        }
+        // 换场后正文长度全变,上一场的四页签滚动不得带到下一场。
+        retainedTabScrollOffsets = [:]
+        closeTranscriptSearch()
+        isShowingChapterDirectory = false
+      }
+      .onChange(of: model.returnTrail) { _, trail in
+        scheduleReturnTrailDismissal(trail)
+      }
+      .onChange(of: model.librarySearchQuery) { _, query in
+        // 回写 AppCoordinator(G3):⌘L 往返后新 model 用它恢复并重扫。
+        retainedGlobalSearchQuery = query
+        // 展开态与说话人 chip 是对某一次结果集的呈现选择,换词即清。
+        searchMeetingFilter = nil
+        expandedSearchGroups = []
+        librarySearchSpeakerFilter = nil
+      }
+      .onChange(of: model.groupsByClient) { _, groups in
+        // 回写 AppCoordinator(G3):分组开关随 remount 存活。
+        retainedGroupByClient = groups
+      }
+      .onChange(of: model.queueFilter) { _, filter in
+        // 回写 AppCoordinator(G3):指挥台滤镜随 remount 存活。
+        retainedQueueFilter = filter
+      }
+  }
+
+  /// 转写搜索、页签、列表锚点与会中标题。
+  private func libraryDetailSync<Content: View>(_ content: Content) -> some View {
+    content
+      .onChange(of: transcriptSearchQuery) { _, _ in
+        model.cancelTranscriptBatch()
+      }
+      .onChange(of: model.transcriptContextRevision) { _, _ in
         closeTranscriptSearch()
       }
-      isShowingChapterDirectory = false
-    }
-    .onChange(of: model.visibleOrderedMeetings.map(\.id)) { oldIDs, meetingIDs in
-      guard
-        let retainedListScrollPosition,
-        !meetingIDs.contains(LibraryListAnchor.meetingID(retainedListScrollPosition))
-      else {
-        return
-      }
-      self.retainedListScrollPosition = libraryScrollAnchor(
-        retainedListScrollPosition, oldIDs: oldIDs, newIDs: meetingIDs)
-    }
-    .onChange(of: activeMeetingTitle) { _, title in
-      model.syncActiveMeetingTitle(title)
-    }
-    .sheet(item: $processingInfoMeeting) { item in
-      MeetingProcessingInfoView(item: item)
-    }
-    .sheet(item: $model.pendingImportSheet) { sheet in
-      ImportRecordingForm(
-        suggestedTitle: sheet.suggestedTitle,
-        probe: sheet.probe,
-        onCancel: { model.pendingImportSheet = nil },
-        onConfirm: { title, startedAt, language in
-          model.confirmImport(
-            title: title,
-            startedAt: startedAt,
-            language: language,
-            acceptVolumeRisk: false
-          )
+      .onChange(of: model.tab) { _, tab in
+        retainedSelectedTab = tab
+        if tab != .transcript {
+          closeTranscriptSearch()
         }
-      )
-    }
-    .confirmationDialog(
-      "这份录音较大，本机无法压缩",
-      isPresented: Binding(
-        get: { model.importVolumeRiskMessage != nil },
-        set: { if !$0 { model.cancelVolumeRisk() } }
-      ),
-      titleVisibility: .visible
-    ) {
-      Button("仍然导入(失败也计费)", role: .destructive) {
-        model.acceptVolumeRiskAndImport()
+        isShowingChapterDirectory = false
       }
-      Button("取消", role: .cancel) {
-        model.cancelVolumeRisk()
+      .onChange(of: model.visibleOrderedMeetings.map(\.id)) { oldIDs, meetingIDs in
+        guard
+          let retainedListScrollPosition,
+          !meetingIDs.contains(LibraryListAnchor.meetingID(retainedListScrollPosition))
+        else {
+          return
+        }
+        self.retainedListScrollPosition = libraryScrollAnchor(
+          retainedListScrollPosition, oldIDs: oldIDs, newIDs: meetingIDs)
       }
-    } message: {
-      Text(model.importVolumeRiskMessage ?? "")
-    }
+      .onChange(of: activeMeetingTitle) { _, title in
+        model.syncActiveMeetingTitle(title)
+      }
+  }
+
+  /// 处理信息、导入表单与大文件导入确认。
+  private func librarySheets<Content: View>(_ content: Content) -> some View {
+    content
+      .sheet(item: $processingInfoMeeting) { item in
+        MeetingProcessingInfoView(item: item)
+      }
+      .sheet(item: $model.pendingImportSheet) { sheet in
+        ImportRecordingForm(
+          suggestedTitle: sheet.suggestedTitle,
+          probe: sheet.probe,
+          onCancel: { model.pendingImportSheet = nil },
+          onConfirm: { title, startedAt, language in
+            model.confirmImport(
+              title: title,
+              startedAt: startedAt,
+              language: language,
+              acceptVolumeRisk: false
+            )
+          }
+        )
+      }
+      .confirmationDialog(
+        "这份录音较大，本机无法压缩",
+        isPresented: Binding(
+          get: { model.importVolumeRiskMessage != nil },
+          set: { if !$0 { model.cancelVolumeRisk() } }
+        ),
+        titleVisibility: .visible
+      ) {
+        Button("仍然导入(失败也计费)", role: .destructive) {
+          model.acceptVolumeRiskAndImport()
+        }
+        Button("取消", role: .cancel) {
+          model.cancelVolumeRisk()
+        }
+      } message: {
+        Text(model.importVolumeRiskMessage ?? "")
+      }
   }
 
   func openMeetingPage(_ item: MeetingLibraryItem, resetTab: Bool = true) {

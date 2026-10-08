@@ -1208,22 +1208,27 @@ public final class ProviderSettingsStore: ObservableObject {
     else {
       throw ProviderChannelError.missingChannelSecret(channelName: name, slot: .apiKey)
     }
+    let clientConfiguration = LLMClientConfiguration(
+      providerID: channel.providerID,
+      baseURL: baseURL,
+      apiKey: apiKey,
+      model: trimmedModel,
+      reasoningEffort: .off,
+      diagnosticRole: channel.supportedRoles.first?.rawValue,
+      diagnosticPurpose: "connectionProbe",
+      diagnosticOrigin: "channel",
+      recoveryChannelID: channel.id
+    )
+    // 渠道探针(连接测试/模型拉取)是设置页的即时反馈,自己卡 30 秒空闲上限;
+    // 外层 ConnectionProbe 另有同额超时兜底,两个时钟取先响的。
+    // 不设首帧超时:探针的总时长本来就被外层墙钟卡死,再加一层只会多一种失败说法。
+    if channel.providerID == AnthropicMessagesContract.providerID {
+      return AnthropicMessagesLLMClient(
+        configuration: clientConfiguration, transport: transport, idleTimeout: 30)
+    }
     var client = OpenAICompatibleLLMClient(
-      configuration: LLMClientConfiguration(
-        providerID: channel.providerID,
-        baseURL: baseURL,
-        apiKey: apiKey,
-        model: trimmedModel,
-        reasoningEffort: .off,
-        diagnosticRole: channel.supportedRoles.first?.rawValue,
-        diagnosticPurpose: "connectionProbe",
-        diagnosticOrigin: "channel",
-        recoveryChannelID: channel.id
-      ),
+      configuration: clientConfiguration,
       transport: transport,
-      // 渠道探针(连接测试/模型拉取)是设置页的即时反馈,自己卡 30 秒空闲上限;
-      // 外层 ConnectionProbe 另有同额超时兜底,两个时钟取先响的。
-      // 不设首帧超时:探针的总时长本来就被外层墙钟卡死,再加一层只会多一种失败说法。
       idleTimeout: 30
     )
     if channel.providerID == "custom-openai-compatible",
@@ -1559,33 +1564,44 @@ public final class ProviderSettingsStore: ObservableObject {
     if let notice = resolution.downgradeNotice {
       logger.notice("\(notice, privacy: .public)")
     }
+    let clientConfiguration = LLMClientConfiguration(
+      providerID: channel.providerID,
+      baseURL: baseURL,
+      apiKey: apiKey,
+      model: model,
+      reasoningEffort: resolution.level,
+      requestedReasoningEffort: requestedLevel,
+      diagnosticRole: role.rawValue,
+      diagnosticPurpose: diagnosticPurpose,
+      diagnosticOrigin: diagnosticOrigin,
+      recoveryChannelID: channel.id,
+      lane: slot.lane
+    )
+    // 会后纪要走 SSE 流式,但 URLRequest.timeoutInterval 是**空闲**超时:推理档开着时,
+    // 模型可能思考数分钟才吐第一个 token,长会议尤甚。2026-08-07 实测:91 分钟会议的
+    // 英文版纪要在 300 秒上超时,而中文版已成功——转写与中文纪要都在盘上,整场却被标失败。
+    // `usesPostMeetingTimeouts`(08-20 naming-first):认名提取借 liveSummary 渠道
+    // 但按会后口径取超时——它的输入是整场转写,会中档超时对它就是假超时制造机。
+    let idleTimeout =
+      role == .liveSummaryLLM && !usesPostMeetingTimeouts
+      ? OpenAICompatibleLLMClient.liveSummaryIdleTimeout : 600
+    // 首帧超时只给会中总结(快、慢两路):它要跟上会议节奏,等不到首帧就该早点认输交给下一轮。
+    // 会后纪要**必须保持 nil**——同上那次事故里首 token 就来在 300 秒之后,
+    // 给它设首帧超时等于当场复刻。
+    let firstFrameTimeout: TimeInterval? =
+      role == .liveSummaryLLM && !usesPostMeetingTimeouts
+      ? OpenAICompatibleLLMClient.liveSummaryFirstFrameTimeout : nil
+    if channel.providerID == AnthropicMessagesContract.providerID {
+      return AnthropicMessagesLLMClient(
+        configuration: clientConfiguration, transport: transport, idleTimeout: idleTimeout,
+        firstFrameTimeout: firstFrameTimeout,
+        supportedReasoningLevels: Set(supportedReasoningLevels(in: slot)))
+    }
     var client = OpenAICompatibleLLMClient(
-      configuration: LLMClientConfiguration(
-        providerID: channel.providerID,
-        baseURL: baseURL,
-        apiKey: apiKey,
-        model: model,
-        reasoningEffort: resolution.level,
-        requestedReasoningEffort: requestedLevel,
-        diagnosticRole: role.rawValue,
-        diagnosticPurpose: diagnosticPurpose,
-        diagnosticOrigin: diagnosticOrigin,
-        recoveryChannelID: channel.id,
-        lane: slot.lane
-      ),
+      configuration: clientConfiguration,
       transport: transport,
-      // 会后纪要走 SSE 流式,但 URLRequest.timeoutInterval 是**空闲**超时:推理档开着时,
-      // 模型可能思考数分钟才吐第一个 token,长会议尤甚。2026-08-07 实测:91 分钟会议的
-      // 英文版纪要在 300 秒上超时,而中文版已成功——转写与中文纪要都在盘上,整场却被标失败。
-      // `usesPostMeetingTimeouts`(08-20 naming-first):认名提取借 liveSummary 渠道
-      // 但按会后口径取超时——它的输入是整场转写,会中档超时对它就是假超时制造机。
-      idleTimeout: role == .liveSummaryLLM && !usesPostMeetingTimeouts
-        ? OpenAICompatibleLLMClient.liveSummaryIdleTimeout : 600,
-      // 首帧超时只给会中总结(快、慢两路):它要跟上会议节奏,等不到首帧就该早点认输交给下一轮。
-      // 会后纪要**必须保持 nil**——同上那次事故里首 token 就来在 300 秒之后,
-      // 给它设首帧超时等于当场复刻。
-      firstFrameTimeout: role == .liveSummaryLLM && !usesPostMeetingTimeouts
-        ? OpenAICompatibleLLMClient.liveSummaryFirstFrameTimeout : nil
+      idleTimeout: idleTimeout,
+      firstFrameTimeout: firstFrameTimeout
     )
     if channel.providerID == "custom-openai-compatible" {
       client.reasoningFallback = reasoningFallbackContext(channelID: channel.id, model: model)

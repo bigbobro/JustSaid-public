@@ -6,83 +6,15 @@ struct TodoEditorView: View {
   var onOpenSource: (URL, TimeInterval?) -> Void = { _, _ in }
   var usesInspectorPin = false
   @FocusState private var focused: Field?
-  private enum Field: Hashable { case title, assignee, name, client, project, note }
+  private enum Field: Hashable { case title, client, project, note }
 
   private var size: V1FormSize { model.isCreating ? .regular : .compact }
 
   var body: some View {
-    VStack(spacing: 0) {
-      if model.isCreating {
-        HStack {
-          Text("新增待办").font(Tokens.V1.Text.heading.font)
-          Spacer()
-          Button {
-            model.cancelCreate()
-          } label: {
-            Image(systemName: "xmark")
-          }
-          .buttonStyle(.v1Icon).accessibilityLabel("取消新增待办")
-        }.padding(Tokens.V1.Space.md)
-        Divider()
-      }
-      ScrollView {
-        VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
-          if model.isCreating {
-            property("事项名称") {
-              V1TextField(
-                placeholder: "写下要跟进的事", text: text(\.title), multiline: true,
-                minimumLines: 2, focusRequested: true, identifier: "todos.editor.title")
-            }
-            HStack(alignment: .top, spacing: Tokens.V1.Space.sm) {
-              property("负责人") { assignee }
-              property("优先级") { priority }
-            }
-            HStack(alignment: .top, spacing: Tokens.V1.Space.sm) {
-              property("客户") { client }
-              property("项目") { project }
-            }
-            property("截止") { deadline }
-            property("备注") { note }
-            origin
-          } else {
-            titleHeader
-            origin
-            VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-              property("负责人") { assignee }
-              property("优先级") { priority }
-              property("客户") { client }
-              property("项目") { project }
-              property("截止") { deadline }
-              property("备注") { note }
-            }.runtimeAccessibilityIdentifier("todos.editor.properties")
-          }
-          if let error = model.editor?.error {
-            VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-              Text(error).font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.warn)
-              Button("重试") { _ = model.saveEditor() }.buttonStyle(.v1Outline)
-            }.runtimeAccessibilityIdentifier("todos.editor.error")
-          }
-          TodoSourceSection(
-            model: model, sources: model.editor?.itemID.flatMap(model.item)?.sources ?? [],
-            onOpenSource: onOpenSource)
-        }
-        .font(Tokens.V1.Text.body.font).foregroundStyle(Tokens.V1.Color.ink)
-        .padding(Tokens.V1.Space.md)
-      }
-      if model.isCreating {
-        Divider()
-        HStack {
-          Spacer()
-          Button("取消") { model.cancelCreate() }.buttonStyle(.v1Quiet)
-            .runtimeAccessibilityIdentifier("todos.new.cancel")
-          Button("加入待办") { _ = model.saveEditor() }.buttonStyle(.v1Primary)
-            .disabled(
-              model.editor?.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-            )
-            .runtimeAccessibilityIdentifier("todos.new.add")
-        }.padding(Tokens.V1.Space.md)
-      }
+    Group {
+      if model.isCreating { creating } else { editing }
     }
+    .background(Tokens.V1.Color.paper2)
     .onAppear { applyRequestedFocus() }
     .onChange(of: model.editorFocus) { _, _ in applyRequestedFocus() }
     .onChange(of: model.editorFocusRequest) { _, _ in applyRequestedFocus() }
@@ -91,6 +23,83 @@ struct TodoEditorView: View {
     }
     .onSubmit { model.saveExistingEditor() }
     .runtimeAccessibilityIdentifier("todos.editor")
+  }
+
+  /// 新增与会议「加入待办」是同一个表单（TodoComposeForm），这里只给顶栏和确认条。
+  private var creating: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: Tokens.V1.Space.sm) {
+        Text("新增待办")
+          .font(Tokens.V1.Text.barTitle.font)
+          .foregroundStyle(Tokens.V1.Color.ink)
+        Spacer()
+        Button {
+          model.cancelCreate()
+        } label: {
+          Image(systemName: "xmark")
+        }
+        .buttonStyle(.v1Icon).help("取消 Esc").accessibilityLabel("取消新增待办")
+      }
+      .padding(.horizontal, Tokens.V1.Space.md)
+      .frame(height: Tokens.V1.Size.barHeight)
+      .overlay(alignment: .bottom) {
+        Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
+      }
+      ScrollView {
+        TodoComposeForm(
+          draft: draft, due: due, identifiers: .newTodo,
+          assigneeSuggestions: model.assigneeSuggestions(), clients: model.tagDirectory.clients,
+          projects: model.tagDirectory.projects(for: model.editor?.client ?? ""),
+          onSelectClient: model.selectEditorClient, onSelectProject: model.selectEditorProject,
+          now: model.now, focusTitle: true
+        )
+        .padding(Tokens.V1.Space.md)
+      }
+      .frame(maxHeight: .infinity, alignment: .top)
+      TodoComposeFooter(
+        error: model.editor?.error, errorIdentifier: "todos.editor.error",
+        saveTitle: model.editor?.isRetry == true ? "重新保存" : "加入待办",
+        saveEnabled: model.editor?.title.trimmingCharacters(in: .whitespacesAndNewlines)
+          .isEmpty == false,
+        cancelIdentifier: "todos.new.cancel", saveIdentifier: "todos.new.add",
+        disabledSaveIdentifier: nil, onCancel: model.cancelCreate,
+        onSave: { _ = model.saveEditor() })
+    }
+    .onExitCommand { model.cancelCreate() }
+  }
+
+  /// 已有待办：自动保存、左标签右值，属性收在与新增同款的「执行与归属」组里。
+  private var editing: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.md) {
+        VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+          titleHeader
+          origin
+        }
+        TodoComposeGroup("执行与归属") {
+          VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+            property("负责人") { assignee }
+            property("截止") { deadline }
+            property("优先级") { priority }
+            property("客户") { client }
+            property("项目") { project }
+          }.runtimeAccessibilityIdentifier("todos.editor.properties")
+        }
+        TodoComposeField("备注") { note }
+          .runtimeAccessibilityIdentifier("todos.editor.property.备注")
+        if let error = model.editor?.error {
+          VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+            Text(error).font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.warn)
+            Button("重试") { _ = model.saveEditor() }.buttonStyle(.v1Outline)
+          }.runtimeAccessibilityIdentifier("todos.editor.error")
+        }
+        TodoSourceSection(
+          model: model, sources: model.editor?.itemID.flatMap(model.item)?.sources ?? [],
+          onOpenSource: onOpenSource)
+      }
+      .font(Tokens.V1.Text.body.font).foregroundStyle(Tokens.V1.Color.ink)
+      .padding(Tokens.V1.Space.md)
+    }
   }
 
   private var priority: some View {
@@ -126,42 +135,15 @@ struct TodoEditorView: View {
   private var note: some View {
     V1TextField(
       placeholder: "添加备注", text: text(\.note), size: size, multiline: true,
-      minimumLines: model.isCreating ? 3 : 2, identifier: "todos.editor.note",
-      onCommit: model.saveExistingEditor)
+      minimumLines: 2, identifier: "todos.editor.note", onCommit: model.saveExistingEditor)
   }
 
   private var deadline: some View {
-    VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-      if model.isCreating {
-        HStack(spacing: 0) {
-          shortcut("今天", offset: 0)
-          shortcut("明天", offset: 1)
-          Button("下周") {
-            let zone =
-              TimeZone(identifier: model.editor?.timeZoneIdentifier ?? "") ?? SystemTimeZone.current
-            if let day = TodoDeadlineShortcuts.nextWeek(now: model.now, zone: zone) {
-              due.wrappedValue = .date(TodoDay(day: day, timeZoneIdentifier: zone.identifier))
-            }
-          }.buttonStyle(.v1Quiet)
-          Button("无期限") { due.wrappedValue = .none }.buttonStyle(.v1Quiet)
-        }
-      }
-      TodoDeadlinePicker(
-        due: due, now: model.now,
-        timeZoneIdentifier: model.editor?.timeZoneIdentifier ?? SystemTimeZone.current.identifier,
-        identifier: "todos.editor.due", focusRequested: model.editorFocus == .due,
-        focusRequest: model.editorFocusRequest, compact: !model.isCreating)
-    }
-  }
-
-  private func shortcut(_ title: String, offset: Int) -> some View {
-    Button(title) {
-      let zone =
-        TimeZone(identifier: model.editor?.timeZoneIdentifier ?? "") ?? SystemTimeZone.current
-      if let day = TodoDeadlineShortcuts.day(now: model.now, zone: zone, offset: offset) {
-        due.wrappedValue = .date(TodoDay(day: day, timeZoneIdentifier: zone.identifier))
-      }
-    }.buttonStyle(.v1Quiet)
+    TodoDeadlinePicker(
+      due: due, now: model.now,
+      timeZoneIdentifier: model.editor?.timeZoneIdentifier ?? SystemTimeZone.current.identifier,
+      identifier: "todos.editor.due", focusRequested: model.editorFocus == .due,
+      focusRequest: model.editorFocusRequest, compact: !model.isCreating)
   }
 
   private var titleHeader: some View {
@@ -243,38 +225,10 @@ struct TodoEditorView: View {
   }
 
   private var assignee: some View {
-    VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-      V1Dropdown(value: assigneeLabel, size: size, identifier: "todos.editor.assignee") {
-        assigneeOption("我", kind: .me)
-        assigneeOption("指定的人…", kind: .named)
-        assigneeOption("待确认", kind: .pending)
-      }
-      .focused($focused, equals: .assignee).accessibilityLabel("负责人")
-      if model.editor?.assigneeKind == .named {
-        V1TextField(
-          placeholder: "填写姓名", text: text(\.assigneeName), size: size,
-          identifier: "todos.editor.assignee-name", onCommit: model.saveExistingEditor
-        )
-        .focused($focused, equals: .name)
-      }
-    }
-  }
-
-  private var assigneeLabel: String {
-    switch model.editor?.assigneeKind ?? .me {
-    case .me: "我"
-    case .named: model.editor?.assigneeName.nilIfBlank ?? "指定的人…"
-    case .pending: "待确认"
-    }
-  }
-
-  private func assigneeOption(_ title: String, kind: TodoEditorDraft.AssigneeKind) -> some View {
-    Button {
-      model.updateEditor { $0.assigneeKind = kind }
-      if kind == .named { focused = .name } else { model.saveExistingEditor() }
-    } label: {
-      menuOption(title, selected: model.editor?.assigneeKind == kind)
-    }
+    TodoAssigneeComboBox(
+      draft: draft, suggestions: model.assigneeSuggestions(), size: size,
+      identifier: "todos.editor.assignee", focusRequested: model.editorFocus == .assignee,
+      focusRequest: model.editorFocusRequest, onCommit: model.saveExistingEditor)
   }
 
   @ViewBuilder
@@ -314,29 +268,24 @@ struct TodoEditorView: View {
   private func applyRequestedFocus() {
     switch model.editorFocus {
     case .title: if !model.isCreating { focused = .title }
-    case .assignee: focused = model.editor?.assigneeKind == .named ? .name : .assignee
-    case .due, nil: break
+    case .assignee, .due, nil: break
     }
   }
 
   private func property<Content: View>(_ label: String, @ViewBuilder content: () -> Content)
     -> some View
   {
-    Group {
-      if model.isCreating {
-        VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
-          Text(label).font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
-          content()
-        }.frame(maxWidth: .infinity, alignment: .leading)
-      } else {
-        HStack(alignment: .top, spacing: Tokens.V1.Space.sm) {
-          Text(label).font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
-            .frame(
-              width: Tokens.V1.Size.libraryColProject, height: size.height, alignment: .leading)
-          content().frame(maxWidth: .infinity, minHeight: size.height, alignment: .leading)
-        }
-      }
+    HStack(alignment: .top, spacing: Tokens.V1.Space.sm) {
+      Text(label).font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
+        .frame(width: Tokens.V1.Size.libraryColProject, height: size.height, alignment: .leading)
+      content().frame(maxWidth: .infinity, minHeight: size.height, alignment: .leading)
     }.runtimeAccessibilityIdentifier("todos.editor.property.\(label)")
+  }
+
+  private var draft: Binding<TodoEditorDraft> {
+    Binding(
+      get: { model.editor ?? TodoEditorDraft() },
+      set: { value in model.updateEditor { $0 = value } })
   }
 
   private func text(_ keyPath: WritableKeyPath<TodoEditorDraft, String>) -> Binding<String> {

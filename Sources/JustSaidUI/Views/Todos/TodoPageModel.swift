@@ -185,7 +185,11 @@ public final class TodoPageModel: ObservableObject {
   @Published public var reconcileID: UUID?
   @Published public var cleanError: String?
   @Published public var cleanRetry = false
-  @Published public var candidateReceipt: MeetingCandidateReceipt?
+  /// 加入后的就地回执，停 `dur-receipt` 后自己收起；新动作替换并重计时。
+  @Published public var candidateReceipt: MeetingCandidateReceipt? {
+    didSet { restartCandidateReceiptTimer() }
+  }
+  private var candidateReceiptTask: Task<Void, Never>?
   @Published public var candidateActionError: String?
   @Published public var candidateWritable = false
   @Published public private(set) var directories: [URL]
@@ -1004,6 +1008,16 @@ public final class TodoPageModel: ObservableObject {
     dragHoverTarget = nil
   }
 
+  private func restartCandidateReceiptTimer() {
+    candidateReceiptTask?.cancel()
+    candidateReceiptTask = nil
+    guard candidateReceipt != nil else { return }
+    candidateReceiptTask = Task { @MainActor [weak self] in
+      do { try await Task.sleep(for: .seconds(Tokens.V1.Motion.receipt)) } catch { return }
+      self?.candidateReceipt = nil
+    }
+  }
+
   private func restartReceiptTimer() {
     receiptTask?.cancel()
     receiptTask = Task { @MainActor [weak self] in
@@ -1060,6 +1074,23 @@ public final class TodoPageModel: ObservableObject {
     draft.client = item.client ?? ""
     draft.project = item.project ?? ""
     return draft
+  }
+
+  /// 负责人组合框的选项：「我」「待确认」在前，再是会议里说的人，然后是未移除待办里用过的名字（最近在前、去重）。
+  func assigneeSuggestions(including spoken: String? = nil) -> [String] {
+    var names = [TodoEditorDraft.assigneeMe, TodoEditorDraft.assigneePending]
+    func add(_ value: String?) {
+      guard let name = value?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
+        name != "本人", !names.contains(name)
+      else { return }
+      names.append(name)
+    }
+    add(spoken)
+    let todos = (snapshot?.state.todos ?? []).filter { $0.removedAt == nil }
+    for item in todos.sorted(by: { $0.updatedAt > $1.updatedAt }) {
+      if case .named(let name) = item.assignee { add(name) }
+    }
+    return names
   }
 
   func assignee(from editor: TodoEditorDraft) -> TodoAssignee {

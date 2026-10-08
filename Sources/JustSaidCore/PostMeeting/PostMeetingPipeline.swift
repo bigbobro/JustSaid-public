@@ -157,6 +157,8 @@ public struct PostMeetingPipeline: Sendable {
   private struct RunLogContext: Sendable {
     let meetingShortID: String
     let startedAt: Date
+    /// 出错那一步的原因;run/resume 的收尾 catch 拿它落盘,类型和步骤到那里已经丢了。
+    let failureCause = PostMeetingFailureCauseRecorder()
 
     init(meetingID: UUID, startedAt: Date = Date()) {
       meetingShortID = String(meetingID.uuidString.prefix(8))
@@ -413,6 +415,8 @@ public struct PostMeetingPipeline: Sendable {
         surfacedError = error
       }
       let reason = surfacedError.localizedDescription
+      let cause =
+        context.failureCause.cause ?? PostMeetingFailureAdvice.classify(surfacedError, step: nil)
       Self.logger.error(
         "精转失败 meeting=\(context.meetingShortID, privacy: .public) logid=\(MeetingStore.logID(in: reason) ?? "无", privacy: .public) elapsed=\(context.elapsedLabel, privacy: .public) reason=\(reason, privacy: .private)"
       )
@@ -422,6 +426,7 @@ public struct PostMeetingPipeline: Sendable {
         // failPostMeetingProcessing 会原子补「failed」阶段事件(含原因)。
         _ = try? meetingStore.failPostMeetingProcessing(
           reason: reason,
+          cause: cause,
           at: input.paths
         )
       }
@@ -493,6 +498,7 @@ public struct PostMeetingPipeline: Sendable {
       do {
         _ = try meetingStore.failPostMeetingProcessing(
           reason: reason,
+          cause: context.failureCause.cause ?? PostMeetingFailureAdvice.classify(error, step: nil),
           at: candidate.paths,
           ifCurrentRecoveryJobs: candidate.jobs
         )
@@ -1259,6 +1265,7 @@ public struct PostMeetingPipeline: Sendable {
       Self.storageLogger.error(
         "upload 失败 key=\(objectName, privacy: .public) error=\(error.localizedDescription, privacy: .private)"
       )
+      context.failureCause.record(error, step: .storage)
       if uploadFileURL != fileURL {
         try? FileManager.default.removeItem(at: uploadFileURL)
       }
@@ -1269,21 +1276,33 @@ public struct PostMeetingPipeline: Sendable {
     }
     await tracker.insert(object)
     do {
-      let readURL = try await storage.signedReadURL(
-        for: object,
-        expiresIn: configuration.signedURLLifetime
-      )
+      let readURL: URL
+      do {
+        readURL = try await storage.signedReadURL(
+          for: object,
+          expiresIn: configuration.signedURLLifetime
+        )
+      } catch {
+        context.failureCause.record(error, step: .storage)
+        throw error
+      }
       let audioFormat =
         (try? meetingStore.read(from: meetingPaths).importedAudioFormat) ?? "m4a"
       report(.submitting)
       recordStage("submitting", context: context, paths: meetingPaths)
-      let job = try await batchTranscriber.submit(
-        audioFiles: [readURL],
-        language: language,
-        enableChannelSplit: enableChannelSplit,
-        audioFormat: audioFormat,
-        requestID: requestID
-      )
+      let job: BatchTranscriptionJob
+      do {
+        job = try await batchTranscriber.submit(
+          audioFiles: [readURL],
+          language: language,
+          enableChannelSplit: enableChannelSplit,
+          audioFormat: audioFormat,
+          requestID: requestID
+        )
+      } catch {
+        context.failureCause.record(error, step: .transcription)
+        throw error
+      }
       let submittedAt = Date()
       // 实际任务身份 + submittedAt + 「submitted」阶段事件一笔写入(R2)。
       _ = try meetingStore.recordPostMeetingSubmission(
@@ -1450,15 +1469,15 @@ public struct PostMeetingPipeline: Sendable {
       throw MeetingStoreError.finalized
     }
     let speakerNames = metadata.speakerNames ?? [:]
-    let filteredTranscript = ExclusionPolicy(metadata: metadata).filterTranscript(transcript)
     // 说话人结算必须在这里做:`generateMinutes` 既从 `run()` / `resume()` 进来,
     // 也从独立入口 `regenerateMinutes` 进来。权威转写 `transcript.md` 永远保持 ASR 原样;
     // 全局改名 + 单段更正(N2)只改喂给模型的这份文本,不回写盘。
     // 独立触发时若漏掉这一步,纪要里人名会退回未纠正状态。
-    let modelTranscript = TranscriptSpeakerNaming.applyingNames(
-      speakerNames,
-      overrides: metadata.speakerOverrides ?? [:],
-      to: filteredTranscript
+    // 单段更正按原文行序记键,删排除段会挪行序,由 ExclusionPolicy 统一重映射。
+    let modelTranscript = ExclusionPolicy(metadata: metadata).filterTranscriptApplyingNames(
+      transcript,
+      names: speakerNames,
+      overrides: metadata.speakerOverrides ?? [:]
     )
     // R3 should-have(08-20 naming-first):未决认名建议连同证据注入 prompt,
     // 只作提示、归属由模型斟酌;未确认不阻塞纪要,未认标签保留「发言人 N」。
@@ -1723,7 +1742,13 @@ public struct PostMeetingPipeline: Sendable {
       if let recoveryCandidate {
         _ = try meetingStore.requireCurrentPostMeetingRecovery(recoveryCandidate)
       }
-      let status = try await batchTranscriber.status(for: job)
+      let status: BatchTranscriptionStatus
+      do {
+        status = try await batchTranscriber.status(for: job)
+      } catch {
+        context.failureCause.record(error, step: .transcription)
+        throw error
+      }
       if let recoveryCandidate {
         _ = try meetingStore.requireCurrentPostMeetingRecovery(recoveryCandidate)
       }
@@ -1837,6 +1862,16 @@ private struct SpeakerCluster: Hashable {
   var orderingKey: [String] {
     [requestSource.rawValue, declaredSource?.rawValue ?? "", rawSpeaker]
   }
+
+  /// 编号域里去掉 speaker 的部分:同一请求的同一声道。尾巴只在这个范围内归并。
+  var channel: SpeakerChannel {
+    SpeakerChannel(requestSource: requestSource, declaredSource: declaredSource)
+  }
+}
+
+private struct SpeakerChannel: Hashable {
+  let requestSource: AudioSource
+  let declaredSource: AudioSource?
 }
 
 private struct AudioTiming: Sendable {
@@ -1864,7 +1899,7 @@ private struct MergedTranscriptSegment: EchoDeduplicatableSegment {
   let t0: TimeInterval
   let t1: TimeInterval
   var speaker: String
-  let speakerCluster: SpeakerCluster?
+  var speakerCluster: SpeakerCluster?
   let text: String
   let source: AudioSource
   let volumeDB: Double?
@@ -2036,9 +2071,10 @@ extension PostMeetingPipeline {
         "权威转写去掉 \(deduplicated.droppedCount, privacy: .public) 条麦克风回声片段"
       )
     }
+    let folded = foldSpeakerTails(deduplicated.segments)
     // 编号只在本次结果内有效。为首次出现完全并列的簇加确定性排序，避免异步任务
     // 完成顺序改变标签；这份排序只分配标签，实际输出仍用上面原有的保留行顺序。
-    let labelOrder = deduplicated.segments.sorted {
+    let labelOrder = folded.sorted {
       if $0.t0 != $1.t0 { return $0.t0 < $1.t0 }
       if $0.t1 != $1.t1 { return $0.t1 < $1.t1 }
       if $0.speaker != $1.speaker { return $0.speaker < $1.speaker }
@@ -2051,12 +2087,87 @@ extension PostMeetingPipeline {
         labels[cluster] = "发言人 \(labels.count + 1)"
       }
     }
-    return deduplicated.segments.map { segment in
+    return folded.map { segment in
       var result = segment
       if let cluster = segment.speakerCluster, let label = labels[cluster] {
         result.speaker = label
       }
       return result
+    }
+  }
+
+  /// B4:火山分群常在一个声道的主说话人旁边拆出只有「嗯」「对」「好的」的尾巴簇,
+  /// 三个人的会精转回来显示五六个人。Shaobo 本机最近 15 场会议里,多出来的标签几乎
+  /// 都是这种尾巴(总字数个位数到几十、平均每句不到 6 个字),10-07 那场他手动排除的
+  /// 正好是两个尾巴。这里把尾巴并进**同一请求同一声道**里时间最近的成形说话人:
+  /// - 尾巴:实义字 ≤ 20,或 ≤ 80 且平均每句 ≤ 6 字(只说一句完整话的人不算);
+  /// - 只在声道里有成形的人(某簇 ≥ 200 字)且尾巴不到该声道字数一成时才并,
+  ///   小会或只有几句话的录音保持供应商原样;
+  /// - 不跨声道:麦克风的尾巴不会并进远端,反之亦然;正文、时间一字不动。
+  /// 并错的代价是一两个语气词挂到邻座名下,远小于凭空多出一个要认名的人。
+  fileprivate static func foldSpeakerTails(
+    _ segments: [MergedTranscriptSegment]
+  ) -> [MergedTranscriptSegment] {
+    var characters: [SpeakerCluster: Int] = [:]
+    var lines: [SpeakerCluster: Int] = [:]
+    var channelCharacters: [SpeakerChannel: Int] = [:]
+    for segment in segments {
+      guard let cluster = segment.speakerCluster else { continue }
+      let count = meaningfulCharacterCount(segment.text)
+      characters[cluster, default: 0] += count
+      lines[cluster, default: 0] += 1
+      channelCharacters[cluster.channel, default: 0] += count
+    }
+    let anchoredChannels = Set(
+      characters.filter { $0.value >= tailAnchorMinimumCharacters }.keys.map(\.channel))
+    let tails = Set(
+      characters.compactMap { cluster, count -> SpeakerCluster? in
+        let lineCount = lines[cluster] ?? 1
+        let fragmentary =
+          count <= tailMaximumCharacters
+          || (count <= tailMaximumShortCharacters
+            && count <= tailMaximumCharactersPerLine * lineCount)
+        guard
+          fragmentary,
+          anchoredChannels.contains(cluster.channel),
+          count * 10 <= channelCharacters[cluster.channel] ?? 0
+        else { return nil }
+        return cluster
+      })
+    guard !tails.isEmpty else { return segments }
+    var anchors: [SpeakerChannel: [(midpoint: TimeInterval, cluster: SpeakerCluster)]] = [:]
+    for segment in segments {
+      guard let cluster = segment.speakerCluster, !tails.contains(cluster) else { continue }
+      anchors[cluster.channel, default: []].append(
+        (midpoint: (segment.t0 + segment.t1) / 2, cluster: cluster))
+    }
+    return segments.map { segment in
+      guard
+        let cluster = segment.speakerCluster, tails.contains(cluster),
+        let candidates = anchors[cluster.channel]
+      else { return segment }
+      let midpoint = (segment.t0 + segment.t1) / 2
+      // min(by:) 取第一个最小值:等距时归前一个人,结果不随字典顺序变。
+      guard
+        let nearest = candidates.min(by: {
+          abs($0.midpoint - midpoint) < abs($1.midpoint - midpoint)
+        })
+      else { return segment }
+      var result = segment
+      result.speakerCluster = nearest.cluster
+      return result
+    }
+  }
+
+  private static let tailMaximumCharacters = 20
+  private static let tailMaximumShortCharacters = 80
+  private static let tailMaximumCharactersPerLine = 6
+  private static let tailAnchorMinimumCharacters = 200
+
+  /// 字母与数字(含汉字)计数,标点和空白不算。
+  fileprivate static func meaningfulCharacterCount(_ text: String) -> Int {
+    text.unicodeScalars.reduce(into: 0) { count, scalar in
+      if CharacterSet.alphanumerics.contains(scalar) { count += 1 }
     }
   }
 

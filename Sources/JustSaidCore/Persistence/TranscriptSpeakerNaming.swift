@@ -9,6 +9,10 @@ public struct TranscriptSpeechLine: Equatable, Sendable {
   public let originalSpeaker: String
   /// 结算后的显示名:单段覆盖 > 全局映射 > 原始标签。
   public let speaker: String
+  /// 这段有没有单段覆盖。「撤销这段的更正」只对它有意义:只做过全局改名时 speaker 也不等于原始标签。
+  public let hasOverride: Bool
+  /// 去掉单段覆盖后的显示名(全局映射 > 原始标签),即撤销这段更正后会回到的名字。
+  public let speakerWithoutOverride: String
   public let text: String
 
   public var isMe: Bool { speaker == TranscriptSpeakerNaming.selfSpeakerLabel }
@@ -75,6 +79,7 @@ public enum TranscriptSpeakerNaming {
       guard let parsed = parse(line, index: index) else {
         return .plain(line)
       }
+      let key = overrideKey(timestamp: parsed.timestamp, index: index)
       return .speech(
         TranscriptSpeechLine(
           index: index,
@@ -82,9 +87,16 @@ public enum TranscriptSpeakerNaming {
           originalSpeaker: parsed.speaker,
           speaker: effectiveSpeaker(
             original: parsed.speaker,
-            key: overrideKey(timestamp: parsed.timestamp, index: index),
+            key: key,
             names: names,
             overrides: overrides
+          ),
+          hasOverride: !(overrides[key] ?? "").isEmpty,
+          speakerWithoutOverride: effectiveSpeaker(
+            original: parsed.speaker,
+            key: key,
+            names: names,
+            overrides: [:]
           ),
           text: parsed.text
         )

@@ -586,7 +586,7 @@ private struct LibraryMeetingRowButton: View {
   private func statusExplanation(_ key: String) -> String {
     switch key {
     case "transcription":
-      return model.postMeetingFailureReason(for: item)
+      return model.postMeetingFailureAdvice(for: item)?.message
         ?? "\(model.transcriptionStatusLabel(for: item))。重新精转将按全长计费，下一步会再次确认。"
     case "minutes":
       return item.hasFormalMinutes ? "已有纪要，可重新生成；下一步选择语言与计费份数。"

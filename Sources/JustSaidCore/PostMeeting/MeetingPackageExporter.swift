@@ -514,7 +514,9 @@ public enum OnePagerMarkdownRenderer {
   /// 看不出错 —— 只是图不出来**,所以这里宁可多转。
   ///
   /// 括号类(`(` `)` `[` `]` `{` `}`)和中文引号靠**整段套双引号**解决,那是 Mermaid
-  /// 自己给的机制;套了引号还会咬人的只剩三类:
+  /// 自己给的机制;套了引号还会咬人的只剩四类:
+  /// - `#` 是实体码的起头,标题里的「#TODO;」会被当实体吞掉;它必须最先转,
+  ///   否则会把后面刚写进去的 `#34;` 再咬一口;
   /// - `"` 提前关掉引号,后面全成语法;
   /// - `<` `>` 在 htmlLabels 下会被当标签吞掉(「延迟 <b> 秒」会整段消失);
   /// - 换行把一条语句截成半行代码。节点标题按契约本来是单行,这里只是兜底成空格。
@@ -524,6 +526,7 @@ public enum OnePagerMarkdownRenderer {
   /// Mermaid 文档里给的例子就是十进制(`#9829;`)。
   private static func mermaidText(_ value: String) -> String {
     value
+      .replacingOccurrences(of: "#", with: "#35;")
       .replacingOccurrences(of: "\"", with: "#34;")
       .replacingOccurrences(of: "<", with: "#60;")
       .replacingOccurrences(of: ">", with: "#62;")

@@ -220,6 +220,7 @@ public final class HangSentinel: @unchecked Sendable {
       lock.lock()
       incidentFile = url
       lock.unlock()
+      DiagnosticLogRetention.prune(prefix: "hang-", in: directory)
       logger.fault(
         "主线程无响应 \(age, format: .fixed(precision: 1))s,事故文件:\(url.path)"
       )

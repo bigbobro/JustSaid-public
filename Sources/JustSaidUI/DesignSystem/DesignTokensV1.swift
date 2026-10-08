@@ -181,6 +181,8 @@ extension Tokens {
       static let recordBlock = CGSize(width: 48, height: 60)
       static let panelWidth: CGFloat = 232
       static let meetingRailWidth: CGFloat = 300
+      /// 会议右栏的编辑态宽（#146）：加入待办表单在右栏原位展开，左边纪要与转写照常可读。
+      static let meetingEditorWidth: CGFloat = 480
       /// 阅读列宽。设计系统 `reading-w` 一直是 1040,但正文一直用遗留的
       /// `Tokens.Layout.readingContentWidth = 780` 断行,窗口再宽也在 780 折
       /// (owner 2026-09-20:「页面还有很大,文章文本却在中间一个地方开始换行」)。

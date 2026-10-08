@@ -2,6 +2,7 @@ import Foundation
 import Synchronization
 
 /// 一次 Responses 调用的流时间线(10-06):只记时间、计数与固定事件类型,不碰正文。
+/// Anthropic Messages 适配器(10-08)共用同一份时间线与白名单。
 ///
 /// 成功与失败的 `modelCall.finish` 都从这里取数,失败时也能看出被切断前模型在思考还是在写正文、
 /// 服务端多久没发字节。所有更新都在短临界区内完成,不跨 await,也不回调外部代码。
@@ -16,6 +17,9 @@ final class ResponsesStreamTimeline: Sendable {
     "response.output_text.delta", "response.output_text.done",
     "response.refusal.delta", "response.refusal.done",
     "response.completed", "response.failed", "response.incomplete", "error",
+    // Anthropic Messages(10-08)。
+    "message_start", "content_block_start", "content_block_delta", "content_block_stop",
+    "message_delta", "message_stop", "ping",
   ]
 
   /// 账本里 `lastEventType` 允许的全部取值:已知事件类型,加时间线自己写的 `comment` 与 `other`。
@@ -86,6 +90,11 @@ final class ResponsesStreamTimeline: Sendable {
   func event(_ type: String) {
     let safe = Self.knownEventTypes.contains(type) ? type : "other"
     state.withLock { $0.lastEventType = safe }
+  }
+
+  /// 协议层心跳事件(Anthropic 的 `ping`);注释行心跳由 `line(bytes:isComment:)` 计入。
+  func keepalive() {
+    state.withLock { $0.keepaliveLines += 1 }
   }
 
   /// 非空的推理摘要增量。

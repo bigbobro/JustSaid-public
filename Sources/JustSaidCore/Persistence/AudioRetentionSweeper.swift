@@ -93,6 +93,8 @@ public struct AudioRetentionSweeper {
         )
       }
     }
+    DiagnosticLogRetention.prune(
+      prefix: "retention-", in: diagnosticsRoot, now: now, fileManager: fileManager)
     ledger.append(
       event: "retention.finish",
       source: "AudioRetentionSweeper",

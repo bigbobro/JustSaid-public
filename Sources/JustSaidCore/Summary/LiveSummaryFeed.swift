@@ -260,6 +260,8 @@ public final class LiveSummaryFeed: SummaryFeed {
 
   private var meetingPaths: MeetingPaths?
   private var meetingStartedAt: Date?
+  /// 本场会中总结出过的失败,散会时写进 meeting.json,会后会议页据此留一行。
+  private var inMeetingFailures = InMeetingFailureLog()
   private var transcript: [TranscriptSegment] = []
   private var echoFilter = EchoDeduplicator.IncrementalFilter()
   private var fastRuntime = SummaryLaneRuntime()
@@ -558,10 +560,29 @@ public final class LiveSummaryFeed: SummaryFeed {
           recoveryAdvice: LLMRecoveryAdvice.project(error, context: .init(feature: .liveSummary))
         )
         self[.slow].consecutiveFailures += 1
+        noteInMeetingFailure(self[.slow].failure)
       }
     }
     refreshStatus()
+    flushInMeetingFailures()
     startPostMeetingPipeline(runCloudPipeline: runPostMeeting)
+  }
+
+  private func noteInMeetingFailure(_ failure: SummaryLaneFailure?) {
+    guard let failure else { return }
+    // 写盘失败的投影是 unknown,说不清;按分类记成 persistence。
+    let cause =
+      failure.category == .persistence
+      ? InMeetingFailureRecord.persistenceCause
+      : failure.recoveryAdvice?.cause.rawValue ?? failure.category.rawValue
+    inMeetingFailures.note(.liveSummary, cause: cause)
+  }
+
+  /// 散会写盘。失败不挡结束流程:这是留痕,不是产物。
+  private func flushInMeetingFailures() {
+    guard let meetingPaths, !inMeetingFailures.records.isEmpty else { return }
+    _ = try? meetingStore.recordInMeetingFailures(inMeetingFailures.records, at: meetingPaths)
+    inMeetingFailures.reset()
   }
 
   /// 放弃本场会议(拍板 T15):停两级引擎、**不写速记纪要**、不排队会后处理。
@@ -694,6 +715,7 @@ public final class LiveSummaryFeed: SummaryFeed {
       parseFailureDiagnosticsWritten = 0
       parseFailureDiagnosticsDropped = 0
       slowFailuresAtCoveragePoint = 0
+      inMeetingFailures.reset()
       if isActive {
         cancelLaneRunners()
         self[.fast].failure = nil
@@ -1364,6 +1386,7 @@ public final class LiveSummaryFeed: SummaryFeed {
         recoveryAdvice: LLMRecoveryAdvice.project(error, context: .init(feature: .liveSummary))
       )
       self[.slow].consecutiveFailures += 1
+      noteInMeetingFailure(self[.slow].failure)
       logRecovery(
         lane: .slow,
         stage: .persistence,
@@ -1455,6 +1478,7 @@ public final class LiveSummaryFeed: SummaryFeed {
         recoveryAdvice: LLMRecoveryAdvice.project(error, context: .init(feature: .liveSummary))
       )
       self[.slow].consecutiveFailures += 1
+      noteInMeetingFailure(self[.slow].failure)
       logRecovery(
         lane: .slow,
         stage: .persistence,
@@ -2061,6 +2085,7 @@ public final class LiveSummaryFeed: SummaryFeed {
     )
     self[lane].failure = failure
     self[lane].consecutiveFailures += 1
+    noteInMeetingFailure(failure)
     logRecovery(
       lane: lane,
       stage: stage,
@@ -2800,15 +2825,17 @@ extension LiveSummaryFeed {
     var touchedIDs: Set<UUID> = []
     var incomingTitleIDs: [String: UUID] = [:]
     var legacyCurrentID: UUID?
+    var cappedRedirects: [UUID: UUID] = [:]
     let previousCurrentID = existing.last(where: \.isInProgress)?.id
     for block in wire.blocks {
       if block.ref.value != nil { stats.blocksWithRef += 1 }
       if block.ref.malformed { stats.malformedRefs += 1 }
       let parsedTopic: SummaryTopic? = {
 
-        guard let title = sanitizedOptional(block.title) else {
+        guard let blockTitle = sanitizedOptional(block.title) else {
           return nil
         }
+        var title = blockTitle
         guard title != slowGapTopicTitle else {
           stats.rejectedGapBlocks += 1
           return nil
@@ -2832,8 +2859,37 @@ extension LiveSummaryFeed {
           targetID = sameTitle.id
           stats.titleFallbacks += 1
         }
+        // 话题硬上限:目标话题加上本块的新要点会超过 `topicBulletCap` 条时,本块不再追加给它,
+        // 改落到它的续篇(「标题（续）」);续篇不存在就新建。模型对粒度规则不够听话(同一场会
+        // 回放 3 次,2/3 把前 18 分钟合成 40 多条的一块),由代码兜底。
+        var continuationID: UUID?
+        var chainKeys = Set<String>()
+        var cappedTimeRange: String?
+        if let cappedID = targetID,
+          let capped = merged.first(where: { $0.id == cappedID })
+        {
+          let cappedKeys = Set(capped.bullets.map { bulletDedupKey($0.text.plainText) })
+          let newKeys = Set(
+            block.bullets.compactMap { sanitizedOptional($0.text).map(bulletDedupKey) }
+          ).subtracting(cappedKeys)
+          if !newKeys.isEmpty, capped.bullets.count + newKeys.count > Self.topicBulletCap {
+            let continuation = continuationTarget(
+              for: capped, adding: newKeys.count, in: merged)
+            targetID = continuation.id
+            title = continuation.title
+            continuationID = continuation.id ?? UUID()
+            cappedRedirects[cappedID] = continuationID
+            cappedTimeRange = capped.timeRangeLabel
+            // 模型常把旧要点连同新要点一起回写;已在原话题(或更早的续篇)里的要点不进续篇。
+            let base = continuationBaseTitle(capped.title)
+            for topic in merged
+            where topic.id != continuation.id && continuationBaseTitle(topic.title) == base {
+              chainKeys.formUnion(topic.bullets.map { bulletDedupKey($0.text.plainText) })
+            }
+          }
+        }
         if targetID == nil { stats.newTopics += 1 }
-        let id = targetID ?? UUID()
+        let id = targetID ?? continuationID ?? UUID()
         let existingTopic = merged.first { $0.id == id }
         // 指向既有话题的块一律追加:bullets 只含本轮新增,不能替换旧要点,
         // 也不能按位置认领旧要点(用本块自己的 sourceRefs)。
@@ -2844,6 +2900,7 @@ extension LiveSummaryFeed {
             return nil
           }
           let bulletKey = bulletDedupKey(bulletText)
+          guard !chainKeys.contains(bulletKey) else { return nil }
           let matchingBullet =
             existingTopic?.bullets.first { bulletDedupKey($0.text.plainText) == bulletKey }
           let positionalBullet = repeatedTarget ? nil : existingTopic?.bullets[safe: index]
@@ -2882,11 +2939,10 @@ extension LiveSummaryFeed {
         // 绝不渲染空卡——模型抽风不是用户该看到的东西。
         var seenBulletKeys = Set<String>()
         let cleanedBullets = bullets.filter { bullet in
-          let normalized = bulletDedupKey(bullet.text.plainText)
-          guard normalized.count > 2 else {
+          guard !isFragmentBullet(bullet.text.plainText) else {
             return false
           }
-          return seenBulletKeys.insert(normalized).inserted
+          return seenBulletKeys.insert(bulletDedupKey(bullet.text.plainText)).inserted
         }
         let resolution = resolveViz(
           block.viz,
@@ -2926,6 +2982,9 @@ extension LiveSummaryFeed {
           outgoingTitle = existingTopic.title
           outgoingTimeRange = reopenedTimeRange(
             existing: existingTopic.timeRangeLabel, incoming: outgoingTimeRange)
+        } else if let cappedTimeRange {
+          outgoingTimeRange = continuationTimeRange(
+            capped: cappedTimeRange, incoming: outgoingTimeRange)
         }
         let topicActions = parsedActions.filter { $0.topicTitle == outgoingTitle }
         return SummaryTopic(
@@ -2983,10 +3042,11 @@ extension LiveSummaryFeed {
         stats.unknownCurrentRefs += 1
       }
     }
-    merged = selectingCurrentTopic(
-      in: merged,
-      preferredID: currentID ?? previousCurrentID ?? legacyCurrentID
-    )
+    // 当前话题指向本轮被硬上限挡下的话题时,改指它的续篇:新内容在续篇里。
+    let preferredID = (currentID ?? previousCurrentID ?? legacyCurrentID).map {
+      cappedRedirects[$0] ?? $0
+    }
+    merged = selectingCurrentTopic(in: merged, preferredID: preferredID)
     // coveredUntil 缺失/漂移的分级兜底(D2.2):blocks 里最大的 timeRange 上界 →
     // 本轮输入最大时刻。可推导字段不再一票否决整轮。
     let covered =
@@ -3003,6 +3063,70 @@ extension LiveSummaryFeed {
       referenceStatistics: stats,
       touchedIDs: touchedIDs
     )
+  }
+
+  /// 一个话题最多这么多条要点,装不下的一轮新要点整块落到它的续篇(`continuationTarget`)。
+  static let topicBulletCap = 20
+
+  /// 被挡话题的续篇:按「标题（续）」「标题（续 2）」…依次找第一个装得下本块新要点的既有续篇
+  /// (被挡的话题本身不算);都装不下就返回下一个序号的标题、id 为 nil,由调用方新建。
+  /// 英文标题用「 (cont.)」。
+  fileprivate static func continuationTarget(
+    for capped: SummaryTopic, adding count: Int, in topics: [SummaryTopic]
+  ) -> (id: UUID?, title: String) {
+    let base = continuationBaseTitle(capped.title)
+    let isCJK = base.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) }
+    var index = 1
+    while true {
+      let suffix =
+        isCJK
+        ? (index == 1 ? "（续）" : "（续 \(index)）")
+        : (index == 1 ? " (cont.)" : " (cont. \(index))")
+      let candidate = base + suffix
+      guard let existing = topics.first(where: { $0.title == candidate }) else {
+        return (nil, candidate)
+      }
+      if existing.id != capped.id, existing.bullets.count + count <= topicBulletCap {
+        return (existing.id, candidate)
+      }
+      index += 1
+    }
+  }
+
+  /// 新建续篇的时间段:模型给被挡话题写的块常带整段时间(从话题开头起),续篇起点取原话题终点,
+  /// 不与原话题重叠。认不出时间码时原样用模型给的。
+  fileprivate static func continuationTimeRange(capped: String, incoming: String) -> String {
+    let separators = CharacterSet(charactersIn: "–—-~至")
+    func parts(_ label: String) -> [String] {
+      label.components(separatedBy: separators)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty }
+    }
+    guard let cappedEnd = parts(capped).last,
+      let cappedUpper = timeRangeUpperBound(capped),
+      let incomingStart = parts(incoming).first,
+      let incomingEnd = parts(incoming).last,
+      let startSeconds = TranscriptAnchor(timecode: incomingStart).seconds,
+      startSeconds < cappedUpper
+    else { return incoming }
+    return "\(cappedEnd)–\(incomingEnd)"
+  }
+
+  /// 去掉续篇后缀,得到原话题标题;续篇满了再续时不叠成「（续）（续）」。
+  fileprivate static func continuationBaseTitle(_ title: String) -> String {
+    let patterns = [#"（续( \d+)?）$"#, #" \(cont\.( \d+)?\)$"#]
+    for pattern in patterns {
+      if let range = title.range(of: pattern, options: .regularExpression) {
+        return String(title[..<range.lowerBound])
+      }
+    }
+    return title
+  }
+
+  /// 孤字碎片:去掉标点、括号、引号、空白后只剩 ≤2 个实义字符(「我。」「（嗯。）」「“我。”」)。
+  /// 不能拿去重键的长度判断——去重键为了不并错事实,保留括号与引号。
+  fileprivate static func isFragmentBullet(_ text: String) -> Bool {
+    text.filter { $0.isLetter || $0.isNumber }.count <= 2
   }
 
   /// 保守的要点去重键:NFKC(全/半角归一)、Latin 折叠大小写、空白折叠、只去掉句尾标点。

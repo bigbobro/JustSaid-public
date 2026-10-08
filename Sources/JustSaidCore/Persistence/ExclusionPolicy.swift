@@ -130,6 +130,28 @@ public struct ExclusionPolicy: Equatable, Sendable {
     return (output.joined(separator: "\n"), originalLineIndices)
   }
 
+  /// 先删排除段，再套全局改名与逐句更正。
+  /// 逐句更正的键是「时间戳#原文行序」，删行后行序会前移，所以按原文行序把键重映射到输出行序；
+  /// 纪要与复制两个出口共用这一份，不然排除段之后的逐句更正会对不上行、悄悄丢掉。
+  public func filterTranscriptApplyingNames(
+    _ content: String,
+    names: [String: String],
+    overrides: [String: String]
+  ) -> String {
+    let filtered = filterTranscriptWithLineIndices(content)
+    var remapped: [String: String] = [:]
+    if !overrides.isEmpty {
+      let originalRows = TranscriptSpeakerNaming.rows(in: content)
+      for (index, originalIndex) in filtered.originalLineIndices.enumerated() {
+        guard let originalIndex, case .speech(let line) = originalRows[originalIndex],
+          let name = overrides[line.overrideKey]
+        else { continue }
+        remapped[TranscriptSpeakerNaming.overrideKey(timestamp: line.timestamp, index: index)] = name
+      }
+    }
+    return TranscriptSpeakerNaming.applyingNames(names, overrides: remapped, to: filtered.text)
+  }
+
   /// 章节视图只按可靠锚点删除；无锚点要点保守保留，整块时间完全命中时才删。
   public func filterTopics(_ topics: [SummaryTopic]) -> [SummaryTopic] {
     guard !normalizedRanges.isEmpty else { return topics }

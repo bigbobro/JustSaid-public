@@ -10,6 +10,7 @@ struct TodoDeadlinePicker: View {
   var focusRequested = false
   var focusRequest = 0
   var compact = false
+  var basis: TodoDeadlineBasis?
   @State private var isPresented = false
   @State private var hovering = false
   @FocusState private var focused: Bool
@@ -34,9 +35,18 @@ struct TodoDeadlinePicker: View {
     }
     .popover(isPresented: $isPresented, arrowEdge: .bottom) {
       TodoDeadlineCalendar(
-        due: $due, now: now, timeZoneIdentifier: timeZoneIdentifier, identifier: identifier)
+        due: $due, now: now, timeZoneIdentifier: timeZoneIdentifier, identifier: identifier,
+        basis: basis)
     }
   }
+}
+
+/// 会议候选的日期按会议当天推算；参照日与时区很少要改，放在日期弹层底部而不占表单主位置。
+struct TodoDeadlineBasis {
+  var referenceDay: String
+  var timeZoneIdentifier: String
+  var timeZones: [String]
+  var onSelectTimeZone: (String) -> Void
 }
 
 struct TodoDeadlineCalendar: View {
@@ -47,6 +57,7 @@ struct TodoDeadlineCalendar: View {
   var showsShortcuts = true
   var showsPending = true
   var dateRejection: ((TodoDay) -> String?)?
+  var basis: TodoDeadlineBasis?
   @State private var monthOffset = 0
   @State private var explicitDay = ""
   @State private var dateError: String?
@@ -174,6 +185,33 @@ struct TodoDeadlineCalendar: View {
         }
         .buttonStyle(.v1Quiet)
         .runtimeAccessibilityIdentifier("\(identifier).pending")
+      }
+      if let basis {
+        Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
+        HStack(spacing: Tokens.V1.Space.xs) {
+          Text("按会议日期 \(TodoText.monthDay(basis.referenceDay)) 推算 · \(basis.timeZoneIdentifier)")
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink2)
+            .fixedSize(horizontal: false, vertical: true)
+            .runtimeAccessibilityIdentifier("meeting.clean.basis")
+          Spacer(minLength: Tokens.V1.Space.xs)
+          Menu("改时区") {
+            ForEach(basis.timeZones, id: \.self) { zone in
+              Button {
+                basis.onSelectTimeZone(zone)
+              } label: {
+                if zone == basis.timeZoneIdentifier {
+                  Label(zone, systemImage: "checkmark")
+                } else {
+                  Text(zone)
+                }
+              }
+            }
+          }
+          .menuStyle(.borderlessButton).fixedSize()
+          .font(Tokens.V1.Text.meta.font)
+          .runtimeAccessibilityIdentifier("meeting.clean.timezone")
+        }
       }
     }
     .padding(Tokens.V1.Space.md)

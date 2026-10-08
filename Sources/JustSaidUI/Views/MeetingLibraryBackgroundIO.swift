@@ -98,6 +98,8 @@ private enum MeetingLibraryDiskSnapshot {
           minutesLLMModelName: record.metadata.latestMinutesLLMModelName,
           postMeetingFailureReason: record.metadata.postMeetingFailureReason,
           postMeetingFailureLogID: record.metadata.postMeetingFailureLogID,
+          inMeetingFailures: record.metadata.inMeetingFailures ?? [],
+          postMeetingFailureCause: record.metadata.postMeetingFailureCause,
           postMeetingRequestIDSuffix: (record.metadata.postMeetingSystemRequestID
             ?? record.metadata.postMeetingMicrophoneRequestID)
             .map { String($0.suffix(8)) },

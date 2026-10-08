@@ -189,6 +189,10 @@ public struct MeetingLibraryItem: Identifiable, Sendable {
   let postMeetingFailureReason: String?
   /// 失败对应的火山 logid(可提工单的凭据),随失败原因一起展示(08-13 可观测单 R1)。
   let postMeetingFailureLogID: String?
+  /// 会中出过的问题(散会时写盘),会议页据此留一行并指向诊断包导出。
+  let inMeetingFailures: [InMeetingFailureRecord]
+  /// 失败原因的闭合分类(B2),只配同一句 `postMeetingFailureReason` 用。
+  let postMeetingFailureCause: PostMeetingFailureCause?
   /// 最近一次精转任务 request_id 的后 8 位(system 优先,历史双单兜底取 mic)。
   /// nil = 盘上没有任务身份。
   let postMeetingRequestIDSuffix: String?
@@ -1345,11 +1349,16 @@ public final class MeetingLibraryModel: ObservableObject {
     }
   }
 
-  /// 认名这件事还剩多少活:没填名的人 + 待采纳的建议。归零就该消失,不再占工具行。
+  /// 认名这件事还剩几个人:没填名的人,并上有待采纳建议的人。归零就该消失,不再占工具行。
   /// 原来这个数只算建议,六个人一个没填也显示「认名」不带数字(Fable 评审指出)。
+  /// 按人去重:预填建议只出在未命名标签上,把两数相加会把有建议的人各算两次,
+  /// 三个没填名、各有一条建议的人曾显示「待认名 6」(B4)。
   func namingTodoCount(for item: MeetingLibraryItem) -> Int {
-    speakerRoster(for: item).count(where: \.isUnnamed)
-      + namingSuggestionRows(for: item).pendingPrefillCount
+    var labels = Set(speakerRoster(for: item).filter(\.isUnnamed).map(\.label))
+    for row in namingSuggestionRows(for: item) {
+      if case .prefill(let suggestion) = row { labels.insert(suggestion.label) }
+    }
+    return labels.count
   }
 
   func speakerName(_ label: String, for item: MeetingLibraryItem) -> String {
@@ -1428,6 +1437,11 @@ public final class MeetingLibraryModel: ObservableObject {
     if item.status == .failed {
       let reason = item.postMeetingFailureReason ?? "没有留下具体失败原因"
       let logID = item.postMeetingFailureLogID.map { "(logid \($0))" } ?? ""
+      // B2:有闭合原因时说人话,并指向失败行的「处理建议」;旧档原样展示。
+      if item.postMeetingFailureReason != nil, let cause = item.postMeetingFailureCause {
+        let message = PostMeetingFailureAdvice(cause: cause, reason: reason).message
+        return "精转失败：\(message)\(logID)。上方「处理建议」里有处理办法，处理好后点「重新精转」。"
+      }
       return "精转失败：\(reason)\(logID)。可在上方点「重新精转」。"
     }
     if item.status == .interrupted {

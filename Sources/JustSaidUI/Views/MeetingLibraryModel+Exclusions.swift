@@ -462,20 +462,10 @@ extension MeetingLibraryModel {
     guard let snapshot = artifactCache[item.id]?.transcript,
       let transcript = snapshot.transcript
     else { return nil }
-    let filtered = ExclusionPolicy(metadata: snapshot.metadata)
-      .filterTranscriptWithLineIndices(transcript)
-    let originalRows = TranscriptSpeakerNaming.rows(in: transcript)
-    var overrides: [String: String] = [:]
-    for (index, originalIndex) in filtered.originalLineIndices.enumerated() {
-      guard let originalIndex, case .speech(let line) = originalRows[originalIndex],
-        let name = snapshot.metadata.speakerOverrides?[line.overrideKey]
-      else { continue }
-      overrides[TranscriptSpeakerNaming.overrideKey(timestamp: line.timestamp, index: index)] = name
-    }
-    return TranscriptSpeakerNaming.applyingNames(
-      snapshot.metadata.speakerNames ?? [:],
-      overrides: overrides,
-      to: filtered.text
+    return ExclusionPolicy(metadata: snapshot.metadata).filterTranscriptApplyingNames(
+      transcript,
+      names: snapshot.metadata.speakerNames ?? [:],
+      overrides: snapshot.metadata.speakerOverrides ?? [:]
     )
   }
 
@@ -776,6 +766,16 @@ extension MeetingLibraryModel {
   func postMeetingFailureReason(for item: MeetingLibraryItem) -> String? {
     guard case .failed(let reason) = postMeetingStage(for: item) else { return nil }
     return reason
+  }
+
+  /// 失败行的处理建议(B2)。原因同样协调者优先、磁盘兜底;磁盘值只在它对应的就是
+  /// 眼前这句失败文字时才用,否则按历史失败展示,不拿别的失败的原因配这一句。
+  func postMeetingFailureAdvice(for item: MeetingLibraryItem) -> PostMeetingFailureAdvice? {
+    guard let reason = postMeetingFailureReason(for: item) else { return nil }
+    let cause =
+      postMeetingTasks.transcriptionFailureCause(for: item.paths.directory)
+      ?? (item.postMeetingFailureReason == reason ? item.postMeetingFailureCause : nil)
+    return PostMeetingFailureAdvice(cause: cause, reason: reason)
   }
 
   /// 「精」记号:进行中 → 失败 → 磁盘事实。失败优先于「盘上还有上一轮的转写」——

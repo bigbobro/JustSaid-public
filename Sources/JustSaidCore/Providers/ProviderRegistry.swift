@@ -63,9 +63,10 @@ public struct ProviderRegistry: Sendable {
         displayName: "DeepSeek",
         supportedRoles: [.liveSummaryLLM, .minutesLLM],
         defaultBaseURL: "https://api.deepseek.com/v1",
-        // 官方 API 模型 ID 是小写(2026-08-13 查 api-docs.deepseek.com 核实);
-        // 大写驼峰 DeepSeek-V4-Flash 是 HuggingFace 仓库名,照官方 API 发是错的模型名。
-        defaultModel: "deepseek-v4-flash",
+        // 官方 API 模型 ID 是小写;大写驼峰是 HuggingFace 仓库名,照官方 API 发是错的模型名。
+        // 2026-09 V4.1-Flash 上线后官方名改为 `deepseek-flash`;旧名 `deepseek-v4-flash` 仍被接受、
+        // 由同一模型服务,存量渠道配置不迁移(2026-10-08 核实官方公告)。
+        defaultModel: "deepseek-flash",
         requiresAPIKey: true,
         supportedReasoningLevels: Self.fullOpenAICompatibleLevels,
         highestVerifiedReasoningLevel: .medium,
@@ -106,6 +107,19 @@ public struct ProviderRegistry: Sendable {
         requiresAPIKey: true,
         supportedReasoningLevels: Self.fullOpenAICompatibleLevels,
         highestVerifiedReasoningLevel: .xhigh
+      ),
+      // 10-08:Anthropic Messages 原生协议(不走其 OpenAI 兼容层)。「关」在线上按 low 发:
+      // Opus 5.5、Sonnet 5.5 等关不掉思考,下拉如实标注。medium 是 Opus 5.5 的服务端默认,不是实测结论。
+      ProviderDescriptor(
+        id: AnthropicMessagesContract.providerID,
+        displayName: "Anthropic Claude",
+        supportedRoles: [.liveSummaryLLM, .minutesLLM],
+        defaultBaseURL: AnthropicMessagesContract.defaultBaseURL,
+        defaultModel: "claude-opus-5-5",
+        requiresAPIKey: true,
+        supportedReasoningLevels: [.low, .medium, .high, .xhigh, .max],
+        highestVerifiedReasoningLevel: .medium,
+        reasoningExecutionLevels: [.off: .low]
       ),
       // 10-01:Sign in with ChatGPT 的计划用量,只做文本总结与纪要。地址固定,不收 API Key;
       // 模型与推理档位来自当前账户的目录,不硬编码默认模型。

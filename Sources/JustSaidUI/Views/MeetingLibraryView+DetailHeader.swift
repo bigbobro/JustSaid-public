@@ -106,22 +106,11 @@ extension MeetingLibraryView {
         .background(Tokens.V1.Color.paper2, in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.sm))
         .runtimeAccessibilityIdentifier("meeting.processing")
       }
-      if let failureReason = model.postMeetingFailureReason(for: item) {
-        HStack(spacing: Tokens.V1.Space.xs) {
-          Image(systemName: "exclamationmark.triangle")
-          Text("会后处理未完成 · \(failureReason)")
-            .fixedSize(horizontal: false, vertical: true)
-          Spacer(minLength: Tokens.V1.Space.xs)
-          Button("重新精转…") { model.pendingReprocess = item }
-            .buttonStyle(.v1Outline)
-            .disabled(!model.canRetryPostMeeting(for: item) || model.postMeetingStage(for: item).isRunning)
-            .runtimeAccessibilityIdentifier("meeting.failure.retry")
-        }
-        .font(Tokens.V1.Text.body.font)
-        .foregroundStyle(Tokens.V1.Color.warn)
-        .padding(Tokens.V1.Space.sm)
-        .background(Tokens.V1.Color.warnSoft, in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.sm))
-        .runtimeAccessibilityIdentifier("library.failure-reason")
+      if let advice = model.postMeetingFailureAdvice(for: item) {
+        postMeetingFailureNotice(item, advice: advice)
+      }
+      if !item.inMeetingFailures.isEmpty {
+        inMeetingFailureNotice(item)
       }
       if let titleError = model.titleError {
         Text(titleError)
@@ -390,6 +379,71 @@ extension MeetingLibraryView {
     case .failed: return "失败"
     case .notStarted: return "未做"
     }
+  }
+
+  /// 会中出过的问题(2026-10-08):会中提示散会就没了,这里留一行中性提示,
+  /// 右端就是「导出本场诊断包」。见设计系统 README「提示」。
+  func inMeetingFailureNotice(_ item: MeetingLibraryItem) -> some View {
+    let parts = item.inMeetingFailures.map { record in
+      "\(record.title) ×\(record.count)" + (record.causeText.map { "（\($0)）" } ?? "")
+    }
+    return NoticeShell(
+      level: .hint, systemImage: "clock.arrow.circlepath",
+      text: "会中出过问题：" + parts.joined(separator: "；")
+    ) {
+      exportMeetingDiagnosticsMenu(item)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .runtimeAccessibilityIdentifier("library.in-meeting-failures.export")
+    }
+    .runtimeAccessibilityIdentifier("library.in-meeting-failures")
+  }
+
+  /// 会后处理失败(B2,2026-10-08):一行写原因,描边「重新精转…」,安静「处理建议」展开
+  /// 几步处理办法与原始失败文字(带 logid,可选中复制)。见设计系统 README「提示」。
+  func postMeetingFailureNotice(
+    _ item: MeetingLibraryItem, advice: PostMeetingFailureAdvice
+  ) -> some View {
+    let expanded = expandedFailureAdviceID == item.id
+    return VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+      HStack(spacing: Tokens.V1.Space.xs) {
+        Image(systemName: "exclamationmark.triangle")
+        Text("会后处理未完成 · \(advice.message)")
+          .fixedSize(horizontal: false, vertical: true)
+        Spacer(minLength: Tokens.V1.Space.xs)
+        Button("重新精转…") { model.pendingReprocess = item }
+          .buttonStyle(.v1Outline)
+          .disabled(!model.canRetryPostMeeting(for: item) || model.postMeetingStage(for: item).isRunning)
+          .runtimeAccessibilityIdentifier("meeting.failure.retry")
+        Button(expanded ? "收起建议" : "处理建议") {
+          expandedFailureAdviceID = expanded ? nil : item.id
+        }
+        .buttonStyle(.v1Quiet)
+        .runtimeAccessibilityIdentifier("meeting.failure.advice")
+      }
+      .foregroundStyle(Tokens.V1.Color.warn)
+      if expanded {
+        VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+          ForEach(advice.steps, id: \.self) {
+            Text($0).fixedSize(horizontal: false, vertical: true)
+          }
+          if advice.cause != nil {
+            Text("原始信息：\(advice.reason)")
+              .font(Tokens.V1.Text.meta.font)
+              .foregroundStyle(Tokens.V1.Color.ink3)
+              .textSelection(.enabled)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .foregroundStyle(Tokens.V1.Color.ink)
+        .runtimeAccessibilityIdentifier("meeting.failure.advice.steps")
+      }
+    }
+    .font(Tokens.V1.Text.body.font)
+    .padding(Tokens.V1.Space.sm)
+    .background(Tokens.V1.Color.warnSoft, in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.sm))
+    .runtimeAccessibilityIdentifier("library.failure-reason")
   }
 }
 
