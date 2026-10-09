@@ -22,7 +22,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "63f008122e5a64c125bb4e4d9f1a06cc598eb0344fa846ba3b19a3447adf274c"
+      "sha256": "b20ac5025b3bf3bd738e13be933a7dbfe135f00b5853326779acf4fd0e456371"
     },
     {
       "path": "LICENSE",
@@ -1174,7 +1174,7 @@
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "63f008122e5a64c125bb4e4d9f1a06cc598eb0344fa846ba3b19a3447adf274c"
+      "sha256": "b20ac5025b3bf3bd738e13be933a7dbfe135f00b5853326779acf4fd0e456371"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -1262,6 +1262,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "b323053aaf8ca8fba83b186fe90548461a5f2963",
+  "source_sha": "db0f19dda5aa89095a3c01d7f08fec34075eb3f7",
   "source_status": "clean"
 }
