@@ -23,6 +23,9 @@ public struct CloudUsageRecord: Codable, Equatable, Identifiable, Sendable {
   /// role 照记 `liveSummaryLLM`,靠本字段与快总结本务区分。
   public static let markDistillPurpose = "markDistill"
 
+  /// `purpose` 的会中问答取值(10-09 实验性):role 照记 `liveSummaryLLM`,`lane` 记 `qa`。
+  public static let meetingQAPurpose = "meetingQA"
+
   public let id: UUID
   public let role: ProviderRole
   public let provider: String
@@ -45,7 +48,7 @@ public struct CloudUsageRecord: Codable, Equatable, Identifiable, Sendable {
   /// 整份 meeting.json 失败(实测钉在 MeetingStoreVerification;本仓库 MeetingStatus/
   /// PartialArtifactFailure/PostMeetingStageEvent/outcome 四处同判例)。
   public let purpose: String?
-  /// 会中总结的快/慢细分(10-01 三路配置):`fast` / `slow`,其余 nil。
+  /// 会中总结的快/慢细分(10-01 三路配置):`fast` / `slow`;会中问答记 `qa`(10-09);其余 nil。
   /// 同 purpose,固定字符串不做枚举,旧版本解码忽略此键。
   public let lane: String?
   /// 计费来源(10-01):nil = 按量 API(既有档案语义);`chatgptPlan` = ChatGPT 计划用量。

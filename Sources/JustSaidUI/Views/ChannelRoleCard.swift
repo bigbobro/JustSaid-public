@@ -60,9 +60,13 @@ public struct ChannelRoleCard<Extra: View>: View {
     lane.map { settingsStore.selection(for: $0) } ?? settingsStore.selection(for: role)
   }
 
-  /// 无障碍标识里的身份:快路沿用旧 `liveSummaryLLM`,慢路单独一个,其余照旧按角色。
+  /// 无障碍标识里的身份:快路沿用旧 `liveSummaryLLM`,慢路、会中问答各单独一个,其余照旧按角色。
   private var identifierKey: String {
-    lane == .slowSummary ? "liveSummarySlowLLM" : role.rawValue
+    switch lane {
+    case .slowSummary: return "liveSummarySlowLLM"
+    case .meetingQA: return "meetingQALLM"
+    default: return role.rawValue
+    }
   }
 
   private var title: String {
@@ -145,9 +149,14 @@ public struct ChannelRoleCard<Extra: View>: View {
       return "云端按量使用，重新整理整场转写。"
     case .liveSummaryLLM:
       let source = isChatGPTChannel ? "使用 ChatGPT 计划用量" : "云端按量使用"
-      return lane == .slowSummary
-        ? "\(source)，约每 150 秒整理话题与待办。"
-        : "\(source)，约每 40 秒概括最近发言；标记与认名沿用此项。"
+      switch lane {
+      case .slowSummary:
+        return "\(source)，约每 150 秒整理话题与待办。"
+      case .meetingQA:
+        return "\(source)，会中提问时才调用；没单独选过时跟随会中慢总结。"
+      default:
+        return "\(source)，约每 40 秒概括最近发言；标记与认名沿用此项。"
+      }
     case .minutesLLM:
       return (isChatGPTChannel ? "使用 ChatGPT 计划用量" : "云端按量使用") + "，与会中两路分别选择。"
     }
@@ -503,6 +512,9 @@ public struct ChannelRoleCard<Extra: View>: View {
     case .liveSummaryLLM:
       // 高档思考可能拖过会中总结的首帧墙(等不到首帧 45 秒即放弃本轮)——
       // 不拦用户选(快的渠道如 DeepSeek 用得上),但选到「中」及以上要照实提示。
+      if effectiveReasoning >= .medium, lane == .meetingQA {
+        return combined("中高推理档会让回答变慢：等不到首帧 45 秒即放弃这一问。")
+      }
       if effectiveReasoning >= .medium {
         return combined(
           "中高推理档会让每轮总结变慢：会中总结等不到首帧 45 秒即放弃本轮，"

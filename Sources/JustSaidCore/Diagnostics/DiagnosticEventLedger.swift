@@ -751,6 +751,15 @@ public enum DiagnosticSanitizer {
       case .reasoningOnlyResponse: return "reasoningOnly"
       }
     }
+    // 开会失败原先一律记 unknown,本场诊断包里看不出是麦克风、系统声还是写盘(2026-10-08)。
+    if let capture = error as? AudioCaptureError {
+      switch capture {
+      case .microphonePermissionDenied, .microphonePermissionRestricted: return "permission"
+      case .microphoneUnavailable: return "microphone"
+      case .systemAudioProcessUnavailable, .systemAudioTapFailed: return "systemAudio"
+      case .audioWriteFailed: return "write"
+      }
+    }
     if error is CancellationError { return "cancelled" }
     if error is ChatGPTPlanUnavailable { return "notSent" }
     if let service = error as? ChatGPTPlanServiceError {

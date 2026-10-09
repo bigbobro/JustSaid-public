@@ -5,12 +5,15 @@ import Foundation
 public struct LLMFailureContext: Hashable, Sendable {
   public enum Feature: String, Sendable {
     case connectionTest, liveSummary, minutes, englishMinutes
+    /// 会中问答(10-09 实验性)。
+    case meetingQA
     public var title: String {
       switch self {
       case .connectionTest: return "连接测试未通过"
       case .liveSummary: return "会中总结未更新"
       case .minutes: return "纪要未生成"
       case .englishMinutes: return "英文版纪要未生成"
+      case .meetingQA: return "会中问答没有答完"
       }
     }
   }

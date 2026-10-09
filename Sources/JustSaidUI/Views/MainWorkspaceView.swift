@@ -519,7 +519,12 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
           transcriptSegments: displaySegments,
           transcriptExcludedRanges: exclusionRanges,
           onMarkChatFrom: canWriteExclusions ? { markChatExcluded(from: $0) } : nil,
-          onRemoveExclusion: canWriteExclusions ? { removeExclusion(id: $0) } : nil
+          onRemoveExclusion: canWriteExclusions ? { removeExclusion(id: $0) } : nil,
+          meetingQA: MeetingQAHost(
+            settings: providerSettings,
+            meetingDirectory: recordingSession.currentMeetingDirectory,
+            startedAt: recordingSession.startedAt,
+            onOpenMeeting: { appCoordinator.openLibrary(focus: $0) })
         )
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)

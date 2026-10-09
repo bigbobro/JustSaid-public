@@ -34,6 +34,8 @@ public enum LLMLane: String, CaseIterable, Hashable, Identifiable, Sendable {
   case fastSummary
   case slowSummary
   case minutes
+  /// 会中问答(10-09 实验性):wire 角色仍是 `liveSummaryLLM`;未单独保存时跟随慢路。
+  case meetingQA
 
   public var id: String { rawValue }
 
@@ -50,6 +52,8 @@ public enum LLMLane: String, CaseIterable, Hashable, Identifiable, Sendable {
       return "会中慢总结"
     case .minutes:
       return "会后纪要"
+    case .meetingQA:
+      return "会中问答"
     }
   }
 
@@ -62,6 +66,8 @@ public enum LLMLane: String, CaseIterable, Hashable, Identifiable, Sendable {
       return "slow"
     case .minutes:
       return nil
+    case .meetingQA:
+      return "qa"
     }
   }
 
@@ -87,6 +93,7 @@ public enum ProviderSelectionSlot: String, CaseIterable, Hashable, Sendable {
   case slowSummary
   case batchASR
   case minutes
+  case meetingQA
 
   public init(role: ProviderRole) {
     switch role {
@@ -109,6 +116,8 @@ public enum ProviderSelectionSlot: String, CaseIterable, Hashable, Sendable {
       self = .slowSummary
     case .minutes:
       self = .minutes
+    case .meetingQA:
+      self = .meetingQA
     }
   }
 
@@ -116,7 +125,7 @@ public enum ProviderSelectionSlot: String, CaseIterable, Hashable, Sendable {
     switch self {
     case .liveTranscriber:
       return .liveTranscriber
-    case .fastSummary, .slowSummary:
+    case .fastSummary, .slowSummary, .meetingQA:
       return .liveSummaryLLM
     case .batchASR:
       return .batchASR
@@ -133,6 +142,8 @@ public enum ProviderSelectionSlot: String, CaseIterable, Hashable, Sendable {
       return .slowSummary
     case .minutes:
       return .minutes
+    case .meetingQA:
+      return .meetingQA
     case .liveTranscriber, .batchASR:
       return nil
     }
@@ -984,6 +995,10 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
   /// `roleSelections`**:那里按角色取第一条,同角色两条会让旧版本与 `selection(for:)` 取错。
   /// 旧版本忽略此键,把快路当作原会中配置;旧版本保存会丢掉它,慢路回到跟随快路。
   public var slowSummarySelection: RoleChannelSelection?
+  /// 会中问答的独立选择(10-09 实验性)。nil = 跟随慢路的有效选择;只在用户显式改这一路时写入,
+  /// 不物化。不进 `selectionsBySlot`:它是可整块撤回的实验项,不该因为它挡住删渠道、改渠道,
+  /// 失效时由 `ProviderSettingsStore` 清回 nil(回到跟随慢路)。旧版本忽略此键。
+  public var meetingQASelection: RoleChannelSelection?
   /// 旧格式解码保留(迁移输入)。非 nil 时本值是"旧表示":`bindings` 原样返回它,
   /// 编码也只写 `bindings` 键——验证夹具借此继续构造旧格式数据。
   public var legacyBindings: [RoleProviderBinding]?
@@ -994,13 +1009,15 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     channels: [ProviderChannel],
     roleSelections: [RoleChannelSelection],
     storage: StorageConfiguration,
-    slowSummarySelection: RoleChannelSelection? = nil
+    slowSummarySelection: RoleChannelSelection? = nil,
+    meetingQASelection: RoleChannelSelection? = nil
   ) {
     self.version = version
     self.channels = channels
     self.roleSelections = roleSelections
     self.storage = storage
     self.slowSummarySelection = slowSummarySelection
+    self.meetingQASelection = meetingQASelection
     self.legacyBindings = nil
   }
 
@@ -1011,6 +1028,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     self.roleSelections = []
     self.storage = .default
     self.slowSummarySelection = nil
+    self.meetingQASelection = nil
     self.legacyBindings = bindings
   }
 
@@ -1062,13 +1080,15 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
       return slowSummarySelection ?? selection(for: .liveSummaryLLM)
     case .minutes:
       return selection(for: .minutesLLM)
+    case .meetingQA:
+      return meetingQASelection ?? selection(for: .slowSummary)
     }
   }
 
   /// 每一处有效选择(含跟随快路的慢路),按界面顺序。引用完整性检查一律经由它,
-  /// 不得只扫 `roleSelections` 漏掉慢路。
+  /// 不得只扫 `roleSelections` 漏掉慢路。会中问答不在内(见 `meetingQASelection`)。
   public var selectionsBySlot: [(slot: ProviderSelectionSlot, selection: RoleChannelSelection)] {
-    ProviderSelectionSlot.allCases.compactMap { slot in
+    ProviderSelectionSlot.allCases.filter { $0 != .meetingQA }.compactMap { slot in
       let selection = slot.lane.map { self.selection(for: $0) } ?? self.selection(for: slot.role)
       return selection.map { (slot, $0) }
     }
@@ -1084,6 +1104,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     case roleSelections
     case storage
     case slowSummarySelection
+    case meetingQASelection
     case bindings
   }
 
@@ -1100,6 +1121,8 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
         try container.decodeIfPresent(StorageConfiguration.self, forKey: .storage) ?? .default
       slowSummarySelection = try container.decodeIfPresent(
         RoleChannelSelection.self, forKey: .slowSummarySelection)
+      meetingQASelection = try container.decodeIfPresent(
+        RoleChannelSelection.self, forKey: .meetingQASelection)
       legacyBindings = nil
     } else if let legacy = try container.decodeIfPresent(
       [RoleProviderBinding].self,
@@ -1110,6 +1133,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
       roleSelections = []
       storage = .default
       slowSummarySelection = nil
+      meetingQASelection = nil
       legacyBindings = legacy
     } else {
       throw DecodingError.dataCorruptedError(
@@ -1132,5 +1156,6 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     try container.encode(roleSelections, forKey: .roleSelections)
     try container.encode(storage, forKey: .storage)
     try container.encodeIfPresent(slowSummarySelection, forKey: .slowSummarySelection)
+    try container.encodeIfPresent(meetingQASelection, forKey: .meetingQASelection)
   }
 }

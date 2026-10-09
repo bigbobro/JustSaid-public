@@ -352,6 +352,12 @@ private struct MeetingSessionCommands: Commands {
       .keyboardShortcut("k", modifiers: .command)
       .disabled(!isSessionActive)
 
+      // 会中问答(实验性):开关关着时这一项不出现。
+      MeetingQAMenuItem(isSessionActive: isSessionActive) {
+        ensureMainWindow()
+        appCoordinator.selectCockpit()
+      }
+
     }
   }
 

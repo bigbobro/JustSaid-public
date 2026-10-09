@@ -123,6 +123,8 @@ public struct ProviderSettingsView: View {
   private let recoveryRequest: Binding<RecoverySettingsRequest?>?
   @State private var recoveryDestination: RecoverySettingsDestination?
   @State private var channelEditorRequest: ChannelEditorRequest?
+  /// 会中问答(实验性):开关开着时才多一张卡。
+  @AppStorage(MeetingQASettings.defaultsKey) private var meetingQAEnabled = false
 
   /// - Parameter secretDigest: 「这把 key 存了吗、末四位多少」的来源。
   ///   缺省是真读 Keychain;验证程序必须注入 `InMemorySecretDigest`,
@@ -262,6 +264,16 @@ public struct ProviderSettingsView: View {
             )
           }
           .id(LLMLane.minutes)
+          if meetingQAEnabled {
+            VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
+              recoveryContextNotice(for: .meetingQA)
+              ChannelRoleCard(
+                lane: .meetingQA, registry: registry, settingsStore: settingsStore,
+                secretDigest: secretDigest
+              )
+            }
+            .id(LLMLane.meetingQA)
+          }
         }
       }
       .onChange(of: recoveryDestination) { _, destination in

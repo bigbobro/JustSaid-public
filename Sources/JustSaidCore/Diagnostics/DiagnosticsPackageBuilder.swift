@@ -528,6 +528,15 @@ public enum DiagnosticsSettingsSnapshot {
         + " 供应商=\(slowProvider.map { provider($0, store: store) } ?? "未配置")"
         + " 模型指纹=\(fingerprint(slow?.model))"
         + " 来源=\(store.configuration.slowSummarySelection == nil ? "跟随快路" : "单独保存")")
+    // 会中问答(实验性):未单独保存时跟随慢路。
+    let qa = store.configuration.selection(for: LLMLane.meetingQA)
+    let qaProvider = qa.flatMap { store.configuration.channel(id: $0.channelID)?.providerID }
+    lines.append(
+      "- \(LLMLane.meetingQA.displayName): 渠道指纹=\(fingerprint(qa?.channelID))"
+        + " 供应商=\(qaProvider.map { provider($0, store: store) } ?? "未配置")"
+        + " 模型指纹=\(fingerprint(qa?.model))"
+        + " 来源=\(store.configuration.meetingQASelection == nil ? "跟随慢路" : "单独保存")"
+        + " 开关=\(MeetingQASettings.isEnabled(in: defaults) ? "开" : "关")")
 
     let storage = store.configuration.storage
     lines.append(

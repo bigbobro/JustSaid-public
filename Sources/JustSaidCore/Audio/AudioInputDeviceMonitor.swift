@@ -299,7 +299,7 @@ public final class AudioInputDeviceMonitor: ObservableObject {
     }
   }
 
-  private nonisolated static func inputChannelCount(deviceID: AudioDeviceID) -> Int? {
+  nonisolated static func inputChannelCount(deviceID: AudioDeviceID) -> Int? {
     var address = AudioObjectPropertyAddress(
       mSelector: kAudioDevicePropertyStreamConfiguration,
       mScope: kAudioDevicePropertyScopeInput,

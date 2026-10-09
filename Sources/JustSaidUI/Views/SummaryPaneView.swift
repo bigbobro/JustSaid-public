@@ -24,6 +24,9 @@ struct SummaryPaneView<Feed: SummaryFeed>: View {
   var transcriptExcludedRanges: [ExcludedRange] = []
   var onMarkChatFrom: ((TimeInterval) -> Void)? = nil
   var onRemoveExclusion: ((UUID) -> Void)? = nil
+  /// 会中问答(10-09 实验性):nil 或开关关着时右栏与原来一样。
+  var meetingQA: MeetingQAHost? = nil
+  @AppStorage(MeetingQASettings.defaultsKey) private var meetingQAEnabled = false
 
   var body: some View {
     LiveTranscriptPresentation(
@@ -38,9 +41,29 @@ struct SummaryPaneView<Feed: SummaryFeed>: View {
     )
   }
 
+  /// 会中问答开着时右栏顶部多一行「记录 / 问答」页签;关着时原样。
+  @ViewBuilder
+  private var sidebar: some View {
+    if meetingQAEnabled, isSessionLive, let host = meetingQA {
+      MeetingQASidebar(
+        host: host,
+        segments: transcriptSegments,
+        topics: feed.topics,
+        actionItemCount: feed.actionItems.count,
+        onJumpToTranscript: onJumpToTranscript
+      ) { recordsSidebar }
+      .frame(width: Tokens.Layout.dashboardSidebarWidth)
+      .background(Tokens.Color.bg)
+    } else {
+      recordsSidebar
+        .frame(width: Tokens.Layout.dashboardSidebarWidth)
+        .background(Tokens.Color.bg)
+    }
+  }
+
   /// 右栏(定宽 332):替你记 + 补充记录两块吃满舞台以下的高度。
   /// 「当前正在聊」08-19 升格成整宽舞台后从这里撤走,右栏不再三分高度。
-  private var sidebar: some View {
+  private var recordsSidebar: some View {
     VStack(spacing: Tokens.Spacing.sm) {
       ActionItemsPaneView(
         items: feed.actionItems,
@@ -57,8 +80,6 @@ struct SummaryPaneView<Feed: SummaryFeed>: View {
       .runtimeAccessibilityIdentifier("dashboard.notes")
     }
     .padding(Tokens.Spacing.sm)
-    .frame(width: Tokens.Layout.dashboardSidebarWidth)
-    .background(Tokens.Color.bg)
   }
 
   @ViewBuilder

@@ -1304,7 +1304,8 @@ public final class MicrophoneCapture: NSObject, MicrophoneAudioCapturing,
       let device = AVCaptureDevice(uniqueID: captureID.rawValue), device.isConnected,
       device.hasMediaType(.audio), device.uniqueID == captureID.rawValue
     else { throw AudioCaptureError.microphoneUnavailable("所选麦克风已变化或设备身份无法核对") }
-    let format = AVAudioFormat(cmAudioFormatDescription: device.activeFormat.formatDescription)
+    let format = try usableInputFormat(
+      reported: device.activeFormat.formatDescription, deviceID: id)
     return ResolvedInput(
       target: target, device: device, format: format,
       preferredChannels: PCMStereoDownmixer.preferredChannels(
@@ -1314,6 +1315,78 @@ public final class MicrophoneCapture: NSObject, MicrophoneAudioCapturing,
         inputChannelCount: format.channelCount
       )
     )
+  }
+
+  /// 微信通话占着内置麦时(2026-10-08 实测),`activeFormat` 报出的格式不可用
+  /// (采样率/声道为 0 或非 PCM),而 HAL 那边设备照常:连点 4 次开会全部卡在
+  /// 「没有可用的麦克风输入格式」,通话一挂就好。缺的那一项向 HAL 要,
+  /// 再按交错 Float32 PCM 重建;两边都拿不到才失败,并把读到的值写进错误,
+  /// 下次不必再猜。
+  private func usableInputFormat(reported: CMFormatDescription, deviceID: AudioDeviceID) throws
+    -> AVAudioFormat
+  {
+    // 2026-10-09 实测:格式整个为空时 AVAudioFormat.streamDescription 是 NULL,
+    // 直接解引用会崩(EXC_BAD_ACCESS 0x8)。ASBD 只经可空的 CoreMedia 接口读。
+    let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(reported)?.pointee
+    let reportedRate = asbd?.mSampleRate ?? 0
+    let reportedChannels = Int(asbd?.mChannelsPerFrame ?? 0)
+    let reportedIsPCM = asbd?.mFormatID == kAudioFormatLinearPCM
+    if reportedRate > 0, reportedChannels > 0, reportedIsPCM {
+      // ASBD 正常也不能直接信 AVAudioFormat:>2 声道而描述里没带声道布局时,
+      // 它会构造出采样率/声道为 0 的空格式,后面同样报「没有可用的麦克风输入格式」。
+      let converted = AVAudioFormat(cmAudioFormatDescription: reported)
+      if converted.sampleRate > 0, converted.channelCount > 0 { return converted }
+    }
+    let halRate = Self.nominalSampleRate(deviceID: deviceID)
+    let halChannels = AudioInputDeviceMonitor.inputChannelCount(deviceID: deviceID)
+    let sampleRate = reportedRate > 0 ? reportedRate : (halRate ?? 0)
+    let channels = reportedChannels > 0 ? reportedChannels : (halChannels ?? 0)
+    let reportedText: String =
+      asbd.map { "\($0.mSampleRate) Hz / \($0.mChannelsPerFrame) 声道 / 编码 \($0.mFormatID)" }
+      ?? "无格式"
+    let halRateText: String = halRate.map { "\($0)" } ?? "未知"
+    let halChannelsText: String = halChannels.map { "\($0)" } ?? "未知"
+    let evidence = "设备报告 \(reportedText)，HAL \(halRateText) Hz / \(halChannelsText) 声道"
+    guard sampleRate > 0, channels > 0,
+      let rebuilt = Self.interleavedFloat32Format(sampleRate: sampleRate, channels: channels)
+    else {
+      throw AudioCaptureError.microphoneUnavailable("没有可用的麦克风输入格式（\(evidence)）")
+    }
+    logger.warning(
+      "麦克风 activeFormat 不可用，按 \(sampleRate, privacy: .public) Hz / \(channels, privacy: .public) 声道重建：\(evidence, privacy: .public)"
+    )
+    return rebuilt
+  }
+
+  private static func interleavedFloat32Format(sampleRate: Double, channels: Int)
+    -> AVAudioFormat?
+  {
+    guard channels > 2 else {
+      return AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+        channels: AVAudioChannelCount(channels), interleaved: true)
+    }
+    // >2 声道必须带布局,否则后面 AVAudioFormat(settings:) 会返回 nil。
+    guard
+      let layout = AVAudioChannelLayout(
+        layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | AudioChannelLayoutTag(channels))
+    else { return nil }
+    return AVAudioFormat(
+      commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, interleaved: true,
+      channelLayout: layout)
+  }
+
+  private static func nominalSampleRate(deviceID: AudioDeviceID) -> Double? {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyNominalSampleRate,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var rate: Float64 = 0
+    var size = UInt32(MemoryLayout<Float64>.size)
+    guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate) == noErr, rate > 0
+    else { return nil }
+    return rate
   }
 
   private func startVPIOOnCaptureQueue(

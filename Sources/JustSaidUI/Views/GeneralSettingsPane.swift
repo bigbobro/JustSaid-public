@@ -37,6 +37,7 @@ public struct GeneralSettingsPane: View {
           MeetingDetectionSettingsCard(preferences: meetingDetection)
         }
         MicrophoneAECSettingsCard()
+        MeetingQASettingsCard()
         AudioRetentionSettingsCard()
         if let appUpdates {
           AppUpdateSettingsCard(model: appUpdates)

@@ -130,12 +130,14 @@ public final class ProviderSettingsStore: ObservableObject {
   @Published public private(set) var configuration: ProviderConfiguration {
     didSet {
       // 档位偏好变更不清记忆；渠道内容或任一选择(含慢路)的渠道/模型变化使旧请求的回写失效。
-      let oldModels = oldValue.selectionsBySlot.map {
-        ReasoningCacheKey(channelID: $0.selection.channelID, model: $0.selection.model)
-      }
-      let newModels = configuration.selectionsBySlot.map {
-        ReasoningCacheKey(channelID: $0.selection.channelID, model: $0.selection.model)
-      }
+      let oldModels = (oldValue.selectionsBySlot.map(\.selection)
+        + [oldValue.meetingQASelection].compactMap { $0 }).map {
+          ReasoningCacheKey(channelID: $0.channelID, model: $0.model)
+        }
+      let newModels = (configuration.selectionsBySlot.map(\.selection)
+        + [configuration.meetingQASelection].compactMap { $0 }).map {
+          ReasoningCacheKey(channelID: $0.channelID, model: $0.model)
+        }
       if oldValue.channels != configuration.channels || oldModels != newModels {
         reasoningFallbackGeneration = UUID()
         reasoningFallbackKnowledge.removeAll()
@@ -365,9 +367,9 @@ public final class ProviderSettingsStore: ObservableObject {
       return
     }
     allowPersist = true
-    // 档位偏好取本处选择原样存的值;慢路跟随快路时取到的就是快路的值。
+    // 档位偏好取本处选择原样存的值;慢路跟随快路时取到的就是快路的值(问答跟随慢路同理)。
     let previous: (effort: ReasoningEffortLevel?, thinking: Bool)
-    if slot == .slowSummary, let current = currentSelection(slot) {
+    if slot == .slowSummary || slot == .meetingQA, let current = currentSelection(slot) {
       previous = (current.reasoningEffort, current.thinkingEnabled)
     } else {
       let binding = binding(for: role)
@@ -635,7 +637,8 @@ public final class ProviderSettingsStore: ObservableObject {
         == (binding.providerID == ChatGPTPlanContract.providerID),
       !configuration.selectionsBySlot.contains(where: {
         $0.selection.channelID == current.id && $0.slot != ProviderSelectionSlot(role: binding.role)
-      })
+      }),
+      configuration.meetingQASelection?.channelID != current.id
     {
       // 只被本处选择引用:就地改连接信息,渠道 ID 不变。会中总结的旧入口代表快路,
       // 慢路(含跟随快路的隐式慢路)也算另一处引用——就地改会让慢路的地址悄悄跟着变。
@@ -771,15 +774,34 @@ public final class ProviderSettingsStore: ObservableObject {
     slot.lane.map { configuration.selection(for: $0) } ?? configuration.selection(for: slot.role)
   }
 
-  /// 按处写回选择:慢路写独立键,其余写 `roleSelections`(经 `upsert` 物化慢路)。
+  /// 按处写回选择:慢路、会中问答各写独立键,其余写 `roleSelections`(经 `upsert` 物化慢路)。
   private func storeSelection(_ selection: RoleChannelSelection, in slot: ProviderSelectionSlot) {
-    guard slot == .slowSummary else {
+    switch slot {
+    case .slowSummary:
+      var slow = selection
+      slow.role = .liveSummaryLLM
+      configuration.slowSummarySelection = slow
+    case .meetingQA:
+      var qa = selection
+      qa.role = .liveSummaryLLM
+      configuration.meetingQASelection = qa
+    case .liveTranscriber, .fastSummary, .batchASR, .minutes:
       upsert(selection)
+    }
+  }
+
+  /// 会中问答的单独选择不参与引用完整性检查;它引用的渠道被删、不再支持会中总结,
+  /// 或声明的模型里没有它用的模型时,清回 nil,回到跟随慢路。
+  private func dropInvalidMeetingQASelection() {
+    guard let qa = configuration.meetingQASelection else { return }
+    guard let channel = configuration.channel(id: qa.channelID),
+      channel.supportedRoles.contains(.liveSummaryLLM),
+      channel.availableModels.isEmpty
+        || Self.declaredModel(matching: qa.model, in: channel.availableModels) != nil
+    else {
+      configuration.meetingQASelection = nil
       return
     }
-    var slow = selection
-    slow.role = .liveSummaryLLM
-    configuration.slowSummarySelection = slow
   }
 
   // MARK: - 渠道 CRUD 与角色选择(新信息架构的核心 API)
@@ -891,6 +913,7 @@ public final class ProviderSettingsStore: ObservableObject {
     sanitized.name = trimmedName
     sanitized.baseURL = trimmedURL
     configuration.channels[index] = sanitized
+    dropInvalidMeetingQASelection()
     persist()
   }
 
@@ -916,6 +939,7 @@ public final class ProviderSettingsStore: ObservableObject {
       // 认证检查跨 actor 返回后,用户可能已经把某一路切到此渠道。
       try checkReferences()
       configuration.channels.removeAll { $0.id == id }
+      dropInvalidMeetingQASelection()
       persist()
     }
     if channel.providerID == ChatGPTPlanContract.providerID {
