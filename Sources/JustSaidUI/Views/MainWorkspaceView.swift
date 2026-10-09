@@ -394,6 +394,8 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       // 主窗在,就把自己的 requestEndMeeting(含闲聊未封口兜底)注册给菜单栏路径。
       appCoordinator.registerRequestStartMeetingHandler { startMeeting() }
       appCoordinator.registerRequestEndMeetingHandler { requestEndMeeting() }
+      // 会议提醒胶囊「废弃」:弹与工具栏「废弃」同一个确认。
+      appCoordinator.registerRequestDiscardMeetingHandler { isConfirmingDiscard = true }
       // 菜单栏「标记重点」(G9/F-C7)同模式:主窗在,就把右栏同一入口
       // beginMark 注册出去;主窗关闭期间的菜单点击由 AppCoordinator 挂起,
       // 此处注册后异步补发(补发在 onAppear 整段跑完之后,状态已装载)。
@@ -440,6 +442,7 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       // 挂起/直收路径(有无未封口闲聊分流,见 installMenuBarIfNeeded)。
       appCoordinator.registerRequestStartMeetingHandler(nil)
       appCoordinator.registerRequestEndMeetingHandler(nil)
+      appCoordinator.registerRequestDiscardMeetingHandler(nil)
       appCoordinator.registerRequestMarkHandler(nil)
       appCoordinator.registerRequestToggleChatHandler(nil)
       appCoordinator.registerLibraryCommandHandlers(importRecording: nil, rescan: nil)

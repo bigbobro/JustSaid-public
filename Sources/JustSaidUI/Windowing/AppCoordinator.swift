@@ -128,6 +128,8 @@ public final class AppCoordinator: ObservableObject {
   /// 没有才退回直接收尾。
   public private(set) var requestStartMeetingHandler: (() -> Void)?
   public private(set) var requestEndMeetingHandler: (() -> Void)?
+  /// 会议提醒胶囊「废弃」路由到的主窗废弃确认(「废弃这场会议？」);nil = 主窗不在。
+  public private(set) var requestDiscardMeetingHandler: (() -> Void)?
   /// 菜单栏「标记重点」路由到的入口(08-15 G9/F-C7):与右栏补充记录区同一颗
   /// `NotesController.beginMark`,由 MainWorkspaceView onAppear 注册;nil = 主窗不在。
   public private(set) var requestMarkHandler: (() -> Void)?
@@ -147,6 +149,7 @@ public final class AppCoordinator: ObservableObject {
   public var hasPendingLibraryCommand: Bool { pendingLibraryCommand != nil }
   private var pendingStartMeetingRequest = false
   private var pendingEndMeetingRequest = false
+  private var pendingDiscardMeetingRequest = false
   private var pendingMarkRequest = false
   private var pendingToggleChatRequest = false
   /// 热键/菜单栏标记成功后的不抢焦点回执:悬浮窗在场闪它,否则闪菜单栏图标。
@@ -255,7 +258,8 @@ public final class AppCoordinator: ObservableObject {
       preferences: meetingDetectionPreferences,
       actions: .init(
         start: { [weak self] info in await self?.startRecordingFromPrompt(info) },
-        end: { [weak self] in self?.requestEndMeeting() }
+        end: { [weak self] in self?.requestEndMeeting() },
+        discard: { [weak self] in self?.requestDiscardMeeting() }
       ),
       scopeFallbackDuration: scopeFallbackDuration
     )
@@ -357,6 +361,12 @@ public final class AppCoordinator: ObservableObject {
     flushPendingMenuRequests()
   }
 
+  /// 主窗出现时注册自己的废弃确认,消失时注销(传 nil)。
+  public func registerRequestDiscardMeetingHandler(_ handler: (() -> Void)?) {
+    requestDiscardMeetingHandler = handler
+    flushPendingMenuRequests()
+  }
+
   /// 主窗出现时注册「标记重点」入口(NotesController.beginMark),消失时注销。
   public func registerRequestMarkHandler(_ handler: (() -> Void)?) {
     requestMarkHandler = handler
@@ -371,6 +381,20 @@ public final class AppCoordinator: ObservableObject {
 
   /// App 菜单与菜单栏共用原有结束确认与闲聊前置门。
   public func requestEndMeeting() { endMeetingFromMenus?() }
+
+  /// 会议提醒胶囊的「废弃」:唤起主窗弹既有的废弃确认,不在后台直接删。
+  /// 删的是真录音、无法恢复,胶囊上「废弃」紧挨「结束记录」,误点必须还有一道确认。
+  /// 主窗关着就挂起,主窗出现注册后补发(与「结束会议」同一模式)。
+  public func requestDiscardMeeting() {
+    guard recordingSession?.phase == .recording else { return }
+    if let requestDiscardMeetingHandler {
+      activateMainWindow()
+      requestDiscardMeetingHandler()
+      return
+    }
+    pendingDiscardMeetingRequest = true
+    bringUpMainWindow()
+  }
 
   public func requestImportRecording() { requestLibraryCommand(.importRecording) }
   public func requestRescanRecordings() { requestLibraryCommand(.rescan) }
@@ -490,6 +514,7 @@ public final class AppCoordinator: ObservableObject {
     }
     guard recordingSession?.phase == .recording else {
       pendingEndMeetingRequest = false
+      pendingDiscardMeetingRequest = false
       pendingMarkRequest = false
       pendingToggleChatRequest = false
       return
@@ -497,6 +522,10 @@ public final class AppCoordinator: ObservableObject {
     if pendingEndMeetingRequest, let requestEndMeetingHandler {
       pendingEndMeetingRequest = false
       Task { @MainActor in requestEndMeetingHandler() }
+    }
+    if pendingDiscardMeetingRequest, let requestDiscardMeetingHandler {
+      pendingDiscardMeetingRequest = false
+      Task { @MainActor in requestDiscardMeetingHandler() }
     }
     if pendingMarkRequest, let requestMarkHandler {
       pendingMarkRequest = false

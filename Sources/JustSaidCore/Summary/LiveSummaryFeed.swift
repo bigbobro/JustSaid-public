@@ -3619,7 +3619,27 @@ extension LiveSummaryFeed {
     else {
       return nil
     }
-    return String(text[start...end]).data(using: .utf8)
+    return quotingBareCoveredUntil(String(text[start...end])).data(using: .utf8)
+  }
+
+  /// 2026-10-09 实测(Sonnet 慢路):`"coveredUntil":36:20`、`"coveredUntil":runtime`——
+  /// 值没带引号,整段不是合法 JSON,一个兜底字段就让整轮作废。把这种裸值包上引号,
+  /// 交给 `flexibleSeconds` 按时间码解析或按缺失兜底。数字和 JSON 字面量原样不动。
+  fileprivate static func quotingBareCoveredUntil(_ json: String) -> String {
+    guard
+      let regex = try? NSRegularExpression(
+        pattern: #"("coveredUntil"\s*:\s*)([^\s",}\]\[{]+)"#),
+      let match = regex.firstMatch(
+        in: json, range: NSRange(json.startIndex..., in: json)),
+      let tokenRange = Range(match.range(at: 2), in: json)
+    else {
+      return json
+    }
+    let token = json[tokenRange]
+    if ["null", "true", "false"].contains(token) || Double(token) != nil {
+      return json
+    }
+    return json.replacingCharacters(in: tokenRange, with: "\"\(token)\"")
   }
 }
 

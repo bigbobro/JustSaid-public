@@ -43,6 +43,7 @@ final class MeetingPromptPanelController {
       model.onNever = {}
       model.onEnd = {}
       model.onContinue = {}
+      model.onDiscard = {}
       model.onScopeSwitch = {}
       model.onScopeDismiss = {}
       return
@@ -52,6 +53,7 @@ final class MeetingPromptPanelController {
     model.onNever = { [weak controller] in controller?.neverRemind() }
     model.onEnd = { [weak controller] in controller?.endRecording() }
     model.onContinue = { [weak controller] in controller?.continueRecording() }
+    model.onDiscard = { [weak controller] in controller?.discardRecording() }
     model.onScopeSwitch = { [weak controller] in controller?.switchScopeToGlobal() }
     model.onScopeDismiss = { [weak controller] in controller?.dismissScopeNotice() }
   }

@@ -43,10 +43,16 @@ public final class MeetingDetectionController: ObservableObject {
     public var start: (MeetingCallInfo) async -> Void
     /// 结束记录：走既有的结束路径（含聊天范围确认、纪要、跳资料库），不直接 `stop()`。
     public var end: () -> Void
+    /// 废弃：走主窗既有的废弃确认（「废弃这场会议？」），不直接删。
+    public var discard: () -> Void
 
-    public init(start: @escaping (MeetingCallInfo) async -> Void, end: @escaping () -> Void) {
+    public init(
+      start: @escaping (MeetingCallInfo) async -> Void, end: @escaping () -> Void,
+      discard: @escaping () -> Void = {}
+    ) {
       self.start = start
       self.end = end
+      self.discard = discard
     }
   }
 
@@ -261,6 +267,15 @@ public final class MeetingDetectionController: ObservableObject {
     stopInfo = nil
     refresh()
     actions.end()
+  }
+
+  /// 通话结束后发现这场根本不需要：交给废弃确认，胶囊先收起（与「结束记录」一致）。
+  public func discardRecording() {
+    guard case .stop(let info) = prompt else { return }
+    monitor.recordPromptAction("stop-discard", appKey: info.app.key)
+    stopInfo = nil
+    refresh()
+    actions.discard()
   }
 
   public func continueRecording() {

@@ -22,7 +22,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "58f67bb0e0144d911d125a5eae73c61f5bb42fb1b77ee644e4a2f6900a00f013"
+      "sha256": "63f008122e5a64c125bb4e4d9f1a06cc598eb0344fa846ba3b19a3447adf274c"
     },
     {
       "path": "LICENSE",
@@ -518,7 +518,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Summary/LiveSummaryFeed.swift",
-      "sha256": "52bcd81eea7e5e925a41f8fd201b960baa06225e3f923247ce5678f13c584959"
+      "sha256": "4fb604e508ba058531d4236fb0464a03fbadc4bfb232f6772e5c1d3441d660c6"
     },
     {
       "path": "Sources/JustSaidCore/Summary/SummaryContracts.swift",
@@ -694,7 +694,7 @@
     },
     {
       "path": "Sources/JustSaidUI/MeetingDetection/MeetingDetectionController.swift",
-      "sha256": "d9bea324eb76f6e22c3106371b9bc26d9e66a1fe92428eb13c220f2156beca0d"
+      "sha256": "68840035b962d2ac8e94857162653b3c5cd0508fae78fce64e1cbb8aeb96e40a"
     },
     {
       "path": "Sources/JustSaidUI/MeetingDetection/MeetingDetectionPreferences.swift",
@@ -854,7 +854,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView.swift",
-      "sha256": "acd532d4e3f8289c2e126619088f36db04b8373e776bde522def256d884e80c7"
+      "sha256": "b61d79de1e99f5f51ef6ba12706a72ec4358f24faf43c371f2995dfec83c02e6"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingDocumentView.swift",
@@ -930,7 +930,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingPromptViews.swift",
-      "sha256": "8cc3e87153878035a16085bb32f4c8a5a23b33e60d7760be347b1754d3d93d2d"
+      "sha256": "e4c4ab1c51bb1f8239144edc6ad4813eef05b6047679dccc2dfac9c39988c790"
     },
     {
       "path": "Sources/JustSaidUI/Views/MicrophonePauseBanner.swift",
@@ -1114,7 +1114,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Windowing/AppCoordinator.swift",
-      "sha256": "d38dd264c08d64d83f4d80ea6c7d137d8978d861be1c31eb6b71c97e5a4b2ae6"
+      "sha256": "875be26f386b3003e106037560b275b7d7ff6c22926e7ffc4508d97fcf4d791f"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/AppUpdates.swift",
@@ -1142,7 +1142,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Windowing/MeetingPromptPanelController.swift",
-      "sha256": "8e1f9156e2453c42b632e9979ef0b5045ba7d4b62890339722eedbaa45af01c8"
+      "sha256": "f04582e4587745652cc2b9d00cebd9df9a917c52a4ecdf400d8f7651c5fc3e94"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/MenuBarController.swift",
@@ -1174,7 +1174,7 @@
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "58f67bb0e0144d911d125a5eae73c61f5bb42fb1b77ee644e4a2f6900a00f013"
+      "sha256": "63f008122e5a64c125bb4e4d9f1a06cc598eb0344fa846ba3b19a3447adf274c"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -1262,6 +1262,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "baf10243ef196d1de0c8598b44802ddc7452f455",
+  "source_sha": "b323053aaf8ca8fba83b186fe90548461a5f2963",
   "source_status": "clean"
 }

@@ -13,6 +13,7 @@ struct MeetingPromptCapsule: View {
   var onNever: () -> Void = {}
   var onEnd: () -> Void = {}
   var onContinue: () -> Void = {}
+  var onDiscard: () -> Void = {}
   var onScopeSwitch: () -> Void = {}
   var onScopeDismiss: () -> Void = {}
   var showsShadow = true
@@ -167,6 +168,11 @@ struct MeetingPromptCapsule: View {
         Button("继续记录", action: onContinue)
           .buttonStyle(PromptCapsuleButtonStyle(role: .quiet))
           .runtimeAccessibilityIdentifier("meeting-prompt.continue")
+        // 最不醒目、排在最后：删的是真录音，点了先走主窗的废弃确认。
+        Button("废弃", action: onDiscard)
+          .buttonStyle(PromptCapsuleButtonStyle(role: .quiet))
+          .help("这场不需要：停止录音并删除，不生成纪要")
+          .runtimeAccessibilityIdentifier("meeting-prompt.discard")
       }
     }
   }
@@ -222,7 +228,7 @@ struct MeetingPromptPanelRoot: View {
         MeetingPromptCapsule(
           prompt: prompt, icon: model.icon, canExclude: model.canExclude,
           onStart: model.onStart, onIgnore: model.onIgnore, onNever: model.onNever,
-          onEnd: model.onEnd, onContinue: model.onContinue,
+          onEnd: model.onEnd, onContinue: model.onContinue, onDiscard: model.onDiscard,
           onScopeSwitch: model.onScopeSwitch, onScopeDismiss: model.onScopeDismiss
         )
         .padding(.horizontal, MeetingPresenceMetrics.strongShadowSide)
@@ -244,6 +250,7 @@ final class MeetingPromptViewModel: ObservableObject {
   var onNever: () -> Void = {}
   var onEnd: () -> Void = {}
   var onContinue: () -> Void = {}
+  var onDiscard: () -> Void = {}
   var onScopeSwitch: () -> Void = {}
   var onScopeDismiss: () -> Void = {}
 }
