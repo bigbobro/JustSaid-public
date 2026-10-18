@@ -34,12 +34,17 @@ struct JustSaidApp: App {
   @StateObject private var appCoordinator: AppCoordinator
   /// 应用更新器(进程内唯一,与主窗无关);开发构建与未盖章的包为 nil。
   private let appUpdater: AppUpdater?
+  /// Pro 模型下载失败就关掉 Pro 模式(跟进程同寿:失败时设置页可能已经关了)。
+  private let proModeFailureWatcher: LiveProModeFailureWatcher
   @AppStorage(AppAppearance.defaultsKey) private var appearanceRawValue =
     AppAppearance.system.rawValue
   // 关主窗不退出(T11)必须经由 SwiftUI 的 delegate 适配器安装,不能直接赋值 NSApp.delegate。
   @NSApplicationDelegateAdaptor(JustSaidAppDelegate.self) private var appDelegate
 
   init() {
+    // transcribe.cpp 的日志钩子进程内只装一次,且要早于任何设备查询或模型加载(transcribe.h 线程约定)。
+    // 只登记回调,不碰 Metal;设备在 Pro 第一次加载模型时才初始化。
+    TranscribeRuntimeLog.install()
     _ = Self.sentinelBootstrap
     // 转写抽屉每次启动都从收起开始(2026-08-19 实机改判)。
     //
@@ -125,6 +130,8 @@ struct JustSaidApp: App {
     _modelAssetManager = StateObject(
       wrappedValue: modelAssetManager
     )
+    proModeFailureWatcher = LiveProModeFailureWatcher(
+      modelAssets: modelAssetManager, settings: providerSettings)
     appUpdater = AppUpdater.installIfEnabled(
       appCoordinator: appCoordinator,
       recordingSession: recordingSession,

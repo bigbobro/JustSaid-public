@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogRevision": "2026-08-25.1",
+  "catalogRevision": "2026-10-17.1",
   "assets": [
     {
       "id": "qwen3-asr-0.6b-int8",
@@ -168,6 +168,33 @@
           "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
         }
       ]
+    },
+    {
+      "id": "qwen3-asr-1.7b-q8-gguf",
+      "revision": "q8_0-1",
+      "kind": "file",
+      "displayName": "Qwen3-ASR-1.7B",
+      "url": "https://huggingface.co/handy-computer/Qwen3-ASR-1.7B-gguf/resolve/0e0a596e3959c3f3f2ab7d443a5b6f0f4a4bba6f/Qwen3-ASR-1.7B-Q8_0.gguf",
+      "downloadBytes": 2185030624,
+      "downloadSHA256": "9a0d81792dfea2d5f278b8a63deb3ea6e02139ce42c2301f32ea19c4f77526b7",
+      "archiveKind": null,
+      "archiveRoot": null,
+      "allowedMembers": [
+        "Qwen3-ASR-1.7B-Q8_0.gguf"
+      ],
+      "extract": [
+        {
+          "member": "Qwen3-ASR-1.7B-Q8_0.gguf",
+          "installPath": "Qwen3-ASR-1.7B/Qwen3-ASR-1.7B-Q8_0.gguf"
+        }
+      ],
+      "installedFiles": [
+        {
+          "path": "Qwen3-ASR-1.7B/Qwen3-ASR-1.7B-Q8_0.gguf",
+          "bytes": 2185030624,
+          "sha256": "9a0d81792dfea2d5f278b8a63deb3ea6e02139ce42c2301f32ea19c4f77526b7"
+        }
+      ]
     }
   ],
   "capabilities": [
@@ -189,6 +216,15 @@
       "assetIDs": [
         "sensevoice-small-int8",
         "silero-vad"
+      ]
+    },
+    {
+      "id": "qwen-live-pro",
+      "displayName": "Qwen3-ASR Pro（1.7B）",
+      "summary": "可选",
+      "required": false,
+      "assetIDs": [
+        "qwen3-asr-1.7b-q8-gguf"
       ]
     }
   ],

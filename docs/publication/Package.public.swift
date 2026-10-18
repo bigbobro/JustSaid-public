@@ -24,7 +24,7 @@ let package = Package(
   dependencies: [
     .package(
       url: "https://github.com/k2-fsa/sherpa-onnx",
-      revision: "116a44e72c5bb631dcdbdb9c176f0304f5fc6fb0"
+      revision: "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf"
     ),
     // 应用内更新。只由 JustSaidApp 导入;版本锁定,打包脚本核对解析结果与框架哈希。
     .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
@@ -36,11 +36,19 @@ let package = Package(
         "https://github.com/bigbobro/JustSaid-public/releases/download/deps-webrtc-apm-2.1/JustSaidWebRTCApm-2.1-macos-arm64.xcframework.zip",
       checksum: "1b6ba79507ab17caa9bf6ad607286a32bbad667124570c12fed692f4959be9f1"
     ),
+    // transcribe.cpp 0.4.0 动态 framework(Pro 模式),由 Scripts/build-transcribe-cpp.sh 构建。
+    .binaryTarget(
+      name: "JustSaidTranscribe",
+      url:
+        "https://github.com/bigbobro/JustSaid-public/releases/download/deps-transcribe-cpp-0.4.0/JustSaidTranscribe-0.4.0-macos-arm64.xcframework.zip",
+      checksum: "a700aaa8bff1d577a143b1dc154762f0bf3dbb03448ca8e0f21c658a2edf99dc"
+    ),
     .target(
       name: "JustSaidCore",
       dependencies: [
         .product(name: "sherpa-onnx", package: "sherpa-onnx"),
         .target(name: "JustSaidWebRTCApm", condition: .when(platforms: [.macOS])),
+        .target(name: "JustSaidTranscribe", condition: .when(platforms: [.macOS])),
       ],
       linkerSettings: [
         .linkedFramework("AudioToolbox"),

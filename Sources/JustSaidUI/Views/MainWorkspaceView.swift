@@ -25,6 +25,7 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   @State private var displayEchoFilter = EchoDeduplicator.IncrementalFilter()
   // 新装默认 Auto(R4):会中引擎走自动路由,语言选择下发识别语种意图。
   // 已有用户 key 里已存 "en"/"zh",不受默认值变化影响。
+  // 手选的中/英只给这一场:成功开录后写回 auto,下一场不再继承。
   @AppStorage("justsaid.meeting.language") private var languageRaw: String = MeetingLanguage.auto
     .rawValue
   @StateObject private var dictionaryPane: DictionaryPaneModel
@@ -43,8 +44,6 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   @State private var transcriptPresentation: LiveTranscriptPresentationState
 
   @AppStorage(TextScale.defaultsKey) private var textScaleRawValue = TextScale.standard.rawValue
-  /// 本会话内用户是否手动选过语言:手选优先于「跟上一场走」的自动预填。
-  @State var hasManuallyPickedLanguage = false
   /// 语言错配提示(P2-b):速记检测语言与所选不符时置为检测语言,首中即定格,
   /// 不随后续片段反复横跳;换场清零。
   @State var languageMismatch: MeetingLanguage?
@@ -161,11 +160,50 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
   var languageSelection: Binding<MeetingLanguage> {
     Binding(
       get: { MeetingLanguage(rawValue: languageRaw) ?? .auto },
-      set: {
-        hasManuallyPickedLanguage = true
-        languageRaw = $0.rawValue
-      }
+      set: { languageRaw = $0.rawValue }
     )
+  }
+
+  /// 会中只读标签和横幅看本场开录语言。成功开录后偏好已回到 Auto,
+  /// 再读偏好会把本场错当成 Auto,错配横幅和低产出文案都会跟着错。
+  var languageForThisMeeting: MeetingLanguage {
+    if recordingSession.phase == .recording || recordingSession.phase == .stopping,
+      let active = recordingSession.currentLanguage
+    {
+      return active
+    }
+    return language
+  }
+
+  /// 录制中工具栏的语言选择:读本场语种,写入即会中切换速记语种。
+  var liveLanguageSelection: Binding<MeetingLanguage> {
+    Binding(
+      get: { languageForThisMeeting },
+      set: { switchLanguageThisMeeting(to: $0) }
+    )
+  }
+
+  /// 会中切换(owner 2026-10-16)。只改本场,不写下一场的偏好:偏好成功开录后已回到 Auto。
+  /// 切换前的速记是旧语种的产物,拿它判错配和低产出已经不准,本场两条横幅都收起不再出现。
+  func switchLanguageThisMeeting(to newLanguage: MeetingLanguage) {
+    guard recordingSession.switchLanguage(to: newLanguage) else { return }
+    languageMismatch = nil
+    isLanguageMismatchDismissed = true
+    isShowingLowRecognition = false
+    isLowRecognitionDismissed = true
+  }
+
+  /// 横幅上的切换:引擎支持就本场切;不支持只写下一场的偏好(旧行为),文案在横幅里照实说。
+  func applyLanguageChoiceFromBanner(_ newLanguage: MeetingLanguage) {
+    if recordingSession.canSwitchLanguageLive {
+      switchLanguageThisMeeting(to: newLanguage)
+    } else {
+      language = newLanguage
+      languageMismatch = nil
+      isLanguageMismatchDismissed = true
+      isShowingLowRecognition = false
+      isLowRecognitionDismissed = true
+    }
   }
 
   var currentLiveProviderID: String {
@@ -218,6 +256,8 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       initialSection: appCoordinator.settingsSection,
       section: $appCoordinator.settingsSection,
       recoveryRequest: $appCoordinator.recoverySettingsRequest,
+      // 开始中、记录中、结束中都算:这时下载或删除本机模型会和正在用的速记引擎抢文件。
+      isRecording: recordingSession.phase.isBusy,
       onDone: { appCoordinator.leaveSettings() }
     )
   }
@@ -335,10 +375,10 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
         !isLanguageMismatchDismissed,
         languageMismatch == nil,
         // R4:Auto 下没有选择可错配,错配横幅只对中/英手动选择生效;
-        // 低产出检测不看语言,Auto 下照常保留。
-        language != .auto,
+        // 低产出检测不看语言,Auto 下照常保留。看本场开录语言,不看已复位的偏好。
+        languageForThisMeeting != .auto,
         let detected = LanguageMismatchBanner.detectMismatch(
-          selected: language,
+          selected: languageForThisMeeting,
           segments: segments
         )
       {
@@ -405,15 +445,6 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
         && !appCoordinator.hasPendingLibraryCommand {
         // 只选驾驶舱内容;窗口唤起属于外部入口,挂载时唤起会把关闭后仍被持有的旧主窗前置。
         appCoordinator.selectCockpit()
-      }
-      // 默认语言跟上一场走(2026-07-30):用户连开两场英文会都停在中文没发现。
-      // 只在空闲态、且本会话未手动改过时预填;手选永远优先。
-      if recordingSession.phase == .idle || recordingSession.phase == .completed {
-        if !hasManuallyPickedLanguage,
-          let detected = MeetingStore().latestDetectedLanguage()
-        {
-          language = detected
-        }
       }
       displaySegments =
         displayEchoFilter.removeEcho(
@@ -675,9 +706,23 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       preparationSessionActive = false
       let client = meetingClientDraft
       let project = meetingProjectDraft
+      let canStart =
+        recordingSession.phase == .idle || recordingSession.phase == .completed
+        || recordingSession.phase == .failed
+      // Pro 模式:开会不等、不检查,按开关与 Pro 模型的本机快照定一次(菜单栏与 ⌘R 也走这里)。
+      let livePro = modelAssetManager.liveProPlan(
+        proModeEnabled: providerSettings.liveProModeEnabled,
+        liveProviderID: providers.first(where: { $0.role == .liveTranscriber })?.providerID
+          ?? LocalModelKnownIDs.qwenProvider)
       Task {
-        await recordingSession.start(title: title, language: language, providers: providers)
+        await recordingSession.start(
+          title: title, language: language, providers: providers, livePro: livePro)
         guard recordingSession.phase == .recording else { return }
+        if canStart {
+          appCoordinator.resetMeetingLanguagePreference(defaults: .standard)
+          // 参数 language 是本场开录语言。这里写的是偏好绑定,选择器跟着回到 Auto。
+          self.language = .auto
+        }
         applyStartTags(client: client, project: project)
         // 草稿只服务「下一场」:开会成功就清空。原来从不清空,于是下一场会默认带着上一场的
         // 名字,废弃一场之后首页输入框里还留着那场的名字(2026-09-21 实机验收 build 860 发现)。

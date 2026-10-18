@@ -51,6 +51,83 @@ extension TranscriberEngine {
   public var usesCaptureTime: Bool { false }
 }
 
+/// 会中切换识别语种(owner 2026-10-16 定)。只有能不重启引擎、不动音频链路就换语种的引擎
+/// 才实现:Qwen 的 language 是每段 stream 的 option。SenseVoice 的语言 token 与 Apple 的
+/// locale 在开录时就定了,不实现,会中改语言对它们仍只写下一场的偏好。
+public protocol LiveLanguageSwitching: Sendable {
+  /// 从下一段新建的解码起生效;正在解码的那一段按旧语种出结果。
+  func switchLanguage(to language: MeetingLanguage)
+}
+
+/// 会中引擎运行中发生、调用方要当场知道的事。目前只有 Pro 模式的回退(PR-07)。
+public enum LiveEngineEvent: Equatable, Sendable {
+  /// GPU 真出错(ERR_BACKEND / ERR_OOM),或开录后 1.7B 没能装好(加载或预热出错),本场改用标准识别继续。
+  /// 在失败那一刻送出,不等热备把那一段重解完;每场至多一次。输入被拒、静音与短段都不算。
+  /// `callIndex`:第几次 GPU 调用(从 1 起,不含预热);0 = 开录后 1.7B 没能装好。
+  /// `at`:送出时刻,`DispatchTime.now().uptimeNanoseconds`(与解码观察导出同一时钟)。
+  case fellBackToStandard(callIndex: Int, at: UInt64)
+}
+
+/// 能送出 `LiveEngineEvent` 的会中引擎。
+public protocol LiveEngineEventProviding: Sendable {
+  /// 单一消费方。引擎建好就有、无界缓冲,start 前后读都不丢;引擎 `stop()` 返回前结束。
+  var engineEvents: AsyncStream<LiveEngineEvent> { get }
+}
+
+/// 一场会中速记实际用了什么。停止后读;停止前读到的是截至当时的状态。
+public struct TranscriberLiveEngineReport: Codable, Equatable, Sendable {
+  /// 本场选用的模型,清单资产 ID:`qwen3-asr-1.7b-q8-gguf`(Pro;开录头几秒、装好之前由 0.6B 出字)
+  /// 或 `qwen3-asr-0.6b-int8`(标准)。
+  public let modelAssetID: String
+  /// 会中改用了标准识别(GPU 真出错,或开录后 1.7B 没能装好)。
+  public let fellBack: Bool
+  /// 回退发生在第几次 GPU 调用(从 1 起,不含预热);0 = 开录后没能装好;没回退为 nil。
+  public let fallbackCallIndex: Int?
+  /// ggml 设备名(如 `MTL0`);标准识别或读不到为 nil。
+  public let deviceName: String?
+  /// 人读的设备描述(芯片型号);标准识别或读不到为 nil。
+  public let deviceDescription: String?
+  /// 从 ggml-metal 初始化日志读到的 has_tensor;读不到为 nil(未核实)。
+  public let hasTensor: Bool?
+  /// GPU 会话请求的 CPU 线程数(0 = 库自选);标准识别为 nil。
+  public let requestedThreads: Int32?
+  /// 1.7B 加载 GGUF 并建会话的用时(秒);标准识别、还没接手或没能装好为 nil。下同。
+  public let proLoadSeconds: Double?
+  /// 0.1 s 噪声预热的用时(秒);GPU 没接收那次预热时也为 nil。
+  public let proWarmupSeconds: Double?
+  /// 开录后多久 1.7B 接手(秒)。
+  public let proReadyAfterSeconds: Double?
+
+  public init(
+    modelAssetID: String,
+    fellBack: Bool,
+    fallbackCallIndex: Int?,
+    deviceName: String?,
+    deviceDescription: String?,
+    hasTensor: Bool?,
+    requestedThreads: Int32?,
+    proLoadSeconds: Double? = nil,
+    proWarmupSeconds: Double? = nil,
+    proReadyAfterSeconds: Double? = nil
+  ) {
+    self.modelAssetID = modelAssetID
+    self.fellBack = fellBack
+    self.fallbackCallIndex = fallbackCallIndex
+    self.deviceName = deviceName
+    self.deviceDescription = deviceDescription
+    self.hasTensor = hasTensor
+    self.requestedThreads = requestedThreads
+    self.proLoadSeconds = proLoadSeconds
+    self.proWarmupSeconds = proWarmupSeconds
+    self.proReadyAfterSeconds = proReadyAfterSeconds
+  }
+}
+
+/// 停止时能交出 `TranscriberLiveEngineReport` 的会中引擎。
+public protocol TranscriberLiveEngineReporting: Sendable {
+  var liveEngineReport: TranscriberLiveEngineReport { get }
+}
+
 public protocol TranscriberASRAnchorGapFramesProviding: Sendable {
   func asrAnchorGapFrames(for source: AudioSource) -> UInt64
 }

@@ -461,6 +461,8 @@ public struct MeetingProcessingInfoView: View {
         .font(Tokens.V1.Text.meta.font)
         .foregroundStyle(Tokens.V1.Color.ink3)
         .fixedSize(horizontal: false, vertical: true)
+      // 会中速记(Pro 模式 PR-10):只读本场散会时写下的记录,之后改开关、重新精转都不变。
+      modelRow("会中速记", value: item.liveTranscriberDisplayName, id: "library.live-asr-model")
       modelRow("转写模型", value: item.batchASRModelDisplayName, id: "library.asr-model")
       modelRow("纪要模型", value: item.minutesLLMModelName, id: "library.minutes-model")
       HStack {

@@ -199,23 +199,6 @@ public final class MeetingStore: @unchecked Sendable {
   /// 会议库列表:按开始时间倒序(最近的在最前)。
   /// `meeting.json` 缺失或损坏的目录直接跳过——一场坏会议不该挡住整个列表;
   /// 目录名也不参与排序,因为同一天多场会议靠 `-2` 后缀区分,字典序会把 `-10` 排到 `-2` 前面。
-  /// 最近一场已完成会议的实际语言(供开录前的默认语言跟随;2026-07-30 用户拍板:
-  /// 「每次都忘了选」——上一场开的什么语言,下一场就默认什么)。
-  public func latestDetectedLanguage() -> MeetingLanguage? {
-    listMeetings()
-      // 导入会议不参与「下一场默认语言跟随」(AC4);避免 auto 遮蔽正常跟随。
-      .filter { $0.metadata.status == .completed && $0.metadata.importedRecording != true }
-      .sorted { $0.metadata.startedAt > $1.metadata.startedAt }
-      .first
-      .flatMap { record in
-        switch record.metadata.batchLanguageDecision {
-        case .english: return .english
-        case .chinese: return .chinese
-        case .auto, .none: return nil
-        }
-      }
-  }
-
   public func listMeetings() -> [MeetingRecord] {
     guard
       let entries = try? fileManager.contentsOfDirectory(
@@ -1412,6 +1395,7 @@ public final class MeetingStore: @unchecked Sendable {
     liveEchoCancellation: LiveEchoCancellationStatistics? = nil,
     captureLegFailures: [CaptureLegFailure]? = nil,
     captureInterruptions: [CaptureInterruption]? = nil,
+    liveTranscriber: LiveTranscriberRecord? = nil,
     for record: MeetingRecord
   ) throws -> MeetingRecord {
     let metadata = try mutateMetadata(at: record.paths) {
@@ -1428,6 +1412,9 @@ public final class MeetingStore: @unchecked Sendable {
       }
       if let captureInterruptions {
         $0.captureInterruptions = captureInterruptions
+      }
+      if let liveTranscriber {
+        $0.liveTranscriber = liveTranscriber
       }
     }
     return MeetingRecord(paths: record.paths, metadata: metadata)

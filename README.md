@@ -133,7 +133,7 @@ swift build --build-system native --product JustSaid
 <details>
 <summary>依赖与本仓库的范围</summary>
 
-依赖固定版本的 sherpa-onnx、Sparkle 与 WebRTC Audio Processing。SwiftPM 会从独立的 `deps-webrtc-apm-2.1` Release 下载约 1.25 MB 的 arm64 静态 XCFramework，并校验锁定的 SHA-256；下载 App 时仍选 App 版本的 DMG。
+依赖固定版本的 sherpa-onnx、Sparkle、WebRTC Audio Processing 与 transcribe.cpp。SwiftPM 会从独立的 `deps-webrtc-apm-2.1` Release 下载约 1.25 MB 的 arm64 静态 XCFramework，以及从 `deps-transcribe-cpp-0.4.0` Release 下载 transcribe.cpp 0.4.0（含 ggml，MIT）编成的 arm64 动态 XCFramework，同样校验锁定的 SHA-256；下载 App 时仍选 App 版本的 DMG。
 
 这里是作者从开发仓库中选定并导出的产品源码：应用本体与它的两个库。功能验证夹具、内部研发记录和真实会议材料不在其中。每次导出都会生成 `PUBLIC_EXPORT_MANIFEST.json`，记录对应的源码提交与文件清单；导出边界见 `docs/publication/PUBLIC_SCOPE.md`。请不要向本仓库提交录音、凭证、签名材料或任何会议数据。
 
@@ -147,7 +147,7 @@ swift build --build-system native --product JustSaid
 
 感谢 [Linux.do](https://linux.do) 社区的交流、反馈与支持。
 
-也感谢 JustSaid 所依赖的开源项目，包括 Qwen3-ASR、sherpa-onnx、Silero VAD、Sparkle 与 WebRTC Audio Processing。
+也感谢 JustSaid 所依赖的开源项目，包括 Qwen3-ASR、sherpa-onnx、transcribe.cpp、ggml、Silero VAD、Sparkle 与 WebRTC Audio Processing。
 
 ## 许可
 

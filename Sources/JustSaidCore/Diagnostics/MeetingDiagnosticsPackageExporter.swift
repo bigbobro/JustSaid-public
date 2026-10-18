@@ -319,6 +319,8 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
     let droppedOutOfOrder: UInt64
     let asrFedFrames: UInt64
     let asrSkippedFrames: UInt64
+    let deliveredSampleRate: Double?
+    let rateCorrectedFrames: UInt64?
   }
 
   private struct CaptureFailureProjection: Codable {
@@ -469,7 +471,9 @@ public struct MeetingDiagnosticsPackageExporter: @unchecked Sendable {
       droppedByOverload: stats.droppedByOverload,
       droppedOutOfOrder: stats.droppedOutOfOrder,
       asrFedFrames: stats.asrFedFrames,
-      asrSkippedFrames: stats.asrSkippedFrames
+      asrSkippedFrames: stats.asrSkippedFrames,
+      deliveredSampleRate: stats.deliveredSampleRate,
+      rateCorrectedFrames: stats.rateCorrectedFrames
     )
   }
 

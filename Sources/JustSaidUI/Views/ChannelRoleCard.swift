@@ -26,6 +26,8 @@ public struct ChannelRoleCard<Extra: View>: View {
   private let secretDigest: any StoredSecretDigest
   private let connectionTestAction: (() -> Void)?
   private let modelAssetManager: LocalModelAssetManager?
+  /// 开始中、记录中、结束中。只有会中速记组的「Pro 模式」一行用它(记录中不能更改)。
+  private let isRecording: Bool
   /// 挂在本组末尾的额外行。设计稿把「本机模型」并进会中速记、把「对象存储」并进
   /// 会后精转——它们是这个角色要配的东西,不是另一张卡。
   @ViewBuilder private let extraRows: () -> Extra
@@ -43,6 +45,7 @@ public struct ChannelRoleCard<Extra: View>: View {
     connectionTestState: ConnectionTestState = .idle,
     connectionTestAction: (() -> Void)? = nil,
     modelAssetManager: LocalModelAssetManager? = nil,
+    isRecording: Bool = false,
     @ViewBuilder extraRows: @escaping () -> Extra
   ) {
     self.role = lane?.role ?? role
@@ -52,6 +55,7 @@ public struct ChannelRoleCard<Extra: View>: View {
     self.secretDigest = secretDigest
     self.connectionTestAction = connectionTestAction
     self.modelAssetManager = modelAssetManager
+    self.isRecording = isRecording
     self.extraRows = extraRows
     _connectionState = State(initialValue: connectionTestState)
   }
@@ -165,6 +169,13 @@ public struct ChannelRoleCard<Extra: View>: View {
   public var body: some View {
     SettingsFormGroup(title, hint: subtitle) {
       channelRow
+
+      // 「转写引擎」下一行「Pro 模式」(PR-10):只对「自动」与 Qwen3-ASR 画,换成别的引擎整行不画,
+      // 开关记的选择不变。清单里没有 Pro 这项能力(清单不可用)也不画。
+      if role == .liveTranscriber, let modelAssetManager, showsProModeRow(modelAssetManager) {
+        ProModeSettingsRow(
+          manager: modelAssetManager, settingsStore: settingsStore, isRecording: isRecording)
+      }
 
       if isVolcengineASR {
         asrResourceRow
@@ -382,6 +393,14 @@ public struct ChannelRoleCard<Extra: View>: View {
         suffix: secretDigest.suffix(slot: .apiKey, forChannel: effectiveChannel)
       ),
     ]
+  }
+
+  private func showsProModeRow(_ manager: LocalModelAssetManager) -> Bool {
+    guard manager.snapshot(forCapabilityID: LocalModelKnownIDs.qwenLivePro) != nil else {
+      return false
+    }
+    return binding.usesAutomaticLanguageRouting
+      || effectiveChannel.providerID == LocalModelKnownIDs.qwenProvider
   }
 
   private func isChannelDisabled(_ candidate: ProviderChannel) -> Bool {

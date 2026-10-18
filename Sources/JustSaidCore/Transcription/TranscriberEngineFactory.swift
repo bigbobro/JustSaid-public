@@ -28,7 +28,12 @@ public enum TranscriberEngineError: LocalizedError, Sendable {
 public struct TranscriberEngineFactory: Sendable {
   public init() {}
 
-  public func make(providerID: String) throws -> any TranscriberEngine {
+  /// `pro`:本场走 Pro 模式时 1.7B 从哪里来(PR-07)。只有 `qwen3-asr-0.6b` 用它,Pro 不是新的 providerID;
+  /// 其他引擎忽略它。它只是描述,1.7B 在开录时于后台加载、散会时释放。nil 时与没有 Pro 时完全相同。
+  public func make(
+    providerID: String,
+    pro: ProRecognizerConfiguration? = nil
+  ) throws -> any TranscriberEngine {
     switch providerID {
     case "apple-speech-analyzer":
       if #available(macOS 26.0, *) {
@@ -42,7 +47,7 @@ public struct TranscriberEngineFactory: Sendable {
     case "sensevoice-small":
       return SenseVoiceTranscriberEngine()
     case "qwen3-asr-0.6b":
-      return Qwen3ASRTranscriberEngine()
+      return Qwen3ASRTranscriberEngine(pro: pro)
     default:
       throw TranscriberEngineError.unsupportedProvider(providerID)
     }

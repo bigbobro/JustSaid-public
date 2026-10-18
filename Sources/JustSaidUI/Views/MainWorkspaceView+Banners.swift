@@ -35,7 +35,8 @@ extension MainWorkspaceView {
       postMeetingStage: isShowingPostMeetingDetail ? .none : summaryFeed.postMeetingStage,
       hasLanguageMismatch: languageMismatch != nil,
       isShowingLowRecognition: isShowingLowRecognition,
-      systemScopeNotice: recordingSession.systemAudioScopeNotice
+      systemScopeNotice: recordingSession.systemAudioScopeNotice,
+      liveEngineNotice: recordingSession.liveEngineNotice
     )
   }
 
@@ -161,6 +162,9 @@ extension MainWorkspaceView {
         text: "系统声音可能没有录上，已重试仍未恢复"
       ) { EmptyView() }
       .runtimeAccessibilityIdentifier("cockpit.system-scope.failed")
+    case "pro-standard-needs-repair", "pro-fell-back":
+      // Pro 模式那一句:中性级,没有按钮,不自动收起,散会消失(设计系统 README「提示」)。
+      ProModeNotice(fellBack: id == "pro-fell-back")
     case "partial-capture":
       partialCaptureBanner
     case "post-meeting":
@@ -280,19 +284,17 @@ extension MainWorkspaceView {
   }
 
   /// 语言错配提示(P2-b):开录约 30 秒后速记检测语言与所选不符时出现。
-  /// 只提示不自动改;「改选」记为手选(1883e15 的预填此后不再干预)、下一场生效,
-  /// 「本场忽略」当场收起。两种选择本场都不再出现。
+  /// 只提示不自动改;「本场改用」当场换速记语种(owner 2026-10-16),
+  /// 引擎不支持会中切换时退回写下一场偏好。「本场忽略」当场收起。两种选择本场都不再出现。
   @ViewBuilder
   private var languageMismatchBanner: some View {
     if recordingSession.phase == .recording, let detected = languageMismatch {
       LanguageMismatchBanner(
-        selected: language,
+        selected: languageForThisMeeting,
         detected: detected,
+        switchesThisMeeting: recordingSession.canSwitchLanguageLive,
         onSwitch: {
-          hasManuallyPickedLanguage = true
-          language = detected
-          languageMismatch = nil
-          isLanguageMismatchDismissed = true
+          applyLanguageChoiceFromBanner(detected)
         },
         onIgnore: {
           languageMismatch = nil
@@ -307,12 +309,11 @@ extension MainWorkspaceView {
   private var lowRecognitionBanner: some View {
     if recordingSession.phase == .recording, isShowingLowRecognition, languageMismatch == nil {
       LowRecognitionBanner(
-        selected: language,
+        selected: languageForThisMeeting,
+        switchesThisMeeting: recordingSession.canSwitchLanguageLive,
         onSwitch: {
-          hasManuallyPickedLanguage = true
-          language = language == .english ? .chinese : .english
-          isShowingLowRecognition = false
-          isLowRecognitionDismissed = true
+          applyLanguageChoiceFromBanner(
+            languageForThisMeeting == .english ? .chinese : .english)
         },
         onIgnore: {
           isShowingLowRecognition = false

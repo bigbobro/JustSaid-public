@@ -4,27 +4,34 @@ import SwiftUI
 /// 语言错配提示横幅(P2-b):开录约 30 秒后,速记检测到的语言与所选不符时,
 /// 挂在工具栏下方的横幅栈里提示「一键切换或本场忽略」。
 ///
-/// 纪律与边界(与 1883e15 的智能默认同一条底线):
+/// 纪律与边界:
 /// - **只提示、绝不自动改**——手选永远优先;
-/// - 「切换」更新的是语言选择器(下一场开录生效),**不会中途重启本场速记引擎**
-///   ——buffer handler 在开录时就闭包捕获了引擎,中途换引擎要动音频链路,不值得冒险;
-/// - 提示的真正价值是让用户在 30 秒内发现选错了:此刻废弃重录代价还小,
-///   而不是录满一小时才发现速记全是乱码;
-/// - 本场的云端精转本就按实际语言自动判定(`MeetingLanguageDetector`),不受所选影响。
+/// - 「切换」在本场生效(owner 2026-10-16 定,推翻 2026-10-15「本场不切」):
+///   速记引擎支持 `LiveLanguageSwitching` 时(Qwen3-ASR,language 是每段 stream 的 option),
+///   从下一段起改用新语种,已出的片段不重写。实测事故:开录英文、说中文,点了改选后
+///   本场仍被转成英文句子(issue #211)。
+///   引擎不支持时(设置里手选的 SenseVoice / Apple)退回旧行为:只写下一场的偏好,文案也照实说。
+/// - 这条横幅发现不了「被翻译成目标语言」的错配——读起来通顺,没有乱码可看。
+/// - 会后精转语言来自 `MeetingLanguageDetector.detect(速记文本)`。切换前那段被错的语言
+///   污染的速记仍在,检测结果可能因此判成混说。
 public struct LanguageMismatchBanner: View {
   public let selected: MeetingLanguage
   public let detected: MeetingLanguage
+  /// true:点「切换」本场就改用检测到的语种;false:引擎不支持,只改下一场。
+  public let switchesThisMeeting: Bool
   public let onSwitch: () -> Void
   public let onIgnore: () -> Void
 
   public init(
     selected: MeetingLanguage,
     detected: MeetingLanguage,
+    switchesThisMeeting: Bool,
     onSwitch: @escaping () -> Void,
     onIgnore: @escaping () -> Void
   ) {
     self.selected = selected
     self.detected = detected
+    self.switchesThisMeeting = switchesThisMeeting
     self.onSwitch = onSwitch
     self.onIgnore = onIgnore
   }
@@ -80,17 +87,21 @@ public struct LanguageMismatchBanner: View {
     language == .english ? "英语" : "中文"
   }
 
+  private var switchTitle: String {
+    LiveLanguageSwitchCopy.actionTitle(to: detected, switchesThisMeeting: switchesThisMeeting)
+  }
+
   public var body: some View {
     HintBanner(
       systemImage: "waveform.badge.exclamationmark",
       text: "速记听到的更像\(Self.shortName(detected))，本场语言选的是\(Self.shortName(selected))"
     ) {
       // 中性底上 `.textAction` 不自带颜色(原来靠父级的警示色染),不显式上色就看不出可点。
-      Button("改选\(Self.shortName(detected))", action: onSwitch)
+      Button(switchTitle, action: onSwitch)
         .buttonStyle(.textAction)
         .fontWeight(.semibold)
         .foregroundStyle(Tokens.V1.Color.accent)
-        .help("更新语言选择，下一场开录生效；本场速记引擎不变，云端精转会按实际语言自动判定")
+        .help(LiveLanguageSwitchCopy.help(switchesThisMeeting: switchesThisMeeting))
         .runtimeAccessibilityIdentifier("language-mismatch.switch")
 
       Button("本场忽略", action: onIgnore)
@@ -103,19 +114,22 @@ public struct LanguageMismatchBanner: View {
 }
 
 /// 低产出提示横幅:与错配横幅同栈同视觉,但不依赖文本语种判断——音译污染骗不过它。
-/// 「下一场改为 X」直接给出当前所选的另一种语言(只有两种,翻转即具体动作);
-/// 同样只提示不自动改、不重启本场引擎。
+/// 「本场改用 X」直接给出当前所选的另一种语言(只有两种,翻转即具体动作);
+/// 同样只提示不自动改;切换口径与错配横幅相同(`switchesThisMeeting`)。
 public struct LowRecognitionBanner: View {
   public let selected: MeetingLanguage
+  public let switchesThisMeeting: Bool
   public let onSwitch: () -> Void
   public let onIgnore: () -> Void
 
   public init(
     selected: MeetingLanguage,
+    switchesThisMeeting: Bool,
     onSwitch: @escaping () -> Void,
     onIgnore: @escaping () -> Void
   ) {
     self.selected = selected
+    self.switchesThisMeeting = switchesThisMeeting
     self.onSwitch = onSwitch
     self.onIgnore = onIgnore
   }
@@ -126,6 +140,10 @@ public struct LowRecognitionBanner: View {
 
   private static func shortName(_ language: MeetingLanguage) -> String {
     language == .english ? "英语" : "中文"
+  }
+
+  private var switchTitle: String {
+    LiveLanguageSwitchCopy.actionTitle(to: other, switchesThisMeeting: switchesThisMeeting)
   }
 
   /// 这条**不跟语言错配一起降中性**。文案自己写着「可能选错了,或者麦克风没有进声」——
@@ -140,11 +158,11 @@ public struct LowRecognitionBanner: View {
       text: "速记几乎没有识别到内容——本场语言选的是\(Self.shortName(selected))，"
         + "可能选错了，或者麦克风没有进声"
     ) {
-      Button("下一场改为\(Self.shortName(other))", action: onSwitch)
+      Button(switchTitle, action: onSwitch)
         .buttonStyle(.textAction)
         .fontWeight(.semibold)
         .foregroundStyle(Tokens.V1.Color.warn)
-        .help("更新语言选择，下一场开录生效；本场速记引擎不变，云端精转会按实际语言自动判定")
+        .help(LiveLanguageSwitchCopy.help(switchesThisMeeting: switchesThisMeeting))
         .runtimeAccessibilityIdentifier("low-recognition.switch")
 
       Button("本场忽略", action: onIgnore)
@@ -153,5 +171,20 @@ public struct LowRecognitionBanner: View {
         .runtimeAccessibilityIdentifier("low-recognition.ignore")
     }
     .runtimeAccessibilityIdentifier("banner.low-recognition")
+  }
+}
+
+/// 两条横幅共用的切换文案。按钮必须说清是「本场」还是「下一场」:
+/// 旧文案「改选中文」不带时间,用户自然以为本场已切(issue #211)。
+enum LiveLanguageSwitchCopy {
+  static func actionTitle(to language: MeetingLanguage, switchesThisMeeting: Bool) -> String {
+    let name = language == .english ? "英语" : "中文"
+    return switchesThisMeeting ? "本场改用\(name)" : "下一场改为\(name)"
+  }
+
+  static func help(switchesThisMeeting: Bool) -> String {
+    switchesThisMeeting
+      ? "从现在起本场速记改用这个语言识别；已经出来的转写不变"
+      : "当前速记引擎不支持会中切换：更新语言选择，下一场开录生效"
   }
 }

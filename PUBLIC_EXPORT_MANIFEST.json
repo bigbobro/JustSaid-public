@@ -2,7 +2,7 @@
   "files": [
     {
       "path": ".gitattributes",
-      "sha256": "b76e46923b69863be6e47304ffb558244b892033abf5cd89638ee49844b94785"
+      "sha256": "d83d808ef7b3cd7698e1aaecf179aa255d771ad0295aa1ec939c03fe555c28c5"
     },
     {
       "path": ".github/workflows/pr-validation.yml",
@@ -22,7 +22,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "b20ac5025b3bf3bd738e13be933a7dbfe135f00b5853326779acf4fd0e456371"
+      "sha256": "ba4008c3d791c63f52d52e062b25b8d06f606eaf85879dfdfe548d636a5c5325"
     },
     {
       "path": "LICENSE",
@@ -30,19 +30,19 @@
     },
     {
       "path": "Package.resolved",
-      "sha256": "58f2ecdbdd133a16932ee6a77a77868f739aabf7615aa6c0788c118b8d0ee27d"
+      "sha256": "5f10f7edccb7d83b0d01e1f5564e301e64a765cdf996738700a8c15e5a23fb83"
     },
     {
       "path": "Package.swift",
-      "sha256": "acbae89b31648eab213b248f0c391dc02ac7cbe23eb788306e776f6f05015617"
+      "sha256": "c7424286dfdde872984b37fb2524b05f408832f327ab0188a4ecb375a3a67290"
     },
     {
       "path": "README.en.md",
-      "sha256": "aadc7e25f59305fb48356fa1401e898f72001fa605242ba39716bbbf19d12d60"
+      "sha256": "c686f83a8166aea0cab1c17aabdaf8ce7e35dff3ad50fd3f4433fa396575f201"
     },
     {
       "path": "README.md",
-      "sha256": "825061a9f951449b4500a6364f19f583e1a66ece67a13ba1f40ccf57affb12e3"
+      "sha256": "1a6941a38650d1156f783415900a1b870af8a9b553bb7d8c856466dd96fbedd0"
     },
     {
       "path": "Scripts/export-public-repo.sh",
@@ -66,7 +66,7 @@
     },
     {
       "path": "Sources/JustSaidApp/JustSaidApp.swift",
-      "sha256": "fa972523183cde90eb91f4302d4fbabbd4742990a613f10fd381a394bd3edecd"
+      "sha256": "a9e32f93535b3b6be510d6c78405061724d34cd051f261de838e06edfd9f3ba4"
     },
     {
       "path": "Sources/JustSaidCore/Audio/AcousticEchoCanceller.swift",
@@ -78,7 +78,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Audio/AudioCaptureContracts.swift",
-      "sha256": "8270329ac739921e095de55e040f77c948f97661b9b0f6421a0cfc6373ef75b4"
+      "sha256": "088d3b4debc270be7c2cc064a4fa71151c4e5e9c34f45b7aef179c102ff547e4"
     },
     {
       "path": "Sources/JustSaidCore/Audio/AudioFileValidator.swift",
@@ -90,7 +90,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Audio/IncrementalM4AWriter.swift",
-      "sha256": "b5f41f0fc97047d3801de51de5e44b445c8ecc7b18308f258e1d5b9ae7515d63"
+      "sha256": "805dea1cd2156c00e4763d4719440deb37084113f0e0c572c4c2c7947afee122"
     },
     {
       "path": "Sources/JustSaidCore/Audio/LiveEchoCancellationStage.swift",
@@ -102,7 +102,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Audio/RecordingSession.swift",
-      "sha256": "b8dfc6855e6ca9137f43375ef4c568cb50327bb049b9d2d1894877e2f2691d17"
+      "sha256": "f1f876721ec6e23bb727093c29fbdae635ed41f759fae2831564f449474b1d8d"
     },
     {
       "path": "Sources/JustSaidCore/Audio/RecordingSessionConfiguration.swift",
@@ -114,7 +114,11 @@
     },
     {
       "path": "Sources/JustSaidCore/Audio/SystemAudioCapture.swift",
-      "sha256": "cb5eac39a17c3a5f86962490a5f22aadb8bd14add2f12f7b63b6a3109d9f445c"
+      "sha256": "3a6969f9527791d95f1c1f9b642b4ae76a484ebea54b3e1f4e6ecf0de9a57413"
+    },
+    {
+      "path": "Sources/JustSaidCore/Audio/SystemAudioDeliveryRate.swift",
+      "sha256": "44d151e1a3bdfcc779788f727abf65912fdff139d19a40f4833b81b7051c2cb4"
     },
     {
       "path": "Sources/JustSaidCore/Audio/SystemAudioScope.swift",
@@ -178,15 +182,19 @@
     },
     {
       "path": "Sources/JustSaidCore/Diagnostics/InMeetingFailureRecord.swift",
-      "sha256": "bdd0854c8588c5699db0f6837bd0d110b4328c2d2b55146d1c0315d5ab2255c6"
+      "sha256": "dad75ac3016cedca53a556baf0b2db80cc0237a3f0150520e09c87f17791db39"
     },
     {
       "path": "Sources/JustSaidCore/Diagnostics/LLMRecoveryAdvice.swift",
       "sha256": "f617a4760bf1dae8c6ba5636d236b1b2929a009ae5dde01c2029c96cfa9546b7"
     },
     {
+      "path": "Sources/JustSaidCore/Diagnostics/LiveASREngineLedger.swift",
+      "sha256": "c80fc9e8b3e23c3a6e07974ae1c7d2a92ea170b16e9d03980fe36ba702065451"
+    },
+    {
       "path": "Sources/JustSaidCore/Diagnostics/MeetingDiagnosticsPackageExporter.swift",
-      "sha256": "60d6656e0d6f542171982fbfe384bc56db42340b11ebe01e5f0f403a167d8f20"
+      "sha256": "f5dd7fafd6b35321d7c218eeefc13fd960822433ac70f9198689f0f1c14d91e5"
     },
     {
       "path": "Sources/JustSaidCore/Diagnostics/PostMeetingFailureAdvice.swift",
@@ -197,24 +205,28 @@
       "sha256": "91f884158e5bb8809a8253dda75edc5b307b72b9e73f1e075013c9060b7b5ca8"
     },
     {
+      "path": "Sources/JustSaidCore/LocalModels/LiveProModeFailureWatcher.swift",
+      "sha256": "bea5ec96ff5c24d8f90d9d3bd89569d3f794f1af637b56254d287dd2cbb6c3da"
+    },
+    {
       "path": "Sources/JustSaidCore/LocalModels/LocalModelAssetCatalog.swift",
-      "sha256": "471f0f94d41f1f13cd8ee2f14fb248c9302fc0a29dbbd2238154b301f2e7f2ab"
+      "sha256": "ec104f62151d326805dd0067c3aedbacc92cdc2461674938800695553fe21732"
     },
     {
       "path": "Sources/JustSaidCore/LocalModels/LocalModelAssetManager.swift",
-      "sha256": "3ea1a7d822434a60a3c7f08009a3da372fdd78d8bb18cce2363db72907568997"
+      "sha256": "c0da74b795dc2e9b50c2178193dc47f49218495beb84a48fab36d77780d8734b"
     },
     {
       "path": "Sources/JustSaidCore/LocalModels/LocalModelAssetOperations.swift",
-      "sha256": "60f5e6bc4210bed3558c7181292c3837357c00b4e4cf88cdbc502b248814c8ca"
+      "sha256": "89c9286b82ed588f047b7ed766fcf09969dda215b63c6dfdac82287d4f611015"
     },
     {
       "path": "Sources/JustSaidCore/LocalModels/LocalModelAssetState.swift",
-      "sha256": "5aac554c7981dd0b4dd2ff3486969232bf54f1bf26a04790ec5396dcf17fdacd"
+      "sha256": "489ff42452eed7dfdf90258e03553d9c7d39d565261d541ffa59b99f270eb4a6"
     },
     {
       "path": "Sources/JustSaidCore/LocalModels/ModelAssetDownloadTransport.swift",
-      "sha256": "ade4e3468baee02a6d348fd215b38cccabd1ae9cca76ef2b6bf28eeca5a91b5f"
+      "sha256": "7895b590829a23e5dd47e3cf92dca782bb62de8e01ad14940ad694ab8c74f8ce"
     },
     {
       "path": "Sources/JustSaidCore/MeetingDetection/AppFamilyProcessSource.swift",
@@ -270,7 +282,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Models/ProviderModels.swift",
-      "sha256": "7e267e833158f07252b7457a6063797ce356cac4d38f194e0c8bd0b95e1fce29"
+      "sha256": "bd2d29c4363de83bd6bce1a3232103136a9ad55823a129ad30759c57a3675600"
     },
     {
       "path": "Sources/JustSaidCore/NameAlerts/NameAlertAliasSet.swift",
@@ -354,11 +366,11 @@
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MeetingMetadata.swift",
-      "sha256": "5f5026eefcf6d1b6af335c20634f01097e3089083c209885647196472a837d6e"
+      "sha256": "0d27120bf1d87ee2155a2e30577b0296fb33a9a87e16f330222e6268811fc734"
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MeetingStore.swift",
-      "sha256": "0a7486da5b70020283c92d3d5818f059d9f0735f448eaa5d9735a5587a64e8f6"
+      "sha256": "7a3e2a92f6c17269006f18d578c28cb611d5c8040e6e6fa2bcc8d11137d80438"
     },
     {
       "path": "Sources/JustSaidCore/Persistence/MinutesHistory.swift",
@@ -430,7 +442,7 @@
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingPipeline.swift",
-      "sha256": "767ec59da75db9916b5ab875b269a9bde1c653bbd6198e890761157eadd2be5d"
+      "sha256": "c2ebf7a54022a6803f1d56d4da0d777de5744666a0e664dfdeae22529bf25a22"
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingProgress.swift",
@@ -439,6 +451,10 @@
     {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingStereoAudioComposer.swift",
       "sha256": "6444cfedc5107655dafe1259d72c805bab074c295e8ca1a2b1df3cc46af9c03a"
+    },
+    {
+      "path": "Sources/JustSaidCore/PostMeeting/PostMeetingSystemAudioRestoration.swift",
+      "sha256": "a2f62215cd11391b2562d832b570716ae7a1174c68163e77f1d3156d096c0041"
     },
     {
       "path": "Sources/JustSaidCore/PostMeeting/PostMeetingTaskCoordinator.swift",
@@ -470,7 +486,7 @@
     },
     {
       "path": "Sources/JustSaidCore/Providers/ProviderContracts.swift",
-      "sha256": "541985f8ebe6a96a9bf1e1b42fb77af56f4317ea013f9dda78d64ae6edf19e98"
+      "sha256": "c13a58eef7552bae41db816b4c426d4bfb7f3861ca935de0f5a4966a22d4a785"
     },
     {
       "path": "Sources/JustSaidCore/Providers/ProviderRegistry.swift",
@@ -514,11 +530,11 @@
     },
     {
       "path": "Sources/JustSaidCore/Settings/ProviderSettingsStore.swift",
-      "sha256": "12a3593a5ce5be4123022e800554fc4fa580ff462c92dc880d5c7fd8a8119172"
+      "sha256": "0b97de69af4bc6b0b3712ced659ab660add93d2d717caaf6e9c53e642ac2d861"
     },
     {
       "path": "Sources/JustSaidCore/Summary/LiveSummaryFeed.swift",
-      "sha256": "4fb604e508ba058531d4236fb0464a03fbadc4bfb232f6772e5c1d3441d660c6"
+      "sha256": "5cd8555ce192ba230fdbfc630f0329435f5b4c7b90e339f31e33c45e1a58e8df"
     },
     {
       "path": "Sources/JustSaidCore/Summary/SummaryContracts.swift",
@@ -573,12 +589,20 @@
       "sha256": "94762359c609e3b156694f8538023a864df3d34c2d3ec609dfedfa3adefd3d1f"
     },
     {
+      "path": "Sources/JustSaidCore/Transcription/Backchannel.swift",
+      "sha256": "b6f30df5deee198eb2a8e25c7a896b041f40b1b939aac52f21777572b5682e50"
+    },
+    {
       "path": "Sources/JustSaidCore/Transcription/EchoDeduplicator.swift",
       "sha256": "69d352f6e8364b359f62e4f09b5c87fab08542277f7eab460cf39c93123eca09"
     },
     {
       "path": "Sources/JustSaidCore/Transcription/LiveDecodeObservation.swift",
       "sha256": "d0558142a3578dc5cac33255e870a07e7403b11cd3390810597294425b2df7bd"
+    },
+    {
+      "path": "Sources/JustSaidCore/Transcription/LiveProMode.swift",
+      "sha256": "b3d59a21d12222ebfb26b2f68ce9f1879a3ead0ee4ca2ef8b1cbe4a8e11a7012"
     },
     {
       "path": "Sources/JustSaidCore/Transcription/LiveTranscriptWriter.swift",
@@ -593,8 +617,16 @@
       "sha256": "5bcce03dcad77709abeef541ccaa3ffcffb92d72f3ab61faf71cc0c14b560294"
     },
     {
+      "path": "Sources/JustSaidCore/Transcription/ProGPUPrimaryRecognizer.swift",
+      "sha256": "6df1cfa2aec483c358e6a347d7a5e3ac4dac8f305fcd9cc4dd6884a0ae0716e3"
+    },
+    {
+      "path": "Sources/JustSaidCore/Transcription/Qwen3ASRProtocolHeaders.swift",
+      "sha256": "305bf99af3c50c4bee178ead590740e23fda8e4cf5c3b38db44af9d298b58602"
+    },
+    {
       "path": "Sources/JustSaidCore/Transcription/Qwen3ASRTranscriberEngine.swift",
-      "sha256": "301cf26f98964be2612c9bf1fe6a4570c8b24ac41d25c7f860eb33a1372418e6"
+      "sha256": "5c4dc81e0cbc17e1423a51722f8beef81f184692775da4fea7acd4b7cf8f054b"
     },
     {
       "path": "Sources/JustSaidCore/Transcription/SenseVoiceTranscriberEngine.swift",
@@ -605,8 +637,16 @@
       "sha256": "b206d44e4927368d45a56fc35ec7f2d5ccfa4ac8d031ff1696bc4b7abf834715"
     },
     {
+      "path": "Sources/JustSaidCore/Transcription/TranscribeGPUSession.swift",
+      "sha256": "b0b4902eceb5de7194e841568b29409deea19c2f38358f54528120f1288faf1e"
+    },
+    {
+      "path": "Sources/JustSaidCore/Transcription/TranscribeRuntimeLog.swift",
+      "sha256": "1c4d4fbf10b8e28b296f5e8902abbf68fbc434e5260fb3d078c15400e7582897"
+    },
+    {
       "path": "Sources/JustSaidCore/Transcription/TranscriberEngineFactory.swift",
-      "sha256": "c34b343613129cd2498dd2523e7c890fd6c0733f21d467a051e3ed7bd11ad7ab"
+      "sha256": "c8bdbf104fb791b156cba0a12a53ee09fa636c23b0d811a610f011b40947edf8"
     },
     {
       "path": "Sources/JustSaidUI/DesignSystem/AppAppearance.swift",
@@ -746,7 +786,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/ChannelRoleCard.swift",
-      "sha256": "693e4524b4929607a6ee3c0b6e0df03b1c02cfdbab204d0fcd684e946c9d1fb3"
+      "sha256": "7f7603a4f6db1359485bc99358437e7ac4522837b879ace499ae089aeb4f22f0"
     },
     {
       "path": "Sources/JustSaidUI/Views/ChapterDirectoryView.swift",
@@ -806,7 +846,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/LanguageMismatchBanner.swift",
-      "sha256": "b96aec97dc96be91664e5bed5bed3bae8487afc8b3b9c7eb413c8108daca99d0"
+      "sha256": "40fb503fb825ff92191447384a76dc56b2124cdfa73a7ed88f95e10e89144171"
     },
     {
       "path": "Sources/JustSaidUI/Views/LibraryBadges.swift",
@@ -826,7 +866,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/LiveNoticeRegistry.swift",
-      "sha256": "5855b8549c7867ea522618aa582677a39fbe435ded774011007718c0ebbe6f77"
+      "sha256": "1196a5017a32f48793aff514f3f72e041f15e843adfa9edb2991743075e933d9"
     },
     {
       "path": "Sources/JustSaidUI/Views/LiveTranscriptPresentation.swift",
@@ -834,11 +874,11 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/LocalModelsSettingsCard.swift",
-      "sha256": "9c9552ef98308402982667f34c8685d1663dac138f94df09341cd303bcdf18f8"
+      "sha256": "42503afe5c3288c4b6988509b634ce007bdd1a29a9152f97b6c12eabe5291b81"
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView+Banners.swift",
-      "sha256": "5135e85e89e8f9cd6dbd51d40316ce0e992bfe4f9f6273b55e4de2d6cfdc585b"
+      "sha256": "4e6569c3f3cdf73ffc77c2b73924b54b5b37694c007dae31cd6a6587035fc6f3"
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView+Exclusions.swift",
@@ -850,11 +890,11 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView+Toolbars.swift",
-      "sha256": "3810b7f54e025ce997a67b762be68f46b6dd3e1164df2a22ccbe87b5fafb8320"
+      "sha256": "af5c0d67798f05b41e79251ed1183bc1f32fa127547c4f5626c3f59b0f059059"
     },
     {
       "path": "Sources/JustSaidUI/Views/MainWorkspaceView.swift",
-      "sha256": "b61d79de1e99f5f51ef6ba12706a72ec4358f24faf43c371f2995dfec83c02e6"
+      "sha256": "17670e09658cf7500604dbbd15aa8a8dfa37c5987cb6e3c044bb5940bba0c584"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingDocumentView.swift",
@@ -862,7 +902,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryBackgroundIO.swift",
-      "sha256": "ebef8afbc86dfee3f54a540e4ef1e4a2e8793836e0dcdae456a3375c1fb49233"
+      "sha256": "855ea1feb18576397417d92becbc3320922a635dd6b2d3911e5aea7dc3e76176"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel+ActionItems.swift",
@@ -882,11 +922,11 @@
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryModel.swift",
-      "sha256": "3f6d4fac7b754b60514b6691beea9b49678b65093e845d87769fd7d7da76c8e7"
+      "sha256": "b17634a8046110c1e8c1b10936002dc7eb1bb63676d1aeaf61ddab0bf33bef8d"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailHeader.swift",
-      "sha256": "2f129169b96806c7c3416d35ce3d78835acfdbd06a2c8731399646df451c80b0"
+      "sha256": "1eb5d5acf0c9b6c3380a73ca3dbf5922bc62c088fe96b1971c3a6f347527c42d"
     },
     {
       "path": "Sources/JustSaidUI/Views/MeetingLibraryView+DetailPane.swift",
@@ -969,8 +1009,16 @@
       "sha256": "687d13ab95f719e4b03eee5387c2d0e2db97b4ec57d52438ebac35401420e924"
     },
     {
+      "path": "Sources/JustSaidUI/Views/ProModeSwitchState.swift",
+      "sha256": "52071e454d12127cd01b50375e5de0b66b4c5810e78078b59e762f6cf789202b"
+    },
+    {
+      "path": "Sources/JustSaidUI/Views/ProModeViews.swift",
+      "sha256": "8a30b0c98464a5bd4a0c81eb95ecc0069ba6c29935f6ded193ab7c455ad8dc4c"
+    },
+    {
       "path": "Sources/JustSaidUI/Views/ProviderSettingsView.swift",
-      "sha256": "d22940133c449f15f1da110331afdfd03fe4f558e8541cd9d379c9f765aaafb9"
+      "sha256": "3fda5ca4761b988b4df3200bed4d0e339b0a80ffc76d8d5dd57585f16452cc5c"
     },
     {
       "path": "Sources/JustSaidUI/Views/RecoveryDiagnosticsModel.swift",
@@ -1114,7 +1162,7 @@
     },
     {
       "path": "Sources/JustSaidUI/Windowing/AppCoordinator.swift",
-      "sha256": "875be26f386b3003e106037560b275b7d7ff6c22926e7ffc4508d97fcf4d791f"
+      "sha256": "b43baf33d70b2c86110865ce0d797faa1eed54e07638131a7a51961b35dc245b"
     },
     {
       "path": "Sources/JustSaidUI/Windowing/AppUpdates.swift",
@@ -1154,7 +1202,7 @@
     },
     {
       "path": "Support/LocalModelAssets.json",
-      "sha256": "b4b0c167d7bb563c5265bf6fad1f2502bc6fc2e396d1434abc2ecf6337fd2c21"
+      "sha256": "c6e02eddb30a3ca40973c8c2d5e7a5d03b3a486fe934088fcc6ffd13396c31b6"
     },
     {
       "path": "Support/ThirdPartyLicenses/FunASR-MODEL-LICENSE.txt",
@@ -1170,11 +1218,11 @@
     },
     {
       "path": "Support/ThirdPartyNotices.txt",
-      "sha256": "39ad47455d79abf3b07082d8eecf5f7ce99cf4995db9c15f9927a09d535b4fc5"
+      "sha256": "b5cf9e73ccaf8bfaf2e2e2f3bf17b3e9aec9131852aa95464fbcca953111206e"
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "b20ac5025b3bf3bd738e13be933a7dbfe135f00b5853326779acf4fd0e456371"
+      "sha256": "ba4008c3d791c63f52d52e062b25b8d06f606eaf85879dfdfe548d636a5c5325"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -1182,29 +1230,29 @@
     },
     {
       "path": "docs/publication/Package.public.swift",
-      "sha256": "acbae89b31648eab213b248f0c391dc02ac7cbe23eb788306e776f6f05015617"
+      "sha256": "c7424286dfdde872984b37fb2524b05f408832f327ab0188a4ecb375a3a67290"
     },
     {
       "path": "docs/publication/README.en.public.md",
-      "sha256": "aadc7e25f59305fb48356fa1401e898f72001fa605242ba39716bbbf19d12d60"
+      "sha256": "c686f83a8166aea0cab1c17aabdaf8ce7e35dff3ad50fd3f4433fa396575f201"
     },
     {
       "path": "docs/publication/README.public.md",
-      "sha256": "825061a9f951449b4500a6364f19f583e1a66ece67a13ba1f40ccf57affb12e3"
+      "sha256": "1a6941a38650d1156f783415900a1b870af8a9b553bb7d8c856466dd96fbedd0"
     }
   ],
   "format": 2,
   "manifest_path_excluded_from_file_hashes": "PUBLIC_EXPORT_MANIFEST.json",
   "package_manifest": {
     "canonical_signature": {
-      "canonical_target_count": 35,
+      "canonical_target_count": 36,
       "dependencies": [
         [
           "https://github.com/k2-fsa/sherpa-onnx",
-          "116a44e72c5bb631dcdbdb9c176f0304f5fc6fb0"
+          "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf"
         ]
       ],
-      "expected_public_target_count": 4,
+      "expected_public_target_count": 5,
       "name": "JustSaid",
       "products": [
         [
@@ -1219,7 +1267,7 @@
       "dependencies": [
         [
           "https://github.com/k2-fsa/sherpa-onnx",
-          "116a44e72c5bb631dcdbdb9c176f0304f5fc6fb0"
+          "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf"
         ]
       ],
       "name": "JustSaid",
@@ -1239,9 +1287,15 @@
           "path": null
         },
         {
-          "declaration_digest": "3bc027ec83d4e097",
+          "declaration_digest": "f61f8f2bfd3ba2b1",
           "kind": "target",
           "name": "JustSaidCore",
+          "path": null
+        },
+        {
+          "declaration_digest": "55dbe11322a5763e",
+          "kind": "binaryTarget",
+          "name": "JustSaidTranscribe",
           "path": null
         },
         {
@@ -1262,6 +1316,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "db0f19dda5aa89095a3c01d7f08fec34075eb3f7",
+  "source_sha": "2d66dfaaa812ea5604d759ba8031566475afb8fb",
   "source_status": "clean"
 }

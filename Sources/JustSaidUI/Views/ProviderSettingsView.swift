@@ -103,6 +103,8 @@ public struct ProviderSettingsView: View {
   let meetingDetectionPreferences: MeetingDetectionPreferencesStore?
   let displayTimeZone: DisplayTimeZone?
   let appUpdates: AppUpdatesModel?
+  /// 录音中(开始中、记录中、结束中)本机模型不能下载或删除;工作台按录制会话传入。
+  let isRecording: Bool
   let onDone: (() -> Void)?
 
   @Environment(\.dismiss) private var dismiss
@@ -141,10 +143,12 @@ public struct ProviderSettingsView: View {
     initialSection: SettingsSection = .general,
     section: Binding<SettingsSection>? = nil,
     recoveryRequest: Binding<RecoverySettingsRequest?>? = nil,
+    isRecording: Bool = false,
     /// 壳里的一页用它回上一页;仍以弹窗出现时留空,走 `dismiss`。
     onDone: (() -> Void)? = nil
   ) {
     self.onDone = onDone
+    self.isRecording = isRecording
     _localSection = State(initialValue: initialSection)
     externalSection = section
     self.recoveryRequest = recoveryRequest
@@ -239,8 +243,14 @@ public struct ProviderSettingsView: View {
 
           ChannelRoleCard(
             role: .liveTranscriber, registry: registry, settingsStore: settingsStore,
-            secretDigest: secretDigest, modelAssetManager: modelAssetManager
-          ) { LocalModelsSettingsRow(manager: modelAssetManager) }
+            secretDigest: secretDigest, modelAssetManager: modelAssetManager,
+            isRecording: isRecording
+          ) {
+            LocalModelsSettingsRow(manager: modelAssetManager, isRecording: isRecording) {
+              // 删除 Pro 模型,开关同步回关(设计系统 README「Pro 模式」)。
+              if $0 == LocalModelKnownIDs.qwenLivePro { settingsStore.setLiveProMode(false) }
+            }
+          }
           // 会中总结拆成快、慢两张卡(10-01 三路配置),各自定位恢复锚点。
           ForEach([LLMLane.fastSummary, .slowSummary], id: \.self) { lane in
             VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {

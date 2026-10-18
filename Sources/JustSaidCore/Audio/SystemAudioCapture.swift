@@ -287,7 +287,9 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       tapFormatSnapshot: capturePlan.tapFormat,
       selectedStreamID: selectedStream.streamID,
       downmixer: downmixer,
-      writeFormat: downmixer?.outputFormat ?? format
+      writeFormat: downmixer?.outputFormat ?? format,
+      aggregateNominalSampleRate: Self.nominalSampleRate(of: aggregateDeviceID),
+      outputNominalSampleRate: Self.nominalSampleRate(of: outputDeviceID)
     )
   }
 
@@ -301,7 +303,15 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
     bufferHandler: AudioPCMBufferHandler?
   ) throws {
     let format = plan.format
-    let handoff = TapBufferHandoffBox(downmixer: plan.downmixer)
+    let handoff = TapBufferHandoffBox(
+      downmixer: plan.downmixer,
+      rateCorrector: SystemAudioRateCorrector(outputFormat: plan.writeFormat)
+    )
+    // Core Audio's labels can disagree with the frames it actually delivers (44.1 kHz
+    // frames under a 48 kHz label on WeChat calls); each activation measures delivery.
+    let declaredSampleRate = format.sampleRate
+    let rateMonitor = SystemAudioDeliveryRateMonitor(declaredSampleRate: declaredSampleRate)
+    let rateCorrectionFailureLog = OnceFlag()
     let inputState = try installStreamConfigurationListener(
       tapFormat: plan.tapFormatSnapshot,
       expectedVirtualFormat: AggregateInputStreamFormat(format.streamDescription.pointee),
@@ -311,13 +321,14 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       let layout = inputState.layout
       let writerFormat = AggregateInputStreamFormat(plan.writeFormat.streamDescription.pointee)
       logger.notice(
-        "系统音频格式计划已确认：tap=\(Self.formatLogDescription(plan.tapFormatSnapshot), privacy: .public) selectedStream=\(layout?.selectedStream?.streamID ?? 0, privacy: .public) range=\(layout?.tapBufferRange.description ?? "invalid", privacy: .public) input=\(Self.formatLogDescription(layout?.selectedStream?.virtualFormat), privacy: .public) writer=\(Self.formatLogDescription(writerFormat), privacy: .public)"
+        "系统音频格式计划已确认：tap=\(Self.formatLogDescription(plan.tapFormatSnapshot), privacy: .public) selectedStream=\(layout?.selectedStream?.streamID ?? 0, privacy: .public) range=\(layout?.tapBufferRange.description ?? "invalid", privacy: .public) input=\(Self.formatLogDescription(layout?.selectedStream?.virtualFormat), privacy: .public) writer=\(Self.formatLogDescription(writerFormat), privacy: .public) clock=\(plan.aggregateNominalSampleRate ?? 0, privacy: .public) output=\(plan.outputNominalSampleRate ?? 0, privacy: .public)"
       )
     }
     let layoutMismatchLog = OnceFlag()
     let callback: AudioDeviceIOBlock = {
       [
-        failureBox, logger, lossStatsBox, inputState, layoutMismatchLog, handoff
+        failureBox, logger, lossStatsBox, inputState, layoutMismatchLog, handoff, rateMonitor,
+        rateCorrectionFailureLog
       ]
       _, inputData, inputTime, _, _ in
       guard !inputState.isRetired else { return }
@@ -340,6 +351,7 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       // No Core Audio property query or channel-only fallback in the callback.
       // Admission and PCM copying consume this activation's monitored layout.
       guard let rawBuffer = inputState.makeOwned(from: inputData) else {
+        rateMonitor.interrupt()
         Self.recordDroppedInputFrames(
           source: source,
           format: format,
@@ -353,6 +365,19 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
       }
       layoutMismatchLog.reset()
 
+      if let adopted = rateMonitor.observe(
+        captureTime: captureTime, frameCount: rawBuffer.frameLength)
+      {
+        let matchesLabel = SystemAudioDeliveryRateMonitor.sameRate(adopted, declaredSampleRate)
+        if !matchesLabel {
+          lossStatsBox.recordDeliveredSampleRate(adopted)
+        }
+        logger.notice(
+          "系统音频实测送帧 \(adopted, privacy: .public) Hz，声明 \(declaredSampleRate, privacy: .public) Hz，\(matchesLabel ? "恢复按声明写入" : "按实测换算回声明格式", privacy: .public)"
+        )
+      }
+      let deliveredSampleRate = rateMonitor.deliveredSampleRate
+
       let frameCount = UInt64(rawBuffer.frameLength)
       lossStatsBox.recordCapturedFrames(frameCount)
       let ticket = handoff.stage(rawBuffer)
@@ -360,7 +385,7 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
         guard let rawBuffer = handoff.take(ticket) else {
           return
         }
-        let buffer: AVAudioPCMBuffer
+        var buffer: AVAudioPCMBuffer
         if let downmixer = handoff.downmixer {
           guard let converted = downmixer.convert(rawBuffer) else {
             if failureBox.record(AudioCaptureError.audioWriteFailed("多声道降混失败")) {
@@ -371,6 +396,26 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
           buffer = converted
         } else {
           buffer = rawBuffer
+        }
+        if SystemAudioDeliveryRateMonitor.sameRate(deliveredSampleRate, declaredSampleRate) {
+          handoff.rateCorrector.reset()
+        } else {
+          do {
+            let corrected = try handoff.rateCorrector.correct(
+              buffer, deliveredSampleRate: deliveredSampleRate)
+            lossStatsBox.recordRateCorrectedFrames(UInt64(buffer.frameLength))
+            // The converter keeps a little look-ahead; what it holds comes out next block.
+            guard corrected.frameLength > 0 else { return }
+            buffer = corrected
+          } catch {
+            // Keep the uncorrected block: the recording continues as it did before
+            // delivery was measured, which beats losing the far side.
+            if rateCorrectionFailureLog.mark() {
+              logger.error(
+                "系统音频按实测速率换算失败，本段按声明写入：\(error.localizedDescription, privacy: .public)"
+              )
+            }
+          }
         }
 
         var writeError: Error?
@@ -915,6 +960,20 @@ public final class SystemAudioCapture: SystemAudioCapturing, @unchecked Sendable
     return deviceID
   }
 
+  /// Diagnostics only; nil when the device does not answer.
+  private static func nominalSampleRate(of deviceID: AudioObjectID) -> Double? {
+    guard deviceID != kAudioObjectUnknown else { return nil }
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioDevicePropertyNominalSampleRate,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var rate: Float64 = 0
+    var size = UInt32(MemoryLayout<Float64>.size)
+    let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate)
+    return status == noErr && rate > 0 ? rate : nil
+  }
+
   private static func deviceUID(for deviceID: AudioDeviceID) throws -> String {
     var address = AudioObjectPropertyAddress(
       mSelector: kAudioDevicePropertyDeviceUID,
@@ -971,6 +1030,10 @@ private struct CoreAudioPipelinePlan {
   let selectedStreamID: AudioStreamID
   let downmixer: PCMStereoDownmixer?
   let writeFormat: AVAudioFormat
+  /// Diagnostics only: the clock the aggregate and its main output device report.
+  /// Delivery is judged by `SystemAudioDeliveryRateMonitor`, not by these labels.
+  let aggregateNominalSampleRate: Double?
+  let outputNominalSampleRate: Double?
 }
 
 // Safety invariant: the ticket map is lock-protected and each ticket is taken exactly
@@ -984,9 +1047,11 @@ private final class TapBufferHandoffBox: @unchecked Sendable {
   private var pending: [UInt64: AVAudioPCMBuffer] = [:]
   private var nextTicket: UInt64 = 0
   let downmixer: PCMStereoDownmixer?
+  let rateCorrector: SystemAudioRateCorrector
 
-  init(downmixer: PCMStereoDownmixer?) {
+  init(downmixer: PCMStereoDownmixer?, rateCorrector: SystemAudioRateCorrector) {
     self.downmixer = downmixer
+    self.rateCorrector = rateCorrector
   }
 
   func stage(_ buffer: AVAudioPCMBuffer) -> UInt64 {

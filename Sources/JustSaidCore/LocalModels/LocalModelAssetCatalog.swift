@@ -4,6 +4,8 @@ import Foundation
 public enum LocalModelKnownIDs {
   public static let qwenLive = "qwen-live"
   public static let sensevoiceLive = "sensevoice-live"
+  /// 可选的 Pro 模式模型(Qwen3-ASR-1.7B Q8_0 GGUF)。不映射到任何 provider,不进开会门。
+  public static let qwenLivePro = "qwen-live-pro"
   public static let appleSpeechAnalyzer = "apple-speech-analyzer"
   public static let qwenProvider = "qwen3-asr-0.6b"
   public static let sensevoiceProvider = "sensevoice-small"
@@ -88,6 +90,14 @@ public struct LocalModelAssetCatalog: Equatable, Sendable {
 
   public func installedBytes(forCapabilityID capabilityID: String) -> Int64 {
     assets(forCapabilityID: capabilityID).reduce(into: Int64(0)) { $0 += $1.installedBytes }
+  }
+
+  /// 删除这项能力时会删掉的资产:可选能力里不被任何必需能力引用的那几项。
+  /// 必需能力返回空;与必需能力共用的资产(Silero VAD)永远不在里面。
+  public func removableAssets(forCapabilityID capabilityID: String) -> [LocalModelAsset] {
+    guard let capability = capabilitiesByID[capabilityID], !capability.required else { return [] }
+    let requiredAssetIDs = Set(capabilities.filter(\.required).flatMap(\.assetIDs))
+    return assets(forCapabilityID: capabilityID).filter { !requiredAssetIDs.contains($0.id) }
   }
 }
 
@@ -204,6 +214,9 @@ extension LocalModelAssetCatalog {
     var assets: [LocalModelAsset] = []
     var assetIDs = Set<String>()
     var allInstallPaths = Set<String>()
+    // 删除(与修复)按整个 `directoryName` 改名、删除:两项资产共用一个顶层目录,删可选的那项就会
+    // 连带删掉必需的;点开头的是 `.staging`、`.transactions` 这类保留目录。
+    var directoryNames = Set<String>()
     var downloadTotal: Int64 = 0
     var installedTotal: Int64 = 0
 
@@ -213,6 +226,11 @@ extension LocalModelAssetCatalog {
         throw LocalModelCatalogError.invalid("重复的资产 ID")
       }
       assetIDs.insert(asset.id)
+      guard !asset.directoryName.hasPrefix("."),
+        directoryNames.insert(asset.directoryName).inserted
+      else {
+        throw LocalModelCatalogError.invalid("资产安装目录重复或使用保留目录")
+      }
       for file in asset.installedFiles {
         if allInstallPaths.contains(file.path) {
           throw LocalModelCatalogError.invalid("重复的安装路径")
@@ -487,7 +505,13 @@ enum LocalModelPathSecurity {
 }
 
 public enum LocalModelByteDisplay {
-  public static func megabytes(_ bytes: Int64) -> String {
+  /// 十进制单位,与下载页、访达一致。不到 1 GB 写整数 MB(879 MB、163 MB),
+  /// 从 1 GB 起写一位小数的 GB(2.2 GB)——Pro 模型写成 2200 MB 读不出量级。
+  public static func size(_ bytes: Int64) -> String {
+    if bytes >= 1_000_000_000 {
+      let tenths = (bytes + 50_000_000) / 100_000_000
+      return "\(tenths / 10).\(tenths % 10) GB"
+    }
     let mb = (bytes + 500_000) / 1_000_000
     return "\(mb) MB"
   }

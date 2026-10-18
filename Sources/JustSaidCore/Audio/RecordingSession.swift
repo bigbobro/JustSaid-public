@@ -171,6 +171,10 @@ public final class RecordingSession: ObservableObject {
   )
   @Published public private(set) var currentMeetingDirectory: URL?
   @Published public private(set) var currentTitle: String?
+  /// 本场开录语言。成功开录后偏好会回到 auto，会中标签和横幅读这里，不读偏好。
+  @Published public private(set) var currentLanguage: MeetingLanguage?
+  /// 本场速记引擎能否会中换语种(`LiveLanguageSwitching`)。不能时会中只读,改选只管下一场。
+  @Published public private(set) var canSwitchLanguageLive = false
   @Published public private(set) var issue: RecordingSessionIssue?
   @Published public private(set) var liveSegments: [TranscriptSegment] = []
 
@@ -213,6 +217,9 @@ public final class RecordingSession: ObservableObject {
   @Published public private(set) var sourceApp: MeetingCallInfo?
   /// 系统声录制范围的会中提示（回退成全局、tap 里全零）。运行时状态，不入 meeting.json。
   @Published public private(set) var systemAudioScopeNotice: SystemAudioScopeNotice?
+  /// Pro 模式的那一句中性提示(PR-08;界面在 PR-10 画):开录时 Pro 模型需要修复,或会中改用了标准识别。
+  /// 同一场最多一句,下一场开始与散会时清空。运行时状态,不入 meeting.json(那里记 `liveTranscriber`)。
+  @Published public private(set) var liveEngineNotice: LiveEngineNotice?
   /// 单路失败的非模态横幅文案(08-05 事故:单路失败不再拖垮整场,不弹模态对话框)。
   /// 非 nil 即"部分完成":整场仍是 completed,会后流水线照常;文案含缺失起点与保住了什么。
   @Published public private(set) var partialCaptureNotice: String?
@@ -244,6 +251,9 @@ public final class RecordingSession: ObservableObject {
     let target: MicrophoneInputTarget
   }
   private let transcriberFactory: @Sendable (String) throws -> any TranscriberEngine
+  /// 本场走 Pro 时建会中引擎(PR-08),第二个参数是 1.7B 模型文件。默认交 `TranscriberEngineFactory`;
+  /// 只在 `LiveProPlan.pro` 且绑定是 Qwen3-ASR 时用,其余一律走 `transcriberFactory`。
+  private let proTranscriberFactory: @Sendable (String, URL) throws -> any TranscriberEngine
   private let healthPolicy: CaptureHealthPolicy
   private let configuration: RecordingSessionConfiguration
   /// 启动失败证据的落点(诊断包整目录收集该目录,证据自动进包)。
@@ -262,6 +272,14 @@ public final class RecordingSession: ObservableObject {
   private var finalLiveEchoCancellationStatistics: LiveEchoCancellationStatistics?
   private var transcriptionDelivery: RecordingTranscriptionDelivery?
   private var transcriberResultsTask: Task<Error?, Never>?
+  /// 消费引擎的 `engineEvents`(Pro 回退);引擎 stop 结束事件流后随之结束。
+  private var liveEngineEventsTask: Task<Void, Never>?
+  /// 本场开会时定的 Pro 计划、会中速记的 providerID,以及引擎 stop 返回时的报告与记录(散会写盘与账本用)。
+  private var liveProPlan: LiveProPlan = .off
+  private var liveTranscriberProviderID: String?
+  private var finalLiveEngineReport: TranscriberLiveEngineReport?
+  private var finalLiveTranscriberRecord: LiveTranscriberRecord?
+  private var liveEngineDrainedAt: Date?
   private var liveTranscriptWriter: LiveTranscriptWriter?
   private var transcriberASRAnchorGapFrames: [AudioSource: UInt64] = [:]
   private var transcriberLiveEmissionStats: [AudioSource: LiveEmissionStats] = [:]
@@ -330,6 +348,10 @@ public final class RecordingSession: ObservableObject {
     transcriberFactory: @escaping @Sendable (String) throws -> any TranscriberEngine = {
       try TranscriberEngineFactory().make(providerID: $0)
     },
+    proTranscriberFactory: @escaping @Sendable (String, URL) throws -> any TranscriberEngine = {
+      try TranscriberEngineFactory().make(
+        providerID: $0, pro: ProRecognizerConfiguration(proModelURL: $1))
+    },
     healthPolicy: CaptureHealthPolicy = CaptureHealthPolicy(),
     configuration: RecordingSessionConfiguration = RecordingSessionConfiguration(),
     completenessScan: @escaping @Sendable (MeetingPaths) -> Void = {
@@ -346,6 +368,7 @@ public final class RecordingSession: ObservableObject {
     self.microphoneInputSettings = microphoneInputSettings ?? MicrophoneInputSettings()
     self.verificationMicrophoneWaiter = verificationMicrophoneWaiter
     self.transcriberFactory = transcriberFactory
+    self.proTranscriberFactory = proTranscriberFactory
     self.healthPolicy = healthPolicy
     self.configuration = configuration
     self.completenessScan = completenessScan
@@ -509,7 +532,8 @@ public final class RecordingSession: ObservableObject {
     providers: [RoleProviderBinding],
     systemAudioProcessIDs: [pid_t]? = nil,
     sourceApp: MeetingCallInfo? = nil,
-    systemAudioFamily: (any AppFamilyProcessSource)? = nil
+    systemAudioFamily: (any AppFamilyProcessSource)? = nil,
+    livePro: LiveProPlan = .off
   ) async {
     guard phase == .idle || phase == .completed || phase == .failed else {
       return
@@ -559,6 +583,12 @@ public final class RecordingSession: ObservableObject {
     // 会议检测提醒启动的记录带着被确认的会议 App；手动开始为 nil。只在内存里，P2 按它决定录哪些进程。
     self.sourceApp = sourceApp
     systemAudioScopeNotice = nil
+    liveEngineNotice = nil
+    liveProPlan = livePro
+    liveTranscriberProviderID = nil
+    finalLiveEngineReport = nil
+    finalLiveTranscriberRecord = nil
+    liveEngineDrainedAt = nil
     systemScope = nil
     _ = tapPeakProbe.drain()
     issue = nil
@@ -567,6 +597,8 @@ public final class RecordingSession: ObservableObject {
     currentRecord = nil
     currentMeetingDirectory = nil
     currentTitle = nil
+    currentLanguage = nil
+    canSwitchLanguageLive = false
     liveSegments = []
     startedAt = nil
     transcriberASRAnchorGapFrames = [:]
@@ -610,6 +642,7 @@ public final class RecordingSession: ObservableObject {
       currentRecord = record
       currentMeetingDirectory = record.paths.directory
       currentTitle = record.metadata.title
+      currentLanguage = record.metadata.language
       startedAt = record.metadata.startedAt
 
       trace.begin(stage: "transcriber")
@@ -619,6 +652,7 @@ public final class RecordingSession: ObservableObject {
         record: record
       )
       logStartupStage("transcriber")
+      canSwitchLanguageLive = transcriberEngine is any LiveLanguageSwitching
 
       let activeTranscriber = transcriberEngine
       let delivery = RecordingTranscriptionDelivery()
@@ -917,6 +951,8 @@ public final class RecordingSession: ObservableObject {
     currentRecord = nil
     currentMeetingDirectory = nil
     currentTitle = nil
+    currentLanguage = nil
+    canSwitchLanguageLive = false
     startedAt = nil
     liveSegments = []
     issue = nil
@@ -946,9 +982,11 @@ public final class RecordingSession: ObservableObject {
     }
 
     phase = .stopping
+    let stopRequestedAt = Date()
     microphoneLevel = 0
     issue = nil
     partialCaptureNotice = nil
+    liveEngineNotice = nil
 
     DiagnosticEventLedger.shared.append(
       event: "recording.stopRequested",
@@ -966,6 +1004,7 @@ public final class RecordingSession: ObservableObject {
     async let microphoneStop = stopCaptureLeg(.microphone)
     async let systemAudioStop = stopCaptureLeg(.systemAudio)
     let (microphoneError, systemAudioError) = await (microphoneStop, systemAudioStop)
+    let captureStoppedAt = Date()
 
     let transcriptionError = await stopTranscription()
     sessionEpochHostTime = nil
@@ -996,11 +1035,18 @@ public final class RecordingSession: ObservableObject {
         liveEchoCancellation: finalLiveEchoCancellationStatistics,
         captureLegFailures: legFailures.isEmpty ? nil : legFailures,
         captureInterruptions: captureInterruptions.isEmpty ? nil : captureInterruptions,
+        liveTranscriber: finalLiveTranscriberRecord,
         for: record
       )
     } catch {
       fatalError = fatalError ?? error
     }
+    recordLiveEngineLedger(
+      meetingID: record.metadata.id,
+      stopRequestedAt: stopRequestedAt,
+      captureStoppedAt: captureStoppedAt,
+      persistedAt: fatalError == nil ? Date() : nil
+    )
 
     if let fatalError {
       phase = .failed
@@ -1050,6 +1096,34 @@ public final class RecordingSession: ObservableObject {
     // utility 任务横跨整段用户操作仍未调度,远超本单毫秒级竞态窗口,不设防)。
     pendingCompletenessScan = Task.detached(priority: .utility) {
       scan(scannedPaths)
+    }
+  }
+
+  /// 诊断账本每场一行(引擎、Pro 接手与改用、三个完成点),落在 `diagnosticsRoot`。留痕不挡散会。
+  private func recordLiveEngineLedger(
+    meetingID: UUID,
+    stopRequestedAt: Date,
+    captureStoppedAt: Date,
+    persistedAt: Date?
+  ) {
+    guard let record = finalLiveTranscriberRecord else { return }
+    func seconds(_ date: Date?) -> Double? {
+      date.map { $0.timeIntervalSince(stopRequestedAt) }
+    }
+    let entry = LiveASREngineLedgerEntry(
+      recordedAt: Date(),
+      meetingHash: MeetingDiagnosticsPackageExporter.meetingHash(for: meetingID),
+      record: record,
+      proPlan: liveProPlan,
+      report: finalLiveEngineReport,
+      captureStoppedAfterSeconds: seconds(captureStoppedAt),
+      asrDrainedAfterSeconds: seconds(liveEngineDrainedAt),
+      persistedAfterSeconds: seconds(persistedAt)
+    )
+    do {
+      try LiveASREngineLedger(diagnosticsRoot: diagnosticsRoot).append(entry)
+    } catch {
+      logger.error("会中速记账本写入失败：\(error.localizedDescription, privacy: .public)")
     }
   }
 
@@ -1147,6 +1221,51 @@ public final class RecordingSession: ObservableObject {
       microphonePauseIntervals[index].start,
       captureTime
     )
+  }
+
+  /// 会中切换识别语种(owner 2026-10-16 定)。只换速记引擎下一段解码的语种,
+  /// 音频链路和已出的片段都不动。返回 false 表示不在录制、语种没变或引擎不支持。
+  /// meeting.json 的 language 跟着改成本场最后用的语种;会后精转语种仍按速记文本检测。
+  @discardableResult
+  public func switchLanguage(to language: MeetingLanguage) -> Bool {
+    guard
+      phase == .recording,
+      let previous = currentLanguage,
+      previous != language,
+      let engine = transcriberEngine as? any LiveLanguageSwitching
+    else {
+      return false
+    }
+    engine.switchLanguage(to: language)
+    currentLanguage = language
+    let captureTime = currentCaptureTime() ?? 0
+    logger.notice(
+      "会中切换识别语种：\(previous.rawValue, privacy: .public) → \(language.rawValue, privacy: .public)，会议第 \(captureTime, privacy: .public) 秒起的新片段生效"
+    )
+    DiagnosticEventLedger.shared.append(
+      event: "recording.languageSwitch",
+      source: "RecordingSession",
+      fields: DiagnosticEventFields(
+        family: "transcription",
+        operation: "languageSwitch",
+        purpose: "recording",
+        origin: "user",
+        stage: "\(previous.rawValue)->\(language.rawValue)",
+        outcome: "switched"
+      )
+    )
+    if let record = currentRecord {
+      do {
+        let metadata = try store.mutateMetadata(at: record.paths) { $0.language = language }
+        currentRecord = MeetingRecord(paths: record.paths, metadata: metadata)
+      } catch {
+        // 引擎已经切换;只是 meeting.json 留着开录语种,不影响本场识别。
+        logger.error(
+          "会中切换语种写入 meeting.json 失败：\(error.localizedDescription, privacy: .public)"
+        )
+      }
+    }
+    return true
   }
 
   private func persistMicrophonePauseIntervals() {
@@ -2146,11 +2265,29 @@ public final class RecordingSession: ObservableObject {
         return
       }
 
-      let engine = try transcriberFactory(binding.providerID)
+      let isQwen = binding.providerID == LocalModelKnownIDs.qwenProvider
+      let engine: any TranscriberEngine
+      if case .pro(let modelURL) = liveProPlan, isQwen {
+        engine = try proTranscriberFactory(binding.providerID, modelURL)
+      } else {
+        engine = try transcriberFactory(binding.providerID)
+      }
       // 观察流按需建立,必须在引擎开始解码前取得。
       let observations = (engine as? any LiveDecodeObservationProviding)?.decodeObservations
       try await engine.start(language: language)
       transcriberEngine = engine
+      liveTranscriberProviderID = binding.providerID
+      if liveProPlan == .standardNeedsRepair, isQwen {
+        liveEngineNotice = .standardNeedsRepair
+      }
+      if let events = (engine as? any LiveEngineEventProviding)?.engineEvents {
+        // 引擎 stop 结束事件流,任务随之结束;stopTranscription 等它收尾。
+        liveEngineEventsTask = Task { [weak self] in
+          for await event in events {
+            self?.receive(event)
+          }
+        }
+      }
       guard let observations else {
         transcriberResultsTask = Task { [weak self] in
           var firstError: Error?
@@ -2245,12 +2382,22 @@ public final class RecordingSession: ObservableObject {
     }
     let engine = transcriberEngine
     let resultsTask = transcriberResultsTask
+    let eventsTask = liveEngineEventsTask
     let writer = liveTranscriptWriter
     transcriberEngine = nil
     transcriberResultsTask = nil
+    liveEngineEventsTask = nil
     liveTranscriptWriter = nil
 
     await engine?.stop()
+    if let engine, let providerID = liveTranscriberProviderID {
+      // 引擎排空(stop 返回)的时刻与本场引擎记录;散会写进 meeting.json 与诊断账本。
+      liveEngineDrainedAt = Date()
+      await eventsTask?.value
+      let report = (engine as? any TranscriberLiveEngineReporting)?.liveEngineReport
+      finalLiveEngineReport = report
+      finalLiveTranscriberRecord = LiveTranscriberRecord(providerID: providerID, report: report)
+    }
     if let statsProvider = engine as? any TranscriberASRAnchorGapFramesProviding {
       transcriberASRAnchorGapFrames = Dictionary(
         uniqueKeysWithValues: AudioSource.allCases.map { source in
@@ -2275,6 +2422,16 @@ public final class RecordingSession: ObservableObject {
       firstError = firstError ?? error
     }
     return firstError
+  }
+
+  /// 会中改用标准识别:提示只置一次;散会途中(引擎排空时)才到的不再亮出来,记录照样从报告里取。
+  private func receive(_ event: LiveEngineEvent) {
+    switch event {
+    case .fellBackToStandard(let callIndex, _):
+      logger.notice("会中速记已改用标准识别(第 \(callIndex, privacy: .public) 次 GPU 调用)")
+      guard phase == .recording, liveEngineNotice == nil else { return }
+      liveEngineNotice = .fellBackToStandard
+    }
   }
 
   private func receive(_ segment: TranscriptSegment) {

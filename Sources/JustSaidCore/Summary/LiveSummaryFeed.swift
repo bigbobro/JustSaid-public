@@ -123,6 +123,9 @@ private struct SummaryLaneRuntime {
   /// 连续失败次数,成功即清零。纯内存,不落盘——它只用来把"一直失败"与"抖一下"
   /// 在界面上分开(08-10 D6:两者原来长得一模一样,黄带永远挂着)。
   var consecutiveFailures = 0
+  /// 这一路还没补上的失败(2026-10-16,Shaobo:重试补上了就不该在会后报)。这一路下一次
+  /// 成功就清掉;内容确实丢了(慢路强制跳过留缺口卡)或散会时还没补上,才并进会后留痕。
+  var unresolvedInMeetingFailures = InMeetingFailureLog()
 }
 
 private enum SummaryAttemptOutcome {
@@ -498,6 +501,8 @@ public final class LiveSummaryFeed: SummaryFeed {
     self[.slow].failure = nil
     self[.fast].consecutiveFailures = 0
     self[.slow].consecutiveFailures = 0
+    self[.fast].unresolvedInMeetingFailures.reset()
+    self[.slow].unresolvedInMeetingFailures.reset()
     pendingSlowCommit = nil
     parseFailureDiagnosticsWritten = 0
     parseFailureDiagnosticsDropped = 0
@@ -560,7 +565,7 @@ public final class LiveSummaryFeed: SummaryFeed {
           recoveryAdvice: LLMRecoveryAdvice.project(error, context: .init(feature: .liveSummary))
         )
         self[.slow].consecutiveFailures += 1
-        noteInMeetingFailure(self[.slow].failure)
+        noteInMeetingFailure(self[.slow].failure, lane: .slow)
       }
     }
     refreshStatus()
@@ -568,18 +573,28 @@ public final class LiveSummaryFeed: SummaryFeed {
     startPostMeetingPipeline(runCloudPipeline: runPostMeeting)
   }
 
-  private func noteInMeetingFailure(_ failure: SummaryLaneFailure?) {
+  private func noteInMeetingFailure(_ failure: SummaryLaneFailure?, lane: SummaryLane) {
     guard let failure else { return }
     // 写盘失败的投影是 unknown,说不清;按分类记成 persistence。
     let cause =
       failure.category == .persistence
       ? InMeetingFailureRecord.persistenceCause
       : failure.recoveryAdvice?.cause.rawValue ?? failure.category.rawValue
-    inMeetingFailures.note(.liveSummary, cause: cause)
+    self[lane].unresolvedInMeetingFailures.note(.liveSummary, cause: cause)
+  }
+
+  /// 这一路的未决失败有了结果:补上了就只留在全局诊断账本里,没补上才进会后留痕。
+  private func settleInMeetingFailures(_ lane: SummaryLane, recovered: Bool) {
+    if !recovered {
+      inMeetingFailures.absorb(self[lane].unresolvedInMeetingFailures)
+    }
+    self[lane].unresolvedInMeetingFailures.reset()
   }
 
   /// 散会写盘。失败不挡结束流程:这是留痕,不是产物。
   private func flushInMeetingFailures() {
+    settleInMeetingFailures(.fast, recovered: false)
+    settleInMeetingFailures(.slow, recovered: false)
     guard let meetingPaths, !inMeetingFailures.records.isEmpty else { return }
     _ = try? meetingStore.recordInMeetingFailures(inMeetingFailures.records, at: meetingPaths)
     inMeetingFailures.reset()
@@ -716,6 +731,8 @@ public final class LiveSummaryFeed: SummaryFeed {
       parseFailureDiagnosticsDropped = 0
       slowFailuresAtCoveragePoint = 0
       inMeetingFailures.reset()
+      self[.fast].unresolvedInMeetingFailures.reset()
+      self[.slow].unresolvedInMeetingFailures.reset()
       if isActive {
         cancelLaneRunners()
         self[.fast].failure = nil
@@ -1018,6 +1035,7 @@ public final class LiveSummaryFeed: SummaryFeed {
       lastFastCovered = max(lastFastCovered, covered)
       self[.fast].failure = nil
       self[.fast].consecutiveFailures = 0
+      settleInMeetingFailures(.fast, recovered: true)
       if let previousFailure {
         logRecovery(
           lane: .fast,
@@ -1351,6 +1369,7 @@ public final class LiveSummaryFeed: SummaryFeed {
       publishPendingSlow(candidate)
       self[.slow].failure = nil
       self[.slow].consecutiveFailures = 0
+      settleInMeetingFailures(.slow, recovered: true)
       slowFailuresAtCoveragePoint = 0
       pendingSlowCommit = nil
       if let previousFailure {
@@ -1386,7 +1405,7 @@ public final class LiveSummaryFeed: SummaryFeed {
         recoveryAdvice: LLMRecoveryAdvice.project(error, context: .init(feature: .liveSummary))
       )
       self[.slow].consecutiveFailures += 1
-      noteInMeetingFailure(self[.slow].failure)
+      noteInMeetingFailure(self[.slow].failure, lane: .slow)
       logRecovery(
         lane: .slow,
         stage: .persistence,
@@ -1439,6 +1458,8 @@ public final class LiveSummaryFeed: SummaryFeed {
     guard maximumTime > lastSlowCovered else { return }
     let gapStart = lastSlowCovered
     lastSlowCovered = maximumTime
+    // 这一段确实没总结上:之前的失败不算补上了。
+    settleInMeetingFailures(.slow, recovered: false)
     logger.notice(
       "lane=slow forced coverage advance after \(self.slowFailuresAtCoveragePoint, privacy: .public) consecutive parse/timeout failures: skipped \(Int(gapStart), privacy: .public)s-\(Int(maximumTime), privacy: .public)s"
     )
@@ -1469,6 +1490,7 @@ public final class LiveSummaryFeed: SummaryFeed {
       publishPendingSlow(candidate)
       self[.slow].failure = nil
       self[.slow].consecutiveFailures = 0
+      settleInMeetingFailures(.slow, recovered: true)
       slowFailuresAtCoveragePoint = 0
       pendingSlowCommit = nil
     } catch {
@@ -1478,7 +1500,7 @@ public final class LiveSummaryFeed: SummaryFeed {
         recoveryAdvice: LLMRecoveryAdvice.project(error, context: .init(feature: .liveSummary))
       )
       self[.slow].consecutiveFailures += 1
-      noteInMeetingFailure(self[.slow].failure)
+      noteInMeetingFailure(self[.slow].failure, lane: .slow)
       logRecovery(
         lane: .slow,
         stage: .persistence,
@@ -2085,7 +2107,7 @@ public final class LiveSummaryFeed: SummaryFeed {
     )
     self[lane].failure = failure
     self[lane].consecutiveFailures += 1
-    noteInMeetingFailure(failure)
+    noteInMeetingFailure(failure, lane: lane)
     logRecovery(
       lane: lane,
       stage: stage,
@@ -2464,14 +2486,7 @@ extension LiveSummaryFeed {
     guard normalized.count > 6 else {
       return true
     }
-    var rest = Substring(normalized)
-    while !rest.isEmpty {
-      guard let token = backchannelTokens.first(where: { rest.hasPrefix($0) }) else {
-        return false
-      }
-      rest = rest.dropFirst(token.count)
-    }
-    return true
+    return Backchannel.consistsOfTokens(normalized)
   }
 
   /// 第一人称行动承诺的标志(命中即不作附和处理)。
@@ -2479,16 +2494,6 @@ extension LiveSummaryFeed {
     "我来", "我去", "我做", "我改", "我发", "我查", "我写", "我办",
     "我跟进", "我负责", "我安排", "我处理", "iwill",
   ]
-
-  /// 长度按「先长后短」排，逐位取最长匹配。
-  fileprivate static let backchannelTokens: [String] = [
-    "嗯", "嗯嗯", "啊", "哦", "噢", "呃", "唉", "诶",
-    "对", "对对", "对呀", "对的", "对吧",
-    "是", "是的", "是啊", "是吧",
-    "好", "好的", "好呀", "好吧",
-    "行", "行吧", "可以", "认可", "明白", "了解", "收到", "没错", "没问题",
-    "ok", "okay", "yeah", "yep", "yes", "right", "sure", "mm", "mhm", "uhhuh",
-  ].sorted { $0.count > $1.count }
 
   /// 回传给模型的 viz 骨架:只有类型、标题与条目标题。
   ///
@@ -3619,7 +3624,60 @@ extension LiveSummaryFeed {
     else {
       return nil
     }
-    return quotingBareCoveredUntil(String(text[start...end])).data(using: .utf8)
+    let whole = quotingBareCoveredUntil(String(text[start...end]))
+    if isJSONObject(whole) {
+      return whole.data(using: .utf8)
+    }
+    // 2026-10-16 实测(Sonnet 慢路):先写一份坏的(`"coveredUntil":手1992`),接一句
+    // "Wait—I must output valid JSON. Corrected:",再重写一份完全正确的。首尾大括号之间
+    // 夹着两份和一句话,整段读不通,整轮作废。这时按顶层对象切开,取最后一份读得通的。
+    for candidate in topLevelJSONObjects(in: text).reversed() {
+      let repaired = quotingBareCoveredUntil(candidate)
+      if isJSONObject(repaired) {
+        return repaired.data(using: .utf8)
+      }
+    }
+    return whole.data(using: .utf8)
+  }
+
+  private static func isJSONObject(_ text: String) -> Bool {
+    guard let data = text.data(using: .utf8) else { return false }
+    return (try? JSONSerialization.jsonObject(with: data)) is [String: Any]
+  }
+
+  /// 按括号深度切出文本里每个顶层 `{…}`;字符串里的括号和转义不算。
+  private static func topLevelJSONObjects(in text: String) -> [String] {
+    var objects: [String] = []
+    var depth = 0
+    var inString = false
+    var escaped = false
+    var objectStart: String.Index?
+    var index = text.startIndex
+    while index < text.endIndex {
+      let character = text[index]
+      if inString {
+        if escaped {
+          escaped = false
+        } else if character == "\\" {
+          escaped = true
+        } else if character == "\"" {
+          inString = false
+        }
+      } else if character == "\"" {
+        if depth > 0 { inString = true }
+      } else if character == "{" {
+        if depth == 0 { objectStart = index }
+        depth += 1
+      } else if character == "}", depth > 0 {
+        depth -= 1
+        if depth == 0, let start = objectStart {
+          objects.append(String(text[start...index]))
+          objectStart = nil
+        }
+      }
+      index = text.index(after: index)
+    }
+    return objects
   }
 
   /// 2026-10-09 实测(Sonnet 慢路):`"coveredUntil":36:20`、`"coveredUntil":runtime`——

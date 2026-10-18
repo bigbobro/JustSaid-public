@@ -38,12 +38,21 @@ extension MainWorkspaceView {
     .runtimeAccessibilityIdentifier("cockpit.toolbar")
   }
 
-  /// R2':录制中语言只读(改选不能中途改识别语种),空闲态才是三选一。两套 chrome 共用。
+  /// 空闲态三选一写下一场偏好;录制中速记引擎支持会中切换时同一个三选一改本场语种
+  /// (owner 2026-10-16),不支持或正在结束时只读。两套 chrome 共用。
   @ViewBuilder
   private var languageControl: some View {
-    if recordingSession.phase == .recording || recordingSession.phase == .stopping {
+    if recordingSession.phase == .recording, recordingSession.canSwitchLanguageLive {
+      V1SegmentedPicker(
+        "本场说话语言", selection: liveLanguageSelection,
+        options: MeetingLanguage.allCases.map { .init($0, shortLabel(for: $0)) }
+      )
+      .fixedSize()
+      .help("切换本场速记的识别语言，从下一句起生效；已经出来的转写不变")
+      .runtimeAccessibilityIdentifier("toolbar.live-language")
+    } else if recordingSession.phase == .recording || recordingSession.phase == .stopping {
       // R2':录制中只读标签同样只显示「Auto/中/英」,不带「语言」前缀。
-      Text(shortLabel(for: language))
+      Text(shortLabel(for: languageForThisMeeting))
         .font(.system(size: Tokens.FontSize.uiEmphasis))
         .foregroundStyle(Tokens.Color.ink2)
         .padding(.horizontal, Tokens.Spacing.sm)

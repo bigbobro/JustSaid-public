@@ -48,7 +48,7 @@ public final class IncrementalM4AWriter: @unchecked Sendable {
 
   public static let gapThresholdSeconds: TimeInterval = 0.25
   /// File alignment tolerance; live ASR keeps its separate 250 ms gap policy.
-  private static let alignmentToleranceSeconds: TimeInterval = 0.02
+  static let alignmentToleranceSeconds: TimeInterval = 0.02
 
   /// 系统 AAC-LC 编码器对低采样率有码率上限,超限时 `startWriting()` 直接失败
   /// 「无法编码媒体」(2026-08-18 AirPods Pro 麦克风 24kHz 单声道 × 128kbps 实录事故)。

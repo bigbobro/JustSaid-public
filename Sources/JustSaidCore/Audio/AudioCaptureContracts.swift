@@ -70,6 +70,12 @@ public struct CaptureLossStats: Codable, Equatable, Sendable {
   /// Optional for recordings made before alignment diagnostics existed.
   public var alignmentPadFrames: UInt64?
   public var alignmentPadCount: UInt64?
+  /// Frame rate the system tap really delivered when it differed from the rate its
+  /// stream declared; those blocks were converted back to the declared rate. Nil when
+  /// the two agreed throughout, and in recordings made before delivery was measured.
+  public var deliveredSampleRate: Double?
+  /// Delivered frames converted from `deliveredSampleRate`.
+  public var rateCorrectedFrames: UInt64?
 
   public init(
     capturedFrames: UInt64 = 0,
@@ -88,7 +94,9 @@ public struct CaptureLossStats: Codable, Equatable, Sendable {
     liveFinalsEmitted: UInt64? = nil,
     writerMaxEarlyFrames: UInt64? = nil,
     alignmentPadFrames: UInt64? = nil,
-    alignmentPadCount: UInt64? = nil
+    alignmentPadCount: UInt64? = nil,
+    deliveredSampleRate: Double? = nil,
+    rateCorrectedFrames: UInt64? = nil
   ) {
     self.capturedFrames = capturedFrames
     self.writtenFrames = writtenFrames
@@ -107,6 +115,8 @@ public struct CaptureLossStats: Codable, Equatable, Sendable {
     self.writerMaxEarlyFrames = writerMaxEarlyFrames
     self.alignmentPadFrames = alignmentPadFrames
     self.alignmentPadCount = alignmentPadCount
+    self.deliveredSampleRate = deliveredSampleRate
+    self.rateCorrectedFrames = rateCorrectedFrames
   }
 
   var logDescription: String {
@@ -117,6 +127,9 @@ public struct CaptureLossStats: Codable, Equatable, Sendable {
       + "asrSkippedFrames=\(asrSkippedFrames)"
       + " writerMaxEarlyFrames=\(writerMaxEarlyFrames ?? 0)"
       + " alignmentPadFrames=\(alignmentPadFrames ?? 0) alignmentPadCount=\(alignmentPadCount ?? 0)"
+      + (deliveredSampleRate.map {
+        " deliveredSampleRate=\($0) rateCorrectedFrames=\(rateCorrectedFrames ?? 0)"
+      } ?? "")
   }
 }
 
@@ -213,6 +226,14 @@ final class CaptureLossStatsBox: @unchecked Sendable {
 
   func recordASRFedFrames(_ count: UInt64) {
     mutate { $0.asrFedFrames += count }
+  }
+
+  func recordDeliveredSampleRate(_ rate: Double) {
+    mutate { $0.deliveredSampleRate = rate }
+  }
+
+  func recordRateCorrectedFrames(_ count: UInt64) {
+    mutate { $0.rateCorrectedFrames = ($0.rateCorrectedFrames ?? 0) + count }
   }
 
   private func mutate(_ mutation: (inout CaptureLossStats) -> Void) {

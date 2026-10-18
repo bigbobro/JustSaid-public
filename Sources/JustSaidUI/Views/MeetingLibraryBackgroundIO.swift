@@ -94,6 +94,7 @@ private enum MeetingLibraryDiskSnapshot {
           hasSummaryHistory: containsNonEmptyMarkdown(in: paths.summaryHistory),
           hasNotes: isNonEmptyFile(paths.notes),
           hasUsableAudioChannel: microphoneOK || systemOK,
+          liveTranscriberDisplayName: record.metadata.liveTranscriberDisplayName,
           batchASRModelDisplayName: record.metadata.latestBatchASRModelDisplayName,
           minutesLLMModelName: record.metadata.latestMinutesLLMModelName,
           postMeetingFailureReason: record.metadata.postMeetingFailureReason,

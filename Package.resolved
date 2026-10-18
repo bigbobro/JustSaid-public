@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/csukuangfj/onnxruntime-libs",
       "state" : {
-        "revision" : "1fbef5f2a1b5c2691fe9411243f3a8afe9a0b169",
-        "version" : "1.27.1"
+        "revision" : "8ebc5ebf92190903c274a7621ba4c96a732335ec",
+        "version" : "1.28.2"
       }
     },
     {
@@ -15,7 +15,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/k2-fsa/sherpa-onnx",
       "state" : {
-        "revision" : "116a44e72c5bb631dcdbdb9c176f0304f5fc6fb0"
+        "revision" : "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf"
       }
     },
     {

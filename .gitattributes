@@ -27,3 +27,9 @@ wayfinder/assets/walkthrough-2026-09-20-build836/index.html whitespace=-blank-at
 .trellis/tasks/09-22-global-action-items/research/mockups/assets/tokens.css whitespace=-blank-at-eof
 # Preserve the approved Stitch settings v2 source bytes.
 .trellis/tasks/09-22-global-action-items/research/settings-v2/*.html whitespace=-blank-at-eol
+
+# Preserve blank context markers in the stage-A probe and GPU adapter patches (PR #209).
+.trellis/tasks/10-15-local-asr-tiering/research/tools/stage-a/probe.patch whitespace=-blank-at-eol
+.trellis/tasks/10-15-local-asr-tiering/research/tools/stage-a/gpu-adapter.patch whitespace=-blank-at-eol
+# Stage-A as-built patches copied verbatim into run summaries (PR #209).
+.trellis/tasks/10-15-local-asr-tiering/research/runs/*/as-run/*.patch whitespace=-blank-at-eol

@@ -1043,10 +1043,16 @@ public struct PostMeetingPipeline: Sendable {
     audioDurations: [AudioSource: TimeInterval],
     context: RunLogContext
   ) async throws -> [TranscribedUpload] {
+    // 回声消除的参考和上传都用还原后的系统声；原文件不动。
+    let restoredSystemAudio = try await restoreSystemAudioIfNeeded(input, context: context)
+    defer {
+      if let restoredSystemAudio { try? FileManager.default.removeItem(at: restoredSystemAudio) }
+    }
+    let systemAudio = restoredSystemAudio ?? input.paths.systemAudio
     // 非空文件才算路;0 字节占位(旧 hack)不算。
     let existing: [(AudioSource, URL)] = [
       (.me, input.paths.microphoneAudio),
-      (.others, input.paths.systemAudio),
+      (.others, systemAudio),
     ].filter { Self.isNonEmptyAudioFile($0.1) }
     let withDuration = existing.filter { audioDurations[$0.0] != nil }
 
@@ -1070,7 +1076,7 @@ public struct PostMeetingPipeline: Sendable {
         recordStage("composing", context: context, paths: input.paths)
         let composed = try await PostMeetingStereoAudioComposer.makeUploadCopy(
           microphoneURL: input.paths.microphoneAudio,
-          systemURL: input.paths.systemAudio,
+          systemURL: systemAudio,
           echoCancellationEnabled: configuration.microphoneEchoCancellationEnabled,
           makeCanceller: makeEchoCanceller
         )
@@ -1152,6 +1158,47 @@ public struct PostMeetingPipeline: Sendable {
       return false
     }
     return true
+  }
+
+  /// 旧版本录下的「标 48k、实为 44.1k」系统声（微信外放通话）：对方声音快约 9%、每 0.27 秒
+  /// 夹一段补零，回声消除对不上麦克风里的回声，回声被当成第三位发言人。采集统计显示这种
+  /// 补零规律时，先还原出真实速度的 16 kHz 副本；不符合或还原失败就用原文件，照旧精转。
+  private func restoreSystemAudioIfNeeded(
+    _ input: PostMeetingInput,
+    context: RunLogContext
+  ) async throws -> URL? {
+    let source = input.paths.systemAudio
+    guard
+      Self.isNonEmptyAudioFile(source),
+      let stats = (try? meetingStore.read(from: input.paths))?.captureLossStats?.systemAudio,
+      let fileSampleRate = await PostMeetingSystemAudioRestoration.fileSampleRate(of: source),
+      let plan = PostMeetingSystemAudioRestoration.plan(for: stats, fileSampleRate: fileSampleRate)
+    else {
+      return nil
+    }
+    var destination: URL?
+    do {
+      let url = try PostMeetingSystemAudioRestoration.makeDestinationURL()
+      destination = url
+      let report = try await PostMeetingSystemAudioRestoration.restore(
+        source, plan: plan, to: url)
+      recordStage(
+        "systemAudioRestoration", detail: report.detail, context: context, paths: input.paths)
+      return url
+    } catch {
+      if let destination { try? FileManager.default.removeItem(at: destination) }
+      if error is CancellationError { throw error }
+      try Task.checkCancellation()
+      let failure = error as NSError
+      recordStage(
+        "systemAudioRestoration",
+        detail: "status=failed; domain=\(failure.domain); code=\(failure.code)",
+        context: context, paths: input.paths)
+      Self.logger.error(
+        "系统声还原失败，用原文件精转 meeting=\(context.meetingShortID, privacy: .public) error=\(error.localizedDescription, privacy: .private)"
+      )
+      return nil
+    }
   }
 
   private func transcribeChannels(
@@ -2105,21 +2152,46 @@ extension PostMeetingPipeline {
   ///   小会或只有几句话的录音保持供应商原样;
   /// - 不跨声道:麦克风的尾巴不会并进远端,反之亦然;正文、时间一字不动。
   /// 并错的代价是一两个语气词挂到邻座名下,远小于凭空多出一个要认名的人。
+  ///
+  /// 应声簇:通话越长,一个人的「嗯」「对」「是啊」越多,会越过尾巴的 80 字和一成上限。
+  /// 2026-10-16 一场 22 分钟的两人外放通话,我方 90 句应声(219 字,平均每句 2.4 字,
+  /// 77% 的句子是纯附和,声纹与我方主簇同一人)占麦克风一路 11.4%,精转出第三位发言人。
+  /// 至少 20 句、平均每句 ≤ 6 字、且至少三分之二的句子只是附和词(`Backchannel`)的簇,
+  /// 不受这两条上限限制;它字数再多也不算成形说话人,声道里得有别人才并。只看字数不够:
+  /// Shaobo 本机最近 48 场会里有几簇平均每句 4.5–5.8 字、每句 1–2 秒,可能是说话简短的
+  /// 真人;正常说话的人纯附和句只占一到两成。过半也不够:一场 6 人会议的麦克风一路有一簇
+  /// 纯附和句 52%,分不清是不是同屋的另一位;能认定是应声的簇在 77%–85%。
   fileprivate static func foldSpeakerTails(
     _ segments: [MergedTranscriptSegment]
   ) -> [MergedTranscriptSegment] {
     var characters: [SpeakerCluster: Int] = [:]
     var lines: [SpeakerCluster: Int] = [:]
+    var backchannelLines: [SpeakerCluster: Int] = [:]
     var channelCharacters: [SpeakerChannel: Int] = [:]
     for segment in segments {
       guard let cluster = segment.speakerCluster else { continue }
       let count = meaningfulCharacterCount(segment.text)
       characters[cluster, default: 0] += count
       lines[cluster, default: 0] += 1
+      if Backchannel.consistsOfTokens(segment.text) {
+        backchannelLines[cluster, default: 0] += 1
+      }
       channelCharacters[cluster.channel, default: 0] += count
     }
+    let interjections = Set(
+      characters.compactMap { cluster, count -> SpeakerCluster? in
+        let lineCount = lines[cluster] ?? 1
+        guard
+          lineCount >= interjectionMinimumLines,
+          count <= tailMaximumCharactersPerLine * lineCount,
+          (backchannelLines[cluster] ?? 0) * 3 >= lineCount * 2
+        else { return nil }
+        return cluster
+      })
     let anchoredChannels = Set(
-      characters.filter { $0.value >= tailAnchorMinimumCharacters }.keys.map(\.channel))
+      characters.filter {
+        $0.value >= tailAnchorMinimumCharacters && !interjections.contains($0.key)
+      }.keys.map(\.channel))
     let tails = Set(
       characters.compactMap { cluster, count -> SpeakerCluster? in
         let lineCount = lines[cluster] ?? 1
@@ -2128,9 +2200,9 @@ extension PostMeetingPipeline {
           || (count <= tailMaximumShortCharacters
             && count <= tailMaximumCharactersPerLine * lineCount)
         guard
-          fragmentary,
           anchoredChannels.contains(cluster.channel),
-          count * 10 <= channelCharacters[cluster.channel] ?? 0
+          interjections.contains(cluster)
+            || (fragmentary && count * 10 <= channelCharacters[cluster.channel] ?? 0)
         else { return nil }
         return cluster
       })
@@ -2163,6 +2235,7 @@ extension PostMeetingPipeline {
   private static let tailMaximumShortCharacters = 80
   private static let tailMaximumCharactersPerLine = 6
   private static let tailAnchorMinimumCharacters = 200
+  private static let interjectionMinimumLines = 20
 
   /// 字母与数字(含汉字)计数,标点和空白不算。
   fileprivate static func meaningfulCharacterCount(_ text: String) -> Int {

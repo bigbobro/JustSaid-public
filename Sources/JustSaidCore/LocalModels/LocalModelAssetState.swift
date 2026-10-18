@@ -53,8 +53,13 @@ public enum LocalModelStartGateDecision: Equatable, Sendable {
 
 public struct LocalModelDownloadRequest: Sendable {
   public let url: URL
+  /// 下完的整文件交到这里(本次作业的 staging 里),之后才做 size + SHA-256 校验。
   public let destination: URL
   public let expectedBytes: Int64
+  /// 续传分片:`<模型根>/.downloads/<资产 ID>-<下载 SHA 前 8 位>.partial`。不在任何 journal 的
+  /// staging 之下,取消、中断、崩溃后都留着,下一次从它的长度接着下;名字里的 SHA 前缀把分片
+  /// 钉在清单的这一版上,清单换了 SHA 就不会续上旧的字节。
+  public let partialURL: URL
 }
 
 public protocol ModelAssetDownloadTransport: Sendable {
@@ -109,7 +114,7 @@ public enum LocalModelPrepareError: Error, Equatable, Sendable {
       return "应用缺少可用的模型清单，请重装 JustSaid。"
     case .insufficientSpace(let needed, let available):
       return
-        "磁盘空间不足：还需要约 \(LocalModelByteDisplay.megabytes(needed))，当前可用约 \(LocalModelByteDisplay.megabytes(available))。"
+        "磁盘空间不足：还需要约 \(LocalModelByteDisplay.size(needed))，当前可用约 \(LocalModelByteDisplay.size(available))。"
     case .busy:
       return "已有模型安装作业正在进行，请等待完成后再试。"
     case .cancelled:
@@ -125,6 +130,51 @@ public enum LocalModelPrepareError: Error, Equatable, Sendable {
     case .unsafePath:
       return "安装路径不安全，已停止写入。"
     }
+  }
+}
+
+/// 删除可选模型被拒绝或没做完的原因。拒绝时盘上与 receipt 都原样不动。
+public enum LocalModelRemoveError: Error, Equatable, Sendable {
+  case configurationFailed
+  case busy
+  /// 必需能力,或这项能力的资产全都被必需能力共用(例如 Silero VAD)。
+  case requiredCapability
+  /// 盘上的目录在 receipt 里没有条目:不是 App 装的,可能是用户自己放的。
+  case notOwned
+  case unsafePath
+  case removeFailed
+
+  public var userMessage: String {
+    switch self {
+    case .configurationFailed:
+      return "应用缺少可用的模型清单，请重装 JustSaid。"
+    case .busy:
+      return "已有模型作业正在进行，请等它结束后再删除。"
+    case .requiredCapability:
+      return "这是开会必需的模型，不能删除。"
+    case .notOwned:
+      return "这个模型目录不是 JustSaid 下载的，已原样保留。"
+    case .unsafePath:
+      return "模型路径不安全，已停止删除。"
+    case .removeFailed:
+      return "没能删除模型，请稍后重试。"
+    }
+  }
+
+  /// 引擎里抛出的任何错误都归到这几类;文件系统的原始错误不直接给用户看。
+  static func mapping(_ error: any Error) -> LocalModelRemoveError {
+    if let removeError = error as? LocalModelRemoveError {
+      return removeError
+    }
+    if let prepareError = error as? LocalModelPrepareError {
+      switch prepareError {
+      case .unsafePath:
+        return .unsafePath
+      default:
+        return .removeFailed
+      }
+    }
+    return .removeFailed
   }
 }
 
@@ -151,7 +201,15 @@ struct LocalModelReceipt: Codable, Equatable, Sendable {
   var assets: [String: LocalModelReceiptAsset]
 }
 
+/// 安装与删除共用的事务 journal(`.transactions/<operationID>.json`)。字段不因删除而增减,
+/// 旧版本写下的 journal 照常解码;删除只多两个 phase:
+/// - `removing`:目录可能已改名进 backup、还没开始删。中断后与安装未提交时一样,把 backup 搬回原位。
+/// - `deleting`:已过不可回头点。中断后删掉 staging(连同 backup 残余)、补删 receipt 条目,
+///   绝不把残缺目录搬回。写这个 phase 时不带 backupRelativePath,旧版 App 读到也不会搬回。
 struct LocalModelTransactionJournal: Codable, Equatable, Sendable {
+  static let removingPhase = "removing"
+  static let deletingPhase = "deleting"
+
   var operationID: String
   var assetID: String
   var capabilityID: String

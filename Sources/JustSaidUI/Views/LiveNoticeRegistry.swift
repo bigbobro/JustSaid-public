@@ -65,6 +65,8 @@ public struct LiveNoticeInputs: Equatable, Sendable {
   public var hasLanguageMismatch: Bool
   public var isShowingLowRecognition: Bool
   public var systemScopeNotice: SystemAudioScopeNotice?
+  /// Pro 模式那一句(PR-10):开录时模型需要修复,或会中改用标准识别。同一场最多一句。
+  public var liveEngineNotice: LiveEngineNotice?
 
   public init(
     isRecording: Bool = false,
@@ -80,7 +82,8 @@ public struct LiveNoticeInputs: Equatable, Sendable {
     postMeetingStage: PostMeetingStage = .none,
     hasLanguageMismatch: Bool = false,
     isShowingLowRecognition: Bool = false,
-    systemScopeNotice: SystemAudioScopeNotice? = nil
+    systemScopeNotice: SystemAudioScopeNotice? = nil,
+    liveEngineNotice: LiveEngineNotice? = nil
   ) {
     self.isRecording = isRecording
     self.isFailed = isFailed
@@ -96,6 +99,7 @@ public struct LiveNoticeInputs: Equatable, Sendable {
     self.hasLanguageMismatch = hasLanguageMismatch
     self.isShowingLowRecognition = isShowingLowRecognition
     self.systemScopeNotice = systemScopeNotice
+    self.liveEngineNotice = liveEngineNotice
   }
 }
 
@@ -106,6 +110,7 @@ public enum LiveNoticeRegistry {
     "chat-open", "microphone-paused", "exclusion-error", "partial-capture",
     "post-meeting", "language-mismatch", "low-recognition",
     "system-scope-fallback", "system-scope-silent", "system-scope-failed",
+    "pro-standard-needs-repair", "pro-fell-back",
   ]
 
   /// 当前成立的提示,已按「打断 → 警示 → 信息 → 中性」排好序。
@@ -163,6 +168,16 @@ public enum LiveNoticeRegistry {
     // languageMismatchBanner(同上 139):录制中 + 检测到错配。
     if inputs.isRecording, inputs.hasLanguageMismatch {
       result.append(.init(id: "language-mismatch", level: .hint, rank: 0))
+    }
+    // Pro 模式那一句(RecordingSession.liveEngineNotice,PR-10):录制中才在。中性级、排在语言错配之后:
+    // 两条都在时只露语言错配(它有按钮),这条收进「还有 N 条提示」。不记进「会中出过问题」。
+    if inputs.isRecording, let notice = inputs.liveEngineNotice {
+      switch notice {
+      case .standardNeedsRepair:
+        result.append(.init(id: "pro-standard-needs-repair", level: .hint, rank: 1))
+      case .fellBackToStandard:
+        result.append(.init(id: "pro-fell-back", level: .hint, rank: 1))
+      }
     }
     // lowRecognitionBanner(同上 160):录制中 + 低产出 + **错配不在场**(两者不叠加)。
     //

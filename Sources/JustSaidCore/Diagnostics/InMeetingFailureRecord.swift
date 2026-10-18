@@ -80,5 +80,10 @@ public struct InMeetingFailureLog: Equatable, Sendable {
       records, with: [InMeetingFailureRecord(kind: kind, cause: cause, firstAt: date)])
   }
 
+  /// 把另一份记录并进来(按「类别 + 原因」合并)。
+  public mutating func absorb(_ other: InMeetingFailureLog) {
+    records = InMeetingFailureRecord.merging(records, with: other.records)
+  }
+
   public mutating func reset() { records = [] }
 }

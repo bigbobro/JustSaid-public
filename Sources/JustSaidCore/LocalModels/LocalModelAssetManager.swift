@@ -29,6 +29,9 @@ public final class LocalModelAssetManager: ObservableObject {
   private var fingerprints: [String: LocalModelFileFingerprint] = [:]
   private var generation: UInt64 = 0
   private var runningPrepare: Task<Result<Void, Error>, Never>?
+  /// 正在删除的能力(连同那次作业的 generation)。删完的盘面刷新进快照之前,快照仍是「已安装」,
+  /// 开会门不能据此放行:引擎会去加载正被改名进 `.staging`、随后删掉的模型文件。
+  private var removal: (capabilityID: String, generation: UInt64)?
 
   public init(
     catalogResult: Result<LocalModelAssetCatalog, LocalModelCatalogError>,
@@ -101,6 +104,25 @@ public final class LocalModelAssetManager: ObservableObject {
     capabilityStates[capabilityID]
   }
 
+  /// 开会时定本场要不要走 Pro(PR-08):不等、不检查,只看开关、本场会中引擎与 Pro 模型的本机快照。
+  /// `liveProviderID` 是绑定里会中速记的 providerID(「自动」已解析)。
+  public func liveProPlan(proModeEnabled: Bool, liveProviderID: String?) -> LiveProPlan {
+    let capabilityID = LocalModelKnownIDs.qwenLivePro
+    var busy = removal?.capabilityID == capabilityID
+    if case .running(let running, _) = preparation, running == capabilityID {
+      busy = true
+    }
+    let modelURL = catalog?.assets(forCapabilityID: capabilityID).first?.installedFiles.first
+      .map { modelsRoot.appendingPathComponent($0.path, isDirectory: false) }
+    return LiveProPlan.resolve(
+      proModeEnabled: proModeEnabled,
+      liveProviderID: liveProviderID,
+      proStatus: capabilityStates[capabilityID]?.status,
+      proModelBusy: busy,
+      proModelURL: modelURL
+    )
+  }
+
   public func startGate(forProviderID providerID: String) -> LocalModelStartGateDecision {
     // Apple 语音资产由 macOS 管理,不经我们的清单:清单本身有问题也不该连它一起拦死。
     if providerID == LocalModelKnownIDs.appleSpeechAnalyzer {
@@ -114,6 +136,10 @@ public final class LocalModelAssetManager: ObservableObject {
     }
     guard let capabilityID = catalog.capabilityID(forProviderID: providerID) else {
       return .configurationFailed(reason: "未知会中速记引擎")
+    }
+    // 删除进行中:这项能力马上就不在了,先等本地检查(删完 refresh 后是「未安装」,走准备页)。
+    if removal?.capabilityID == capabilityID {
+      return .waitForLocalCheck
     }
     guard let snapshot = capabilityStates[capabilityID] else {
       return .waitForLocalCheck
@@ -145,6 +171,8 @@ public final class LocalModelAssetManager: ObservableObject {
     let capacity = self.capacity
     let cached = fingerprints
     let capturedGeneration = generation
+    // 下载或删除作业在跑时,它的 journal 与 receipt 归它自己写;这里只看盘,不去「恢复」也不认领。
+    let reconciling = !isBusy
     let result = await Task.detached(priority: .utility) {
       () -> Result<
         ([String: LocalModelCapabilitySnapshot], [String: LocalModelFileFingerprint]), Error
@@ -156,7 +184,8 @@ public final class LocalModelAssetManager: ObservableObject {
           transport: transport,
           capacity: capacity
         )
-        let output = try engine.refresh(cachedFingerprints: cached)
+        let output = try engine.refresh(
+          cachedFingerprints: cached, reconcilingJournals: reconciling)
         return .success(output)
       } catch {
         return .failure(error)
@@ -201,6 +230,9 @@ public final class LocalModelAssetManager: ObservableObject {
       return
     }
     isBusy = true
+    // 作业槽一占上就显示为这项能力的下载中:第一次进度回调要隔一跳才到主线程,
+    // 中间这段若还是 idle,界面会把「有作业在跑」当成别的模型在下载。
+    preparation = .running(capabilityID: capabilityID, phase: .preflightingSpace)
     generation &+= 1
     let capturedGeneration = generation
     let modelsRoot = self.modelsRoot
@@ -240,9 +272,12 @@ public final class LocalModelAssetManager: ObservableObject {
     switch result {
     case .success:
       HangSentinel.shared.note("models:prepare:install-commit")
+      // 先让快照读到新装好的模型再放开作业槽:反过来的那一两秒里,界面会看到「没在下载、
+      // 模型却还不是已安装」,开关会闪成「已开启 · 模型需要修复」。
+      await refresh()
+      guard capturedGeneration == generation else { return }
       preparation = .idle
       isBusy = false
-      await refresh()
     case .failure(let error):
       if error is CancellationError
         || (error as? LocalModelPrepareError) == .cancelled
@@ -271,6 +306,83 @@ public final class LocalModelAssetManager: ObservableObject {
       )
       isBusy = false
       await refresh()
+    }
+  }
+
+  /// 删除一项可选能力里由 App 安装、且不被任何必需能力引用的资产,删完回到「未安装」。
+  /// 必需能力、被必需能力共用的资产、receipt 里没有条目的路径一律拒绝并原样保留。
+  /// 与下载共用唯一的作业槽(`isBusy` / `generation`):下载或修复进行中不能删,删除中也不能下载。
+  /// 不联网。失败抛 `LocalModelRemoveError`。
+  public func remove(capabilityID: String) async throws {
+    guard previewMode == .off else { return }
+    guard let catalog else {
+      throw LocalModelRemoveError.configurationFailed
+    }
+    guard let capability = catalog.capabilitiesByID[capabilityID] else {
+      throw LocalModelRemoveError.configurationFailed
+    }
+    guard !capability.required else {
+      throw LocalModelRemoveError.requiredCapability
+    }
+    guard !isBusy else {
+      throw LocalModelRemoveError.busy
+    }
+    HangSentinel.shared.note("models:remove:start")
+    isBusy = true
+    generation &+= 1
+    let capturedGeneration = generation
+    removal = (capabilityID: capabilityID, generation: capturedGeneration)
+    let modelsRoot = self.modelsRoot
+    let transport = self.transport
+    let capacity = self.capacity
+    let cached = fingerprints
+    let task = Task.detached(priority: .utility) { () -> Result<Void, Error> in
+      do {
+        let engine = LocalModelInstallEngine(
+          catalog: catalog,
+          modelsRoot: modelsRoot,
+          transport: transport,
+          capacity: capacity
+        )
+        try engine.remove(capabilityID: capabilityID, cachedFingerprints: cached)
+        return .success(())
+      } catch {
+        return .failure(error)
+      }
+    }
+    // 删除也挂在作业槽上:取消入口会等它真的结束才放开 isBusy,不会让下载与删除叠在一起。
+    runningPrepare = task
+    let result = await task.value
+    if capturedGeneration == generation {
+      runningPrepare = nil
+      // 删掉的文件不留指纹缓存,免得同一路径以后的新文件凑巧撞上旧指纹而跳过 SHA 校验。
+      for asset in catalog.removableAssets(forCapabilityID: capabilityID) {
+        for file in asset.installedFiles {
+          fingerprints[file.path] = nil
+        }
+      }
+      isBusy = false
+      await refresh()
+    }
+    // 删完的盘面已刷新进快照(被取消时由取消入口收尾),开会门回到按快照判。
+    // 只清自己这次的:refresh 等待期间可能已经开始了另一次删除。
+    if removal?.generation == capturedGeneration {
+      removal = nil
+    }
+    switch result {
+    case .success:
+      HangSentinel.shared.note("models:remove:done")
+    case .failure(let error):
+      HangSentinel.shared.note("models:remove:failed")
+      throw LocalModelRemoveError.mapping(error)
+    }
+  }
+
+  /// 收起某项能力上一次准备失败的说明,回到空闲。设置里「Pro 模式」一行在下一次切换开关或离开页面时调用
+  /// (设计系统 README「Pro 模式」:失败说明在下一次切换或离开页面时消失)。别的能力的失败与进行中的作业不动。
+  public func dismissPreparationFailure(capabilityID: String) {
+    if case .failed(let failed, _, _, _) = preparation, failed == capabilityID {
+      preparation = .idle
     }
   }
 
@@ -388,6 +500,20 @@ public final class LocalModelAssetManager: ObservableObject {
           "allowedMembers": ["sensevoice.bin"],
           "extract": [{"member": "sensevoice.bin", "installPath": "SenseVoice-Small/sensevoice.bin"}],
           "installedFiles": [{"path": "SenseVoice-Small/sensevoice.bin", "bytes": 1, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]
+        },
+        {
+          "id": "qwen3-asr-1.7b-q8-gguf",
+          "revision": "preview",
+          "kind": "file",
+          "displayName": "Qwen3-ASR-1.7B",
+          "url": "https://example.invalid/pro.gguf",
+          "downloadBytes": 1,
+          "downloadSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "archiveKind": null,
+          "archiveRoot": null,
+          "allowedMembers": ["pro.gguf"],
+          "extract": [{"member": "pro.gguf", "installPath": "Qwen3-ASR-1.7B/pro.gguf"}],
+          "installedFiles": [{"path": "Qwen3-ASR-1.7B/pro.gguf", "bytes": 1, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]
         }
       ],
       "capabilities": [
@@ -404,6 +530,13 @@ public final class LocalModelAssetManager: ObservableObject {
           "summary": "可选会中速记引擎",
           "required": false,
           "assetIDs": ["sensevoice-small-int8", "silero-vad"]
+        },
+        {
+          "id": "qwen-live-pro",
+          "displayName": "Qwen3-ASR Pro（1.7B）",
+          "summary": "可选",
+          "required": false,
+          "assetIDs": ["qwen3-asr-1.7b-q8-gguf"]
         }
       ],
       "providerMappings": [

@@ -999,6 +999,9 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
   /// 不物化。不进 `selectionsBySlot`:它是可整块撤回的实验项,不该因为它挡住删渠道、改渠道,
   /// 失效时由 `ProviderSettingsStore` 清回 nil(回到跟随慢路)。旧版本忽略此键。
   public var meetingQASelection: RoleChannelSelection?
+  /// 会中速记的 Pro 模式开关(PR-08):记的是用户的选择,只对「自动」与 Qwen3-ASR 生效。
+  /// nil = 关(旧配置与旧格式都解码为 nil);关掉写回 nil,旧版本忽略此键。
+  public var liveProModeEnabled: Bool?
   /// 旧格式解码保留(迁移输入)。非 nil 时本值是"旧表示":`bindings` 原样返回它,
   /// 编码也只写 `bindings` 键——验证夹具借此继续构造旧格式数据。
   public var legacyBindings: [RoleProviderBinding]?
@@ -1010,7 +1013,8 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     roleSelections: [RoleChannelSelection],
     storage: StorageConfiguration,
     slowSummarySelection: RoleChannelSelection? = nil,
-    meetingQASelection: RoleChannelSelection? = nil
+    meetingQASelection: RoleChannelSelection? = nil,
+    liveProModeEnabled: Bool? = nil
   ) {
     self.version = version
     self.channels = channels
@@ -1018,6 +1022,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     self.storage = storage
     self.slowSummarySelection = slowSummarySelection
     self.meetingQASelection = meetingQASelection
+    self.liveProModeEnabled = liveProModeEnabled
     self.legacyBindings = nil
   }
 
@@ -1029,6 +1034,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     self.storage = .default
     self.slowSummarySelection = nil
     self.meetingQASelection = nil
+    self.liveProModeEnabled = nil
     self.legacyBindings = bindings
   }
 
@@ -1105,6 +1111,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     case storage
     case slowSummarySelection
     case meetingQASelection
+    case liveProModeEnabled
     case bindings
   }
 
@@ -1123,6 +1130,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
         RoleChannelSelection.self, forKey: .slowSummarySelection)
       meetingQASelection = try container.decodeIfPresent(
         RoleChannelSelection.self, forKey: .meetingQASelection)
+      liveProModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .liveProModeEnabled)
       legacyBindings = nil
     } else if let legacy = try container.decodeIfPresent(
       [RoleProviderBinding].self,
@@ -1134,6 +1142,7 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
       storage = .default
       slowSummarySelection = nil
       meetingQASelection = nil
+      liveProModeEnabled = nil
       legacyBindings = legacy
     } else {
       throw DecodingError.dataCorruptedError(
@@ -1157,5 +1166,6 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
     try container.encode(storage, forKey: .storage)
     try container.encodeIfPresent(slowSummarySelection, forKey: .slowSummarySelection)
     try container.encodeIfPresent(meetingQASelection, forKey: .meetingQASelection)
+    try container.encodeIfPresent(liveProModeEnabled, forKey: .liveProModeEnabled)
   }
 }

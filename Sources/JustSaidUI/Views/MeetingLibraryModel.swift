@@ -153,7 +153,7 @@ public enum LibraryQueueFilter: String, CaseIterable, Equatable, Sendable {
 
 /// 列表行与详情头共用的一场会议摘要。
 /// public 但成员基本保持 internal:验证探针只需要拿着 `selectedItem` 回传给 model 方法,
-/// 不需要逐字段读它。唯一的例外是 `compactDurationLabel`(理由见该处)。
+/// 不需要逐字段读它。例外是 `compactDurationLabel` 与 `liveTranscriberDisplayName`(理由见各处)。
 public struct MeetingLibraryItem: Identifiable, Sendable {
   /// 目录路径:会议目录名唯一,比 metadata.id 更稳(旧会议可能没写 id 就崩过)。
   /// public 仅因 Identifiable 要求;其余成员保持 internal,探针只拿实例回传。
@@ -182,6 +182,9 @@ public struct MeetingLibraryItem: Identifiable, Sendable {
   let hasNotes: Bool
   /// 至少一路非空音频存在(导入会议可能只有 system;丢了一路的本机录制也能重转)。
   let hasUsableAudioChannel: Bool
+  /// 「处理信息」的「会中速记」一行(Pro 模式 PR-08 记,PR-10 画):只读 meeting.json 的 `liveTranscriber`,
+  /// 不用当前设置补,nil = 暂无用量记录。public 是第二个例外:会议库投影的验证探针要逐字读它。
+  public let liveTranscriberDisplayName: String?
   /// 来自 meeting.json 的实际 batchASR 用量记录，不读取 providers 配置快照。
   let batchASRModelDisplayName: String?
   /// 来自 meeting.json 的实际 minutesLLM 用量记录，模型名原样展示。

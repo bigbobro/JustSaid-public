@@ -136,7 +136,7 @@ This produces an unpackaged executable; the DMG on Releases is the packaged, sig
 <details>
 <summary>Dependencies and repository scope</summary>
 
-Pinned versions of sherpa-onnx, Sparkle and WebRTC Audio Processing. SwiftPM downloads a roughly 1.25 MB arm64 static XCFramework from the separate `deps-webrtc-apm-2.1` Release and checks its pinned SHA-256; to install the app, still download the app's DMG.
+Pinned versions of sherpa-onnx, Sparkle, WebRTC Audio Processing and transcribe.cpp. SwiftPM downloads a roughly 1.25 MB arm64 static XCFramework from the separate `deps-webrtc-apm-2.1` Release, and an arm64 dynamic XCFramework built from transcribe.cpp 0.4.0 (with ggml, MIT) from the separate `deps-transcribe-cpp-0.4.0` Release, and checks each pinned SHA-256; to install the app, still download the app's DMG.
 
 This repository holds product source selected and exported from the development repository: the app and its two libraries. Verification fixtures, internal research notes and real meeting material are not included. Every export writes `PUBLIC_EXPORT_MANIFEST.json`, recording the source commit and file list; the export boundary is described in `docs/publication/PUBLIC_SCOPE.md`. Please don't submit recordings, credentials, signing material or any meeting data to this repository.
 
@@ -150,7 +150,7 @@ Report problems and suggestions in [Issues](https://github.com/bigbobro/JustSaid
 
 Thanks to the [Linux.do](https://linux.do) community for the discussions, feedback and support.
 
-Thanks also to the open-source projects JustSaid builds on, including Qwen3-ASR, sherpa-onnx, Silero VAD, Sparkle and WebRTC Audio Processing.
+Thanks also to the open-source projects JustSaid builds on, including Qwen3-ASR, sherpa-onnx, transcribe.cpp, ggml, Silero VAD, Sparkle and WebRTC Audio Processing.
 
 ## License
 

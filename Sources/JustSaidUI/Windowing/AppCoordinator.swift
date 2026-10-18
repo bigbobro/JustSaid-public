@@ -267,6 +267,12 @@ public final class AppCoordinator: ObservableObject {
     meetingPresence?.bindMeetingDetection(controller)
   }
 
+  /// 只在开录成功后调用。失败路径不写，用户刚选的语言留在偏好里。
+  /// 本场语言在 `RecordingSession.currentLanguage`，不放在这里。
+  func resetMeetingLanguagePreference(defaults: UserDefaults) {
+    defaults.set(MeetingLanguage.auto.rawValue, forKey: "justsaid.meeting.language")
+  }
+
   /// 由提醒开始记录：**不把主窗弹到前台**（owner 2026-09-30），不读首页草稿，标题用默认「会议」，
   /// 语言取首页同一个偏好键，提供商与本机模型门槛和主窗「开始记录」一致。
   /// 本机模型没就绪时没法在后台静默开始，退回常规入口（唤起主窗显示准备状态）。
@@ -291,12 +297,20 @@ public final class AppCoordinator: ObservableObject {
     switch decision {
     case .ready, .systemManaged:
       // 由提醒开始的记录只录被确认 App 家族的系统声（浏览器即整个浏览器）；手动开始仍是全局 tap。
+      // 本场语言由 start 写入 RecordingSession。成功才把偏好写回 auto；模型未就绪走下面的 case，不写回。
       await session.start(
         title: "会议", language: language, providers: bindings, sourceApp: info,
         systemAudioFamily: promptFamilySource
-          ?? SystemAppFamilyProcessSource(lookup: WorkspaceRunningAppLookup()))
-      // 后台开始失败时没有别的回执：主窗的横幅是用户唯一能看到原因的地方（同 issue #28 的考虑）。
-      if session.phase == .failed { showMainWindow() }
+          ?? SystemAppFamilyProcessSource(lookup: WorkspaceRunningAppLookup()),
+        livePro: services.modelAssets.liveProPlan(
+          proModeEnabled: services.providerSettings.liveProModeEnabled,
+          liveProviderID: providerID))
+      if session.phase == .recording {
+        resetMeetingLanguagePreference(defaults: services.defaults)
+      } else if session.phase == .failed {
+        // 后台开始失败时没有别的回执：主窗的横幅是用户唯一能看到原因的地方（同 issue #28 的考虑）。
+        showMainWindow()
+      }
     case .waitForLocalCheck, .showPreparation, .configurationFailed:
       requestStartMeeting()
     }

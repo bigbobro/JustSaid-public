@@ -1011,6 +1011,18 @@ public final class ProviderSettingsStore: ObservableObject {
     persist()
   }
 
+  /// 会中速记的 Pro 模式开关(PR-08)。记的是用户的选择;本场是否真走 Pro 看开会时的 `LiveProPlan`。
+  public var liveProModeEnabled: Bool {
+    configuration.liveProModeEnabled ?? false
+  }
+
+  /// 打开或关掉 Pro 模式,算一次显式保存;关掉写回 nil。
+  public func setLiveProMode(_ enabled: Bool) {
+    allowPersist = true
+    configuration.liveProModeEnabled = enabled ? true : nil
+    persist()
+  }
+
   /// 角色选择模型:渠道声明了模型列表时,不支持的组合不能选(匹配大小写不敏感,
   /// 仅大小写不同时落盘值取列表声明的那条——渠道声明的才是它承诺可发的)。
   public func selectModel(_ model: String, for role: ProviderRole) throws {
