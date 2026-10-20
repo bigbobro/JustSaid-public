@@ -63,6 +63,31 @@ public enum HTTPTransportError: LocalizedError, Sendable {
     }
     return nil
   }
+
+  /// 服务端点名被拒的请求参数名，只认闭合白名单内的名字。
+  ///
+  /// 2026-10-19 事故：整场 102 次 HTTP 400 只落下 `invalid_request`，诊断包读不出是哪个参数
+  /// 被拒，根因只能靠排除法推断。`param` 是服务端回显的任意文本（可能带请求里的内容），
+  /// 所以只认 `DiagnosticEventFields.knownErrorParams` 里的已知字段名，其余一律 `other`；
+  /// 响应没给 `param` 时返回 nil，**不得凭空编造**。
+  ///
+  /// 比对用原始字符串**精确匹配**，不先过 `DiagnosticSanitizer.token`（PR #231 评审 F2）：
+  /// `token` 会替换空白、删掉标点，把 `m(o)del` 压成 `model`、把 `reasoning effort`
+  /// 压成 `reasoning_effort`，于是完全不匹配的白名单外文本会被伪装成合法参数名——
+  /// 这个字段存在的意义正是证据精确，不能自带失真。纯标点之类的文本也因此记 `other`
+  /// 而不是被当成"没有 param"。
+  public var providerErrorParam: String? {
+    guard case .unsuccessfulStatus(_, let body) = self,
+      let data = body.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    let nested = object["error"] as? [String: Any]
+    for candidate in [nested?["param"], object["param"]] {
+      guard let value = candidate as? String, !value.isEmpty else { continue }
+      return DiagnosticEventFields.knownErrorParams.contains(value) ? value : "other"
+    }
+    return nil
+  }
 }
 
 public struct URLSessionHTTPTransport: HTTPTransport {

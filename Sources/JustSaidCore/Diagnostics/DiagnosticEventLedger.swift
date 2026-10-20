@@ -70,8 +70,13 @@ public struct DiagnosticEventFields: Codable, Equatable, Sendable {
 
   /// 允许原样进账本的错误参数名。参数名由服务端给出,可能回显请求里的任意文本,
   /// 因此不做 token 消毒后放行,只认这几个已知字段名(10-06 PR #179 评审 F3)。
+  /// 前五个是 Responses API 的字段;其余是 OpenAI 兼容 Chat Completions 实际会发送的字段
+  /// (2026-10-19 事故补:那次整场 400 若带 `param` 就能当场定位,此前这条链路没有白名单)。
   public static let knownErrorParams: Set<String> = [
     "reasoning.summary", "reasoning.effort", "text.format", "input", "instructions", "model",
+    "reasoning_effort", "enable_thinking", "thinking", "thinking.type", "thinking_budget",
+    "response_format", "stream_options", "max_tokens", "max_completion_tokens",
+    "temperature", "top_p", "stream", "messages",
   ]
 
   public init(

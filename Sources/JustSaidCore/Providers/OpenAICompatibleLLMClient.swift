@@ -471,6 +471,9 @@ public struct OpenAICompatibleLLMClient: LLMClient {
           latencyMs: Int(Date().timeIntervalSince(startedAt) * 1_000),
           parseShape: Self.diagnosticParseShape(for: error),
           charged: error is CancellationError ? "unknown" : "possiblySent",
+          // 服务端点名被拒的参数名(白名单内)。没有它，整场 400 只能在诊断包里留下
+          // 一个笼统的 `invalid_request`，根因无法回读(2026-10-19 事故)。
+          providerErrorParam: (error as? HTTPTransportError)?.providerErrorParam,
           safeErrorSummary: DiagnosticSanitizer.summary(for: error)
         )
       )

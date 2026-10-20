@@ -17,19 +17,45 @@ public enum RecordingSessionPhase: String, Equatable, Sendable {
 }
 
 public struct RecordingSessionIssue: Identifiable {
+  /// 问题的归属，只决定会中那条细带的前缀，不参与别的判断。
+  ///
+  /// 2026-10-20 owner 截图：麦克风静音被写成「**速记引擎**异常」，用户第一反应是
+  /// 认出问题、查识别设置，方向完全错了。归属由产生 issue 的那条路径自己说，
+  /// UI 不再从 `phase` 猜。
+  public enum Cause: Equatable, Sendable {
+    /// 速记/转写引擎本身。
+    case transcriber
+    /// 音频采集：麦克风、系统声、设备切换。
+    case capture
+    /// 写盘、改名、暂停区间落盘这类会话账务。
+    case session
+  }
+
   public let id = UUID()
   public let title: String
   public let message: String
   public let settingsDestination: RecordingSettingsDestination?
+  public let cause: Cause
 
   public init(
     title: String,
     message: String,
-    settingsDestination: RecordingSettingsDestination?
+    settingsDestination: RecordingSettingsDestination?,
+    cause: Cause = .transcriber
   ) {
     self.title = title
     self.message = message
     self.settingsDestination = settingsDestination
+    self.cause = cause
+  }
+
+  /// 会中细带的前缀。`capture` 说采集，`session` 说保存，其余才是速记。
+  public var noticePrefix: String {
+    switch cause {
+    case .transcriber: return "速记引擎异常"
+    case .capture: return "麦克风与录音异常"
+    case .session: return "会议保存异常"
+    }
   }
 }
 
@@ -108,6 +134,12 @@ public struct CaptureHealthPolicy: Sendable {
   public var scopeSampleInterval: TimeInterval
   /// tap 里连续全零（而该 App 在输出）多久后提示改录全部系统声音，见 `SystemAudioScopePlanner`。
   public var scopeSilentTapSeconds: TimeInterval
+  /// 麦克风连续纯零多久算「数字静音」并触发一次自愈(2026-10-20)。
+  ///
+  /// 30 秒是产品取值:通话软件在没人说话时也会输出全零帧,太短会在安静的会里误报;
+  /// 而 2026-10-20 那场 177 秒纯零说明等待的代价是整段「我」侧母带。
+  /// 验证注入缩短它,产品代码一律用默认值。
+  public var microphoneSilentSeconds: TimeInterval
 
   public init(
     microphoneStartTimeout: TimeInterval = 20,
@@ -119,7 +151,8 @@ public struct CaptureHealthPolicy: Sendable {
     recoveredNoticeDuration: TimeInterval = 15,
     startupStuckThreshold: TimeInterval = 30,
     scopeSampleInterval: TimeInterval = 1,
-    scopeSilentTapSeconds: TimeInterval = 30
+    scopeSilentTapSeconds: TimeInterval = 30,
+    microphoneSilentSeconds: TimeInterval = 30
   ) {
     self.microphoneStartTimeout = microphoneStartTimeout
     self.sampleInterval = sampleInterval
@@ -131,6 +164,7 @@ public struct CaptureHealthPolicy: Sendable {
     self.startupStuckThreshold = startupStuckThreshold
     self.scopeSampleInterval = scopeSampleInterval
     self.scopeSilentTapSeconds = scopeSilentTapSeconds
+    self.microphoneSilentSeconds = microphoneSilentSeconds
   }
 
   public var maximumAttempts: Int { retryDelays.count }
@@ -305,6 +339,15 @@ public final class RecordingSession: ObservableObject {
   /// (没有麦克风那条串行 captureQueue),两个重建重叠或重建与 teardown 重叠会互相
   /// 销毁对方刚建好的资源(review 5120025793 §1)。
   private var legRebuildTasks: [CaptureLeg: Task<Void, Never>] = [:]
+  /// 麦克风纯零看门狗的会话级引用。自愈后要用它判断「声音有没有真的回来」——
+  /// 只看 `microphoneLevel` 不够:`levelThrottle` 是 10Hz 节流,重建后第一帧还没
+  /// 发布时读到的仍是旧值。
+  private var silenceWatchdog: SilenceWatchdogBox?
+  /// 本次数字静音的事件号。每次看门狗跨阈值加一;自愈任务只有在事件号仍是自己那次
+  /// 结账时才发提示,所以一次静音只出一条,迟到恢复也不会把提示留在场上。
+  private var silenceEpisode: UInt64 = 0
+  /// 本场已确认「自愈后仍没有声音」的案件;再次静音只提示,不再重复重建。
+  private var silentMicrophoneUnrecovered = false
   private var sessionEpochHostTime: UInt64?
   private var microphonePauseIntervals: [MicrophonePauseInterval] = []
   /// 自动重建额度耗尽后确认过的中断。每路同一时刻至多一个未闭合区间；
@@ -381,10 +424,30 @@ public final class RecordingSession: ObservableObject {
   }
 
   /// Only an explicit user action changes persisted intent. Temporary routing never calls save.
+  ///
+  /// 录制中重选**同一个**设备是一次明确的「再试一次」(2026-10-20 owner 实测:
+  /// 切换失败后再点同一项毫无反应,用户以为菜单坏了)。意图没变就不重写偏好文件,
+  /// 只把这一次重选当成新的路由机会;不在录制中时才按「没有变化」早退。
   @discardableResult
   public func selectMicrophoneInput(_ preference: MicrophoneInputPreference) -> Bool {
-    guard phase != .stopping, preference != microphoneInputPreference else { return false }
+    guard phase != .stopping else { return false }
     if case .device(let uid, _) = preference, uid.rawValue.isEmpty { return false }
+    let isSameIntent = preference == microphoneInputPreference
+    if isSameIntent {
+      guard phase == .recording else { return false }
+      // **已经确认在用同一个设备 = 没有变化**:不拿一次拆建去折腾正在工作的采集。
+      if let binding = confirmedMicrophoneBinding, let target = desiredMicrophoneTarget,
+        binding.device.isSameEndpoint(as: target.device)
+      {
+        return false
+      }
+      // 否则这是一次明确的「再试一次」:作废已消耗的路由版本,重算目标(偏好仍是这一项,
+      // 可能已回落),让 reconcile 再给一次机会。
+      microphoneRouteRevision &+= 1
+      microphoneRouteFailure = nil
+      receiveMicrophoneDirectory(inputDeviceMonitor.snapshot)
+      return true
+    }
     microphoneInputPreference = preference
     microphoneInputSettings.save(preference)
     receiveMicrophoneDirectory(inputDeviceMonitor.snapshot)
@@ -526,6 +589,66 @@ public final class RecordingSession: ObservableObject {
     )
   }
 
+  /// 麦克风转为数字静音后的**有界自愈**(2026-10-20,owner 实录取证:本场 177 秒纯零
+  /// 只弹了一句建议,整段「我」侧母带真丢了)。
+  ///
+  /// 次序是「先救,救不回来再说」:同设备重建一次 → 给采集一个采样周期确认声音回来
+  /// → 回来了就只记诊断、不出横幅;没回来才发 `issue`,并且文案说清**已经试过重建**。
+  /// 物理重建走既有的 `rebuildCapture(for:timeout:)`(唯一所有权 + `rebuildTimeout` 上界),
+  /// 不新造采集路径。
+  private func recoverSilentMicrophone(triggeredAt: TimeInterval) async {
+    guard phase == .recording else { return }
+    silenceEpisode &+= 1
+    let episode = silenceEpisode
+    inMeetingFailures.note(.microphoneSilent)
+    appendCaptureDiagnostic(
+      event: "audioLeg.silence", leg: .microphone, outcome: "detected",
+      category: "digitalSilence"
+    )
+    // 已经确认救不回来的场次不再反复拆建:提示留一条即可,不拿重建折腾采集。
+    if silentMicrophoneUnrecovered {
+      issue = Self.silentMicrophoneIssue()
+      return
+    }
+    let rebuilt = await rebuildCapture(for: .microphone, timeout: healthPolicy.rebuildTimeout)
+    guard phase == .recording, silenceEpisode == episode else { return }
+    if case .completed(.success) = rebuilt {
+      // 重建返回不等于有声音:AVCaptureSession 起来也可能是全零帧。给一个采样周期
+      // 让第一批 buffer 落地,再看信号有没有真的回来。
+      try? await Task.sleep(
+        nanoseconds: UInt64(max(0.5, healthPolicy.sampleInterval) * 1_000_000_000))
+      guard phase == .recording, silenceEpisode == episode else { return }
+    }
+    let heardSignal = silenceWatchdog?.hasSignal(since: triggeredAt) ?? (microphoneLevel > 0)
+    if heardSignal {
+      silentMicrophoneUnrecovered = false
+      appendCaptureDiagnostic(
+        event: "audioLeg.silence", leg: .microphone, outcome: "recovered",
+        category: "digitalSilence"
+      )
+      logger.notice("麦克风数字静音后自行恢复，未打断本场录音")
+      return
+    }
+    silentMicrophoneUnrecovered = true
+    logger.error("麦克风数字静音重建后仍未恢复，转为提示")
+    issue = Self.silentMicrophoneIssue()
+  }
+
+  /// 数字静音的用户文案。只在**已经重建过仍没有声音**时出现——这正是 2026-10-20
+  /// 那 177 秒:当时只给了一句「建议在通话应用里换个麦克风」,既没说已经试过自动恢复,
+  /// 也没告诉用户左侧那一格可以当场换输入。
+  private static func silentMicrophoneIssue() -> RecordingSessionIssue {
+    RecordingSessionIssue(
+      title: "录不到你的声音",
+      message: "麦克风已经连续一段没有收到任何声音，自动重建也试过了，仍未恢复；"
+        + "很可能是被通话应用(微信/腾讯会议等)独占了，或者系统把这个麦克风切成了别的输入。"
+        + "录音仍在继续，对方声音不受影响；左侧麦克风一格可以换一个输入设备，"
+        + "换好后会立刻生效，不必结束本场。",
+      settingsDestination: nil,
+      cause: .capture
+    )
+  }
+
   public func start(
     title: String = "会议",
     language: MeetingLanguage,
@@ -578,6 +701,8 @@ public final class RecordingSession: ObservableObject {
     confirmedMicrophoneBinding = nil
     consumedMicrophoneRouteRevision = nil
     microphoneRouteFailure = nil
+    silenceEpisode = 0
+    silentMicrophoneUnrecovered = false
     phase = .starting
     recordingGeneration &+= 1
     // 会议检测提醒启动的记录带着被确认的会议 App；手动开始为 nil。只在内存里，P2 按它决定录哪些进程。
@@ -695,7 +820,9 @@ public final class RecordingSession: ObservableObject {
           probe.record(rms: Self.bufferRMS(buffer))
           systemAudioHandler?(buffer, captureTime)
         } : systemAudioHandler
-      let silenceWatchdog = SilenceWatchdogBox()
+      let silenceWatchdog = SilenceWatchdogBox(
+        thresholdSeconds: healthPolicy.microphoneSilentSeconds)
+      self.silenceWatchdog = silenceWatchdog
       let levelThrottle = LevelPublishThrottleBox()
       let microphoneHandler: AudioPCMBufferHandler? = {
         [weak self, logger, weak microphoneCapture] buffer, captureTime in
@@ -718,6 +845,9 @@ public final class RecordingSession: ObservableObject {
         let rms = Self.bufferRMS(buffer)
         if levelThrottle.shouldPublish() {
           let level = Self.normalizedLevel(rms: rms)
+          // 有真实声音就意味着「救不回来」这个判断已经过期:下一次被抢占应当重新可自愈。
+          // 这个分支已经压到 10Hz,不会给音频线程加负担。
+          let heardSound = rms >= 0.000_05
           Task { @MainActor [weak self] in
             // 启动期首批 buffer 也要发布;停止后拦截,防陈旧任务复活电平。
             guard
@@ -728,20 +858,15 @@ public final class RecordingSession: ObservableObject {
               return
             }
             self.microphoneLevel = level
+            if heardSound { self.silentMicrophoneUnrecovered = false }
           }
         }
-        if silenceWatchdog.track(rms: rms, seconds: seconds) {
-          logger.error("麦克风连续 30 秒纯静音——疑似被通话应用独占")
+        if silenceWatchdog.trackSilence(rms: rms, seconds: seconds) {
+          logger.error("麦克风连续 30 秒纯静音——先自愈,恢复不了再提示")
+          let triggeredAt = ProcessInfo.processInfo.systemUptime
           Task { @MainActor [weak self] in
             guard let self, self.phase == .recording else { return }
-            self.inMeetingFailures.note(.microphoneSilent)
-            self.issue = RecordingSessionIssue(
-              title: "录不到你的声音",
-              message: "麦克风已连续 30 秒纯静音,很可能被通话应用(微信/腾讯会议等)独占了。"
-                + "录音仍在继续,对方声音不受影响;建议在通话应用里换一个麦克风设备,"
-                + "或结束本场后改用手机开会、Mac 只旁听的方式。",
-              settingsDestination: nil
-            )
+            await self.recoverSilentMicrophone(triggeredAt: triggeredAt)
           }
         }
       }
@@ -1195,7 +1320,8 @@ public final class RecordingSession: ObservableObject {
       issue = RecordingSessionIssue(
         title: "会议改名失败",
         message: error.localizedDescription,
-        settingsDestination: nil
+        settingsDestination: nil,
+        cause: .session
       )
       return false
     }
@@ -1281,7 +1407,8 @@ public final class RecordingSession: ObservableObject {
         title: "麦克风暂停记录保存失败",
         message: "麦克风暂停或恢复已经生效，但时间点未能写入 meeting.json。\n\n"
           + error.localizedDescription,
-        settingsDestination: nil
+        settingsDestination: nil,
+        cause: .session
       )
       logger.error(
         "麦克风暂停区间写入 meeting.json 失败：\(error.localizedDescription, privacy: .public)"
@@ -2495,29 +2622,53 @@ public final class RecordingSession: ObservableObject {
   }
 
   /// 麦克风持续静音看门狗的累计器。纯零(RMS < 5e-5)只有数字静音才会出现——
-  /// 正常房间的底噪都高于它;连续 30 秒纯零≈麦克风被通话应用独占(微信实战:
-  /// 22 分钟零母带,用户散会才发现自己整场没被录进去)。触发一次横幅,录音继续。
+  /// 正常房间的底噪都高于它;连续 30 秒纯零≈麦克风被通话应用(微信/腾讯会议等)独占
+  /// (微信实战:22 分钟零母带,用户散会才发现自己整场没被录进去)。
+  ///
+  /// 2026-10-20:跨过阈值不再直接弹提示,先交给会话层自愈一次(见
+  /// `RecordingSession.recoverSilentMicrophone`)。**每段连续静音只报一次**:
+  /// 有信号后 `hasFired` 复位,下一次被抢占仍能再报——一场会里换麦/被抢占可能多次,
+  /// 原来的终身一次会让第二次静音彻底静默。
   public final class SilenceWatchdogBox: @unchecked Sendable {
     private let lock = NSLock()
+    private let thresholdSeconds: TimeInterval
     private var silentSeconds: Double = 0
     private var hasFired = false
+    /// 最近一次收到非零信号的心跳时刻;重建后据此判断「声音有没有回来」。
+    private var lastSignalUptime: TimeInterval = 0
 
-    public init() {}
+    public init(thresholdSeconds: TimeInterval = 30) {
+      self.thresholdSeconds = thresholdSeconds
+    }
 
-    /// 返回 true 表示本次跨过 30 秒阈值(只会返回一次)。
-    public func track(rms: Float, seconds: Double) -> Bool {
+    /// 返回 true 表示本次跨过 30 秒阈值(每段连续静音只返回一次)。
+    public func trackSilence(rms: Float, seconds: Double) -> Bool {
       lock.lock()
       defer { lock.unlock() }
       if rms >= 0.000_05 {
         silentSeconds = 0
+        hasFired = false
+        lastSignalUptime = ProcessInfo.processInfo.systemUptime
         return false
       }
       silentSeconds += seconds
-      guard silentSeconds >= 30, !hasFired else {
+      guard silentSeconds >= thresholdSeconds, !hasFired else {
         return false
       }
       hasFired = true
       return true
+    }
+
+    /// 旧名保留:语义与 `trackSilence` 相同。
+    public func track(rms: Float, seconds: Double) -> Bool {
+      trackSilence(rms: rms, seconds: seconds)
+    }
+
+    /// `since` 之后是否真的收到过非零信号。
+    public func hasSignal(since uptime: TimeInterval) -> Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return lastSignalUptime >= uptime
     }
   }
 
@@ -2712,7 +2863,8 @@ public final class RecordingSession: ObservableObject {
       return RecordingSessionIssue(
         title: "\(action)失败",
         message: message,
-        settingsDestination: captureError.settingsDestination
+        settingsDestination: captureError.settingsDestination,
+        cause: .capture
       )
     }
 
@@ -2721,14 +2873,16 @@ public final class RecordingSession: ObservableObject {
       return RecordingSessionIssue(
         title: "\(action)失败",
         message: "磁盘空间不足，录音写不进去了。\n\n清理出空间后重新开始录制；已写下的录音会保留在会议目录。",
-        settingsDestination: nil
+        settingsDestination: nil,
+        cause: .session
       )
     }
 
     return RecordingSessionIssue(
       title: "\(action)失败",
       message: "\(error.localizedDescription)\n\n已有可用录音片段会保留在会议目录。",
-      settingsDestination: nil
+      settingsDestination: nil,
+      cause: .capture
     )
   }
 

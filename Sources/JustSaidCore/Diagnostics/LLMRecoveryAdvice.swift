@@ -345,6 +345,28 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
         case 501: cause = .unsupported
         // 529:Anthropic 的 overloaded_error。
         case 500, 502, 503, 504, 529: cause = .unavailable
+        // 2026-10-19 事故后修订（PR #231 三轮评审）：**不再**把 400/422 无条件归为配置类。
+        // 内容审核拒绝与输入超上下文窗口同样回 400，把它们说成「渠道或模型配置不完整」
+        // 会让用户去改一个没坏的东西。
+        //
+        // 判定顺序有意如此：
+        //   ① 已知审核码优先 —— `content_filter` 往往同时带 `param`，若先看参数就会被
+        //      误判成配置问题（复审实测）。
+        //   ② 只有**配置/能力类**参数被拒才算配置问题。不能拿诊断的隐私白名单当判据：
+        //      它含 `messages` / `input` / `instructions`，这些名字不足以确证是配置错误
+        //      —— 也可能是内容超长、被审核，或请求格式/接口能力不接受该字段。
+        //      （复审实测 `context_length_exceeded` + `param:"messages"` 曾被误判成
+        //      configuration。）
+        //   ③ 都不成立保持 `unknown`，让诊断包说话，不替供应商猜语义。
+        case 400, 422:
+          if let refused = Self.refusalCode(body: body) {
+            code = refused
+            cause = .contentRefused
+          } else if Self.rejectsConfigurationParameter(http) {
+            cause = .configuration
+          } else {
+            cause = .unknown
+          }
         default: cause = .unknown
         }
       }
@@ -360,6 +382,51 @@ public struct LLMRecoveryAdvice: Hashable, Sendable {
     }
     return Self(
       cause: cause, context: context, httpStatus: status, providerCode: code, eventID: nil)
+  }
+
+  /// 响应是否点名了一个**配置/能力类**的参数。
+  ///
+  /// 这是 400 归为配置类的唯一可确证证据：服务端明确说某个**我们配置的东西**不被接受，
+  /// 用户才有理由去设置里改。
+  ///
+  /// **不能复用 `DiagnosticEventFields.knownErrorParams`**（PR #231 复审 F1）：那是诊断的
+  /// 隐私白名单，决定"什么名字可以原样写进账本"，不是"什么名字代表配置错误"。它含
+  /// `messages` / `input` / `instructions`——这些名字被拒不足以确证是配置错误：可能是
+  /// 内容超长或被审核，也可能是请求格式/接口能力不接受该字段。拿它当判据会把
+  /// `context_length_exceeded` 说成配置不完整。两套集合语义不同，分开维护。
+  private static func rejectsConfigurationParameter(_ error: HTTPTransportError) -> Bool {
+    guard let param = error.providerErrorParam else { return false }
+    return configurationParameters.contains(param)
+  }
+
+  /// 被拒后确实指向"我们配置错了"的参数：档位、思考开关、输出格式、模型名。
+  /// 刻意**不含** `messages` / `input` / `instructions` / `max_tokens`(内容长度) / `stream`。
+  static let configurationParameters: Set<String> = [
+    "reasoning_effort", "enable_thinking", "thinking", "thinking.type", "thinking_budget",
+    "reasoning.effort", "reasoning.summary",
+    "response_format", "text.format",
+    "temperature", "top_p",
+    "model",
+  ]
+
+  /// 已知的"模型拒绝处理这次内容"错误码，取自各家公开的固定码表，不做自由文本解析。
+  /// 与 `recognizedCodes` 同口径：`code` 与 `error.type` 都看，因为各家把同一个语义
+  /// 放在不同层（Azure 放 `code`，Anthropic 放 `error.type`）。
+  ///
+  /// **不含 Anthropic 的 `refusal`**（PR #231 复审 F3）：那是 HTTP 200 响应的
+  /// `stop_reason`，不是 400 的错误码；把 400 的 `refusal` 认成拒答是把两套协议混为一谈。
+  private static func refusalCode(body: String) -> String? {
+    guard body.utf8.count <= 16_384, let data = body.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    let nested = object["error"] as? [String: Any]
+    let candidates = [object["code"], nested?["code"], nested?["type"]]
+      .compactMap { $0 as? String }
+    let refusals: Set<String> = [
+      // Azure / OpenAI 内容过滤的固定码。
+      "content_filter", "content_policy_violation",
+    ]
+    return candidates.first { refusals.contains($0) }
   }
 
   private static func recognizedCodes(body: String, status: Int) -> [(String, Cause)] {

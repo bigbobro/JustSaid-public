@@ -296,8 +296,10 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
                 modelManager: modelAssetManager, preparationVisible: isPreparationVisible,
                 capabilityID: visiblePreparationCapabilityID,
                 discarding: isDiscardingMeeting, onStart: startMeeting) {
-                  recordingFailureBanner
-                  MicrophoneInputRouteBanner(status: recordingSession.microphoneInputStatus)
+                  // 首页与驾驶舱/会议库共用同一个仲裁入口:以前首页自己又挂了一份
+                  // `recordingFailureBanner` + 路由横幅,同一条会中 issue 会画两遍
+                  // (2026-10-20 owner 截图:速记引擎异常上下各一条)。
+                  systemBanners
                 }
             case .cockpit:
               Color.clear.allowsHitTesting(false)

@@ -171,7 +171,10 @@ extension MainWorkspaceView {
       postMeetingStatusBanner
     case "engine-issue":
       if let issue = recordingSession.issue {
-        DegradedBanner(text: "速记引擎异常 · \(issue.message)")
+        // 前缀跟着 issue 自己的归属走：麦克风静音不该被写成「速记引擎异常」
+        // (2026-10-20 owner 截图:方向被带偏，还以为要查识别设置)。
+        DegradedBanner(text: "\(issue.noticePrefix) · \(issue.message)")
+          .runtimeAccessibilityIdentifier("cockpit.issue.banner")
       }
     default:
       EmptyView()
@@ -343,7 +346,8 @@ extension MainWorkspaceView {
       .background(Tokens.Color.rec)
       .accessibilityElement(children: .combine)
     } else if recordingSession.phase == .recording, let issue = recordingSession.issue {
-      DegradedBanner(text: "速记引擎异常 · \(issue.message)")
+      DegradedBanner(text: "\(issue.noticePrefix) · \(issue.message)")
+        .runtimeAccessibilityIdentifier("cockpit.issue.banner")
     }
   }
 }

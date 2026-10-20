@@ -67,7 +67,13 @@ struct CockpitRailControls: View {
     }
   }
 
-  /// Checkmarks express intent; the visible status comes only from the session's binding.
+  /// 选中与实际使用必须一眼可见(owner 2026-10-20:「我根本不知道选择了什么 mic」)。
+  ///
+  /// **为什么不用 `Label(_, systemImage: "checkmark")`**:本机实测(SwiftUI Menu /
+  /// macOS 27)那颗 checkmark 在菜单里根本不渲染——截图没有勾,AX 里 7 个 `AXMenuItem`
+  /// 的 `AXMenuItemMarkChar` 全为空。同一个探针里 `Toggle` 自带勾、纯文本 ✓ 也画得出来。
+  /// 所以选中态改成**文字标记**:行首 `✓`,正在切换的那一项后面跟「（切换中）」。
+  /// 意图(你要用哪个)与实际(who 正在录)分开写:两者不一致时用户最需要知道。
   ///
   /// **整格都是热区**(owner 2026-09-21):原来只有那颗 14pt 的 `mic.fill` 是 Menu 的 label,
   /// 格子仍按 railItem 整格画悬停底,点在高亮区里却不出菜单——同一条轨上的
@@ -85,7 +91,7 @@ struct CockpitRailControls: View {
         !recordingSession.microphoneInputDevices.contains(where: { $0.uid == uid })
       {
         let state = recordingSession.microphoneInputDirectoryIsKnown ? "未连接" : "状态未知"
-        Label("\(name ?? "首选麦克风")（\(state)）", systemImage: "checkmark")
+        Text("✓ \(name ?? "首选麦克风")（\(state)）")
       }
     } label: {
       VStack(spacing: Tokens.V1.Space.s2xs) {
@@ -97,6 +103,9 @@ struct CockpitRailControls: View {
           .multilineTextAlignment(.center)
           .lineLimit(1)
           .runtimeAccessibilityIdentifier("cockpit.rail.mic.status")
+        // 设备名**不**在这里加第三行:轨格固定 48×44(图标 + 一行状态已占满),
+        // 再塞一行会被裁切,本机渲染验证里 OCR 直接读不到字。
+        // 「用哪台」放在菜单里的「正在使用」标记 + 悬停提示 + 无障碍标签三处。
       }
       .foregroundStyle(Tokens.V1.Color.ink2)
       .frame(width: Tokens.V1.Size.railItem.width, height: Tokens.V1.Size.railItem.height)
@@ -134,20 +143,44 @@ struct CockpitRailControls: View {
     }
   }
 
+  /// 每一项写两件事:你的**选择**(偏好,行首 ✓)和**实况**(这台是不是正在录/正在切)。
+  /// 2026-10-20 owner:「我根本不知道选择了什么 mic」——原来这两种信息都只能靠悬停提示。
   private func microphoneChoice(_ preference: MicrophoneInputPreference, title: String) -> some View
   {
-    Button {
+    let selected = isSelected(preference)
+    let live = liveMark(for: preference)
+    return Button {
       recordingSession.selectMicrophoneInput(preference)
     } label: {
-      if isSelected(preference) { Label(title, systemImage: "checkmark") } else { Text(title) }
+      Text((selected ? "✓ " : "") + title + (live.map { "（\($0)）" } ?? ""))
     }
   }
 
+  /// 意图选中:偏好等于这一项。
   private func isSelected(_ preference: MicrophoneInputPreference) -> Bool {
     switch (preference, recordingSession.microphoneInputPreference) {
     case (.automatic, .automatic): return true
     case (.device(let uid, _), .device(let selected, _)): return uid == selected
     default: return false
+    }
+  }
+
+  /// 实况标记:正在录制这一路时写「正在使用」,切过去的等待期写「切换中」,
+  /// 其余不写。「正在使用」取**已确认的绑定**,不是偏好——意图和事实必须分开。
+  private func liveMark(for preference: MicrophoneInputPreference) -> String? {
+    switch recordingSession.microphoneInputStatus {
+    case .active(let binding, _):
+      switch preference {
+      case .device(let uid, _): return binding.device.uid == uid ? "正在使用" : nil
+      case .automatic: return nil
+      }
+    case .pending(let target):
+      switch preference {
+      case .device(let uid, _): return target.device.uid == uid ? "切换中" : nil
+      case .automatic: return nil
+      }
+    case .idle, .unready:
+      return nil
     }
   }
 
