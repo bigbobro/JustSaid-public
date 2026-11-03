@@ -22,7 +22,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "f2b89db33161c0591a92074fe570f626f605c4ba924a707fb7c05ea44dcc3edb"
+      "sha256": "2639bed9088c8fc7cd8e3407fce0240df196f7d9c51cca4bd9cf2d96ca5bdd76"
     },
     {
       "path": "LICENSE",
@@ -270,7 +270,7 @@
     },
     {
       "path": "Sources/JustSaidCore/MeetingQA/MeetingQAPrompt.swift",
-      "sha256": "25589944104866df64ed9d9b14fbb4308480b9dd6b1fef282a344d68422c2f60"
+      "sha256": "f4948af245f5b26f20d5082c74bffd8182dcb12c5ecedae2c17806750dd4d422"
     },
     {
       "path": "Sources/JustSaidCore/MeetingQA/MeetingQAService.swift",
@@ -1222,7 +1222,7 @@
     },
     {
       "path": "docs/publication/CHANGELOG.public.md",
-      "sha256": "f2b89db33161c0591a92074fe570f626f605c4ba924a707fb7c05ea44dcc3edb"
+      "sha256": "2639bed9088c8fc7cd8e3407fce0240df196f7d9c51cca4bd9cf2d96ca5bdd76"
     },
     {
       "path": "docs/publication/PUBLIC_SCOPE.md",
@@ -1316,6 +1316,6 @@
   },
   "policy_revision": "2026-09-04.2",
   "source_mode": "private_canonical",
-  "source_sha": "daa1cc972b48e8a0c809b961182ea97af107ad2b",
+  "source_sha": "4c9f62b0e8917504abd74449d55cd9cbe1d68172",
   "source_status": "clean"
 }
