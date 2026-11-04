@@ -2,7 +2,7 @@ import Foundation
 
 /// ChatGPT 计划用量渠道(Sign in with ChatGPT,开源本地 direct flow)的固定契约。
 ///
-/// 端点写死并与 2026-10-01 的发现文档核对过(`.trellis/tasks/10-01-chatgpt-oauth-responses/
+/// 端点写死并与 2026-10-01 的发现文档核对过(`docs/archive/trellis-tasks/archive/2026-10/10-01-chatgpt-oauth-responses/
 /// research/openai-siwc/`)。**令牌只发往这里列出的地址**:渠道的 baseURL 仅作展示,
 /// 不参与拼装,避免可轮换凭证被送到用户可改的地址。
 public enum ChatGPTPlanContract {

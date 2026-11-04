@@ -108,6 +108,15 @@ PRIVATE_PATH_PREFIXES = (
     "research/",
     "example/",
     ".trellis/",
+    # Private project docs (specs, feature PRDs, product notes, release records,
+    # research and reference material, archived Trellis tasks/journal).
+    # docs/publication/ stays public.
+    "docs/specs/",
+    "docs/features/",
+    "docs/product/",
+    "docs/releases/",
+    "docs/research/",
+    "docs/archive/",
     "Distribution/",
     ".github/task-artifacts/",
     ".github/task1-trigger",

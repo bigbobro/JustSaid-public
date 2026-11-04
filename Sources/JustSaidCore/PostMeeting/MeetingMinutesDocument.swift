@@ -133,18 +133,29 @@ public struct MeetingSkeleton: Codable, Equatable, Sendable {
 
 /// 生词收割候选(08-17 #4):纪要生成 pass 顺带报告的「不在名册中的专名」。
 /// 只是待确认建议——入册永远由用户在收割箱里手动决定,绝不自动进词典。
+///
+/// `text` 是建议写法。`variants` 是转写里核对过的写法；`nil` 表示改动前的旧档，
+/// 按只有 `text` 一种写法处理。新生成的候选一律写出非空 `variants`。minutes.json 仍是 v2。
 public struct HarvestCandidate: Codable, Equatable, Sendable {
-  /// 词面(转写里出现的原样拼写)。
+  /// 建议写法。拿不准时模型应填转写里最常见的写法。
   public let text: String
+  /// 转写里实际出现过的写法。缺键是旧档；新档一律非空。
+  public let variants: [String]?
   /// 本场出现次数(模型报告,展示用,不当真值)。
   public let count: Int
-  /// 首次出现处,可回跳;模型给不出就为 nil,不编时间。
+  /// 任一写法首次出现处,可回跳;模型给不出就为 nil,不编时间。
   public let anchor: TranscriptAnchor?
 
-  public init(text: String, count: Int, anchor: TranscriptAnchor? = nil) {
+  public init(
+    text: String,
+    count: Int,
+    anchor: TranscriptAnchor? = nil,
+    variants: [String]? = nil
+  ) {
     self.text = text
     self.count = count
     self.anchor = anchor
+    self.variants = variants
   }
 }
 

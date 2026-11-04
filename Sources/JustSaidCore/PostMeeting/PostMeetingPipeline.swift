@@ -578,7 +578,7 @@ public struct PostMeetingPipeline: Sendable {
     var wroteEnglishMinutes = false
 
     do {
-      let response = try await generateMinutes(
+      let (response, modelTranscript) = try await generateMinutes(
         outputLanguage: .chinese,
         transcript: transcript,
         notes: notes,
@@ -590,7 +590,8 @@ public struct PostMeetingPipeline: Sendable {
         let document = Self.parseMinutes(
           response.text,
           frozenActionItems: input.actionItems,
-          extraction: minutesExtractionContext(transcript: transcript)
+          extraction: minutesExtractionContext(
+            transcript: transcript, harvestTranscript: modelTranscript)
         )
       else {
         throw MinutesResponseError.malformed
@@ -632,7 +633,7 @@ public struct PostMeetingPipeline: Sendable {
     // 生成条件不动(属 08-07-import-external-recording B9);本单只改失败语义。
     if input.batchLanguageDecision != .chinese {
       do {
-        let response = try await generateMinutes(
+        let (response, modelTranscript) = try await generateMinutes(
           outputLanguage: .english,
           transcript: transcript,
           notes: notes,
@@ -644,7 +645,8 @@ public struct PostMeetingPipeline: Sendable {
           let document = Self.parseMinutes(
             response.text,
             frozenActionItems: input.actionItems,
-            extraction: minutesExtractionContext(transcript: transcript)
+            extraction: minutesExtractionContext(
+              transcript: transcript, harvestTranscript: modelTranscript)
           )
         else {
           throw MinutesResponseError.malformed
@@ -1412,7 +1414,7 @@ public struct PostMeetingPipeline: Sendable {
     paths: MeetingPaths
   ) async throws {
     let session = try meetingStore.beginStreamingChineseMinutes(at: paths)
-    let response = try await generateMinutes(
+    let (response, modelTranscript) = try await generateMinutes(
       outputLanguage: .chinese,
       transcript: transcript,
       notes: notes,
@@ -1429,7 +1431,8 @@ public struct PostMeetingPipeline: Sendable {
       let document = Self.parseMinutes(
         response.text,
         frozenActionItems: frozenActionItems,
-        extraction: minutesExtractionContext(transcript: transcript)
+        extraction: minutesExtractionContext(
+          transcript: transcript, harvestTranscript: modelTranscript)
       )
     else {
       throw MinutesResponseError.malformed
@@ -1462,7 +1465,7 @@ public struct PostMeetingPipeline: Sendable {
     paths: MeetingPaths
   ) async throws {
     let partialURL = try meetingStore.beginStreamingEnglishMinutes(at: paths)
-    let response = try await generateMinutes(
+    let (response, modelTranscript) = try await generateMinutes(
       outputLanguage: .english,
       transcript: transcript,
       notes: notes,
@@ -1478,7 +1481,8 @@ public struct PostMeetingPipeline: Sendable {
       let document = Self.parseMinutes(
         response.text,
         frozenActionItems: frozenActionItems,
-        extraction: minutesExtractionContext(transcript: transcript)
+        extraction: minutesExtractionContext(
+          transcript: transcript, harvestTranscript: modelTranscript)
       )
     else {
       throw MinutesResponseError.malformed
@@ -1506,7 +1510,7 @@ public struct PostMeetingPipeline: Sendable {
     paths: MeetingPaths,
     recoveryCandidate: PostMeetingRecoveryCandidate? = nil,
     onAccumulatedContent: (@Sendable (String) -> Void)? = nil
-  ) async throws -> LLMResponse {
+  ) async throws -> (response: LLMResponse, modelTranscript: String) {
     if let recoveryCandidate {
       _ = try meetingStore.requireCurrentPostMeetingRecovery(recoveryCandidate)
     }
@@ -1626,7 +1630,7 @@ public struct PostMeetingPipeline: Sendable {
         to: paths,
         ifCurrentRecoveryJobs: recoveryCandidate?.jobs
       )
-      return response
+      return (response, modelTranscript)
     }
   }
 
@@ -2365,10 +2369,17 @@ extension PostMeetingPipeline {
 public struct MinutesExtractionContext: Sendable {
   public let rosterForms: [String]
   public let speakerLabels: [String]
+  /// 送给模型的那一份转写。收割写法必须逐字出现在这里；认名不用这个字段。
+  public let harvestTranscript: String
 
-  public init(rosterForms: [String] = [], speakerLabels: [String] = []) {
+  public init(
+    rosterForms: [String] = [],
+    speakerLabels: [String] = [],
+    harvestTranscript: String = ""
+  ) {
     self.rosterForms = rosterForms
     self.speakerLabels = speakerLabels
+    self.harvestTranscript = harvestTranscript
   }
 }
 
@@ -2376,12 +2387,14 @@ extension PostMeetingPipeline {
   /// 生产四个纪要落地点共用的提取上下文:词典读失败按空名册处理(提取照跑,
   /// 过滤退化为只做去重与上限),标签永远从**原始**转写抽取(改名后的文本抽不出原标签)。
   fileprivate func minutesExtractionContext(
-    transcript: String
+    transcript: String,
+    harvestTranscript: String = ""
   ) -> MinutesExtractionContext {
     MinutesExtractionContext(
       rosterForms: ((try? dictionaryStore.loadEntries()) ?? [])
         .flatMap(\.allSpokenForms),
-      speakerLabels: TranscriptSpeakerNaming.speakerLabels(in: transcript)
+      speakerLabels: TranscriptSpeakerNaming.speakerLabels(in: transcript),
+      harvestTranscript: harvestTranscript
     )
   }
 }
@@ -2548,7 +2561,7 @@ extension PostMeetingPipeline {
           "openQuestions":[{
             "kind":"toVerify|disagreement","text":"...","anchor":"HH:MM:SS"
           }],
-          "unknownProperNouns":[{"text":"词面","count":2,"anchor":"HH:MM:SS"}],
+          "unknownProperNouns":[{"text":"建议写法","variants":["转写写法"],"count":2,"anchor":"HH:MM:SS"}],
           "speakerSuggestions":[{
             "label":"发言人 N","name":"建议名","evidenceQuote":"证据原话",
             "anchor":"HH:MM:SS","level":"selfIntro|addressed|thirdParty"
@@ -2579,9 +2592,14 @@ extension PostMeetingPipeline {
         nums.value 必须保留转写中的数字原文，不得改成浮点数或换算。
         \(SummaryVisualizationPrompt.flowClause)
         附带提取（不改变上面任何纪要内容）：
-        unknownProperNouns 报告转写中出现、但**不在上面名册**里的专名（人名/公司/产品/
-        术语），text 用转写原样拼写，count 是本场出现次数，anchor 是首次出现处；
-        已在名册里的词面（含称呼）一律不报。
+        unknownProperNouns 报告转写中出现、但不在上面名册里的专名（人名/公司/产品/术语）。
+        同一实体的不同写法合成一项：text 写你认为正确的写法，拿不准就用转写里最常见的写法；
+        variants 逐字照抄转写里出现过的写法，同一词面去重。
+        名册里已有的词（含称呼）以及它们的错写，一律不报；名册条目在转写里出现的其他真实叫法
+        （中文名、简称）可以报。
+        不报通用常见词：大众熟知、语音识别本来就不会写错的品牌、软件和缩写。
+        text 和 variants 只写词本身，不加括号说明，不在一项里列多个词，不带时间。
+        count 是本场出现次数，anchor 是任一写法首次出现处。
         speakerSuggestions 报告说话人身份证据：label 必须是转写行首的原始说话人标签
         （如「发言人 2」，不得写真名），evidenceQuote 必须是证据那句的逐字原话并附
         anchor 时间戳。level 纪律：只有本人自我介绍（如「我是造价科的老周」）才算
@@ -2645,18 +2663,25 @@ extension PostMeetingPipeline {
             "evidence":"confirmed|toVerify|corrected"
           }],
           "openQuestions":["..."],
-          "unknownProperNouns":[{"text":"...","count":2,"anchor":"HH:MM:SS"}],
+          "unknownProperNouns":[{"text":"suggested form","variants":["transcript spelling"],"count":2,"anchor":"HH:MM:SS"}],
           "speakerSuggestions":[{
             "label":"Speaker N","name":"...","evidenceQuote":"...",
             "anchor":"HH:MM:SS","level":"selfIntro|addressed|thirdParty"
           }]
         }
         SIDE EXTRACTION (never changes the minutes content above):
-        unknownProperNouns lists proper nouns (people, companies, products, terms) that
-        appear in the transcript but are NOT in the roster above; text keeps the
-        transcript's original spelling, count is this meeting's occurrence count, and
-        anchor points at the first occurrence. Never report a word form already in the
-        roster (including appellations).
+        unknownProperNouns lists proper nouns (people, companies, products, terms) that \
+        appear in the transcript but are not in the roster above. Merge different spellings \
+        of the same entity into one item: text is the spelling you believe is correct, or \
+        the most common transcript spelling when unsure; variants copies the spellings that \
+        actually occur in the transcript, verbatim and deduplicated.
+        Do not report roster words (including appellations) or their misspellings. Other \
+        real names of a roster entry that appear in the transcript (a Chinese name or a \
+        short name) may be reported. Do not report widely known brands, software, or \
+        abbreviations that speech recognition would not misspell.
+        text and variants are the word only: no parentheses, no multi-word lists in one \
+        item, and no times. count is this meeting's occurrence count, and anchor points \
+        at the first occurrence of any spelling.
         speakerSuggestions lists speaker-identity evidence: label must be the original
         speaker label at the start of transcript lines (such as "发言人 2", never a real
         name), and evidenceQuote must be the verbatim evidence sentence with its anchor
@@ -3085,8 +3110,9 @@ extension PostMeetingPipeline {
   }
 
   /// 收割候选防御(#4 红线:提取内容是不可信输入):
-  /// 名册词面在代码侧再过滤一遍(不信 prompt)、按词面(大小写折叠)去重、上限 30 条截断;
-  /// 词面含内嵌换行整条弃——词典是行文件,这种词面入册会拆成两行破坏行语法。
+  /// 每种写法必须逐字出现在送给模型的转写里；带括号、顿号、斜杠、等号、逗号或换行的写法丢掉，
+  /// 被丢的是 text 则整条丢；校验后没有写法、或任一写法命中名册，整条丢。
+  /// 按建议写法（大小写折叠）去重，上限 30 条。新候选一律写出非空 variants。
   fileprivate static func normalizedHarvestCandidates(
     _ wires: [HarvestCandidateResponseWire],
     extraction: MinutesExtractionContext
@@ -3094,23 +3120,52 @@ extension PostMeetingPipeline {
     let rosterForms = Set(
       extraction.rosterForms.map { normalizedWordFace($0) }
     )
+    let transcript = extraction.harvestTranscript
     var seen: Set<String> = []
     var candidates: [HarvestCandidate] = []
     for wire in wires {
       guard candidates.count < Self.harvestCandidateLimit else { break }
       let text = sanitize(wire.text)
-      guard !text.isEmpty, !text.contains(where: \.isNewline) else { continue }
-      let face = normalizedWordFace(text)
-      guard !rosterForms.contains(face), seen.insert(face).inserted else { continue }
+      guard !text.isEmpty, !harvestSpellingIsForbidden(text) else { continue }
+      var variants: [String] = []
+      var variantFaces = Set<String>()
+      func consider(_ raw: String) {
+        let spelling = sanitize(raw)
+        guard !spelling.isEmpty, !harvestSpellingIsForbidden(spelling) else { return }
+        guard harvestTranscriptContains(spelling, in: transcript) else { return }
+        guard variantFaces.insert(normalizedWordFace(spelling)).inserted else { return }
+        variants.append(spelling)
+      }
+      consider(text)
+      for raw in wire.variants ?? [] { consider(raw) }
+      guard !variants.isEmpty else { continue }
+      var faces = Set(variants.map(normalizedWordFace))
+      faces.insert(normalizedWordFace(text))
+      guard faces.isDisjoint(with: rosterForms), seen.insert(normalizedWordFace(text)).inserted
+      else { continue }
       candidates.append(
         HarvestCandidate(
           text: text,
           count: max(1, wire.count ?? 1),
-          anchor: normalizedAnchor(wire.anchor)
+          anchor: normalizedAnchor(wire.anchor),
+          variants: variants
         )
       )
     }
     return candidates
+  }
+
+  /// 括号、顿号、斜杠、等号、逗号（半角或全角）和换行会破坏词典行，或不是一个词。
+  fileprivate static func harvestSpellingIsForbidden(_ spelling: String) -> Bool {
+    let forbidden: Set<Character> = ["(", ")", "（", "）", "、", "/", "／", "=", "＝", ",", "，"]
+    return spelling.contains { forbidden.contains($0) || $0.isNewline }
+  }
+
+  /// 大小写不敏感的字面包含。不用正则，避免词面里的符号被当成模式。
+  fileprivate static func harvestTranscriptContains(_ spelling: String, in transcript: String)
+    -> Bool
+  {
+    transcript.range(of: spelling, options: [.caseInsensitive, .literal]) != nil
   }
 
   /// 认名建议防御(#7 红线):label 必须是本场转写里的真实标签否则丢弃;
@@ -3784,14 +3839,17 @@ private struct ActionItemResponseWire: Decodable {
   }
 }
 
-/// 生词收割候选的 wire(#4)。裸字符串也收:模型省略 count/anchor 时词面仍然有用。
+/// 生词收割候选的 wire(#4)。裸字符串也收:按 text 等于该字符串，variants 由校验得出。
+/// variants 类型不对时整键忽略，不让这一项把整包拖垮。
 private struct HarvestCandidateResponseWire: Decodable {
   let text: String
+  let variants: [String]?
   let count: Int?
   let anchor: TranscriptAnchor?
 
   private enum CodingKeys: String, CodingKey {
     case text
+    case variants
     case count
     case anchor
   }
@@ -3799,12 +3857,14 @@ private struct HarvestCandidateResponseWire: Decodable {
   init(from decoder: Decoder) throws {
     if let text = try? decoder.singleValueContainer().decode(String.self) {
       self.text = text
+      variants = nil
       count = nil
       anchor = nil
       return
     }
     let container = try decoder.container(keyedBy: CodingKeys.self)
     text = try container.decode(String.self, forKey: .text)
+    variants = try? container.decode([String].self, forKey: .variants)
     if let value = try? container.decode(Int.self, forKey: .count) {
       count = value
     } else if let value = try? container.decode(String.self, forKey: .count) {

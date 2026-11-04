@@ -18,18 +18,22 @@ public struct DictionaryPageView: View {
   private let store: DictionaryStore
   private let meetingStore: MeetingStore
   private let harvestIgnoreStore: HarvestIgnoreStore
-  private let onHarvestCountChange: (() -> Void)?
+  private let onHarvestCountChange: ((Int) -> Void)?
+  private let onOpenRecent: ((URL, TimeInterval?) -> Void)?
   private let onDone: (() -> Void)?
 
   public init(
     store: DictionaryStore, meetingStore: MeetingStore,
     harvestIgnoreStore: HarvestIgnoreStore,
-    onHarvestCountChange: (() -> Void)? = nil, onDone: (() -> Void)? = nil
+    onHarvestCountChange: ((Int) -> Void)? = nil,
+    onOpenRecent: ((URL, TimeInterval?) -> Void)? = nil,
+    onDone: (() -> Void)? = nil
   ) {
     self.store = store
     self.meetingStore = meetingStore
     self.harvestIgnoreStore = harvestIgnoreStore
     self.onHarvestCountChange = onHarvestCountChange
+    self.onOpenRecent = onOpenRecent
     self.onDone = onDone
   }
 
@@ -38,7 +42,8 @@ public struct DictionaryPageView: View {
       WorkspaceTopBar("词典") { EmptyView() }
       DictionarySettingsView(
         store: store, meetingStore: meetingStore, harvestIgnoreStore: harvestIgnoreStore,
-        onHarvestCountChange: onHarvestCountChange
+        onHarvestCountChange: onHarvestCountChange,
+        onOpenRecent: onOpenRecent
       )
       .padding(.top, Tokens.V1.Space.md)
     }
@@ -50,7 +55,8 @@ public struct DictionaryPageView: View {
 
 public struct DictionarySettingsView: View {
   @StateObject private var model: DictionaryPaneModel
-  private let onHarvestCountChange: (() -> Void)?
+  private let onHarvestCountChange: ((Int) -> Void)?
+  private let onOpenRecent: ((URL, TimeInterval?) -> Void)?
   @FocusState private var editorFocus: EditorFocus?
 
   enum EditorFocus: Hashable {
@@ -62,9 +68,11 @@ public struct DictionarySettingsView: View {
     store: DictionaryStore = DictionaryStore(),
     meetingStore: MeetingStore = MeetingStore(),
     harvestIgnoreStore: HarvestIgnoreStore = HarvestIgnoreStore(),
-    onHarvestCountChange: (() -> Void)? = nil
+    onHarvestCountChange: ((Int) -> Void)? = nil,
+    onOpenRecent: ((URL, TimeInterval?) -> Void)? = nil
   ) {
     self.onHarvestCountChange = onHarvestCountChange
+    self.onOpenRecent = onOpenRecent
     _model = StateObject(
       wrappedValue: DictionaryPaneModel(
         store: store,
@@ -108,14 +116,40 @@ public struct DictionarySettingsView: View {
   }
 
   @State private var selectedHarvestWords: Set<String> = []
+  @State private var adoptedForms: [String: String] = [:]
+  @State private var expandedHarvestFolds: Set<HarvestFold> = []
 
-  private var selectedCandidates: [String] {
-    model.harvestItems.map(\.text).filter { selectedHarvestWords.contains($0) }
+  private enum HarvestFold: Hashable {
+    case single
+    case ignored
+
+    var identifier: String {
+      switch self {
+      case .single: "single"
+      case .ignored: "ignored"
+      }
+    }
+  }
+
+  /// 勾选和采纳只看当前展开的候选。已忽略段没有勾选框。
+  private var selectableHarvestItems: [HarvestBoxItem] {
+    var items = model.harvest.actionable
+    if expandedHarvestFolds.contains(.single) { items += model.harvest.singleMeeting }
+    return items
+  }
+
+  private var selectedCandidates: [HarvestBoxItem] {
+    selectableHarvestItems.filter { selectedHarvestWords.contains($0.id) }
+  }
+
+  private var ignorableHarvestItems: [HarvestBoxItem] {
+    model.harvest.actionable + model.harvest.singleMeeting
   }
 
   private struct BulkAction: Identifiable {
     let accepting: Bool
     let words: [String]
+    let candidateCount: Int
     var id: Bool { accepting }
   }
 
@@ -135,11 +169,13 @@ public struct DictionarySettingsView: View {
               }
           }
           HStack(alignment: .top, spacing: Tokens.V1.Space.lg) {
-            wordsSection
-              .frame(
+            // AnyView 在这里切断页面类型。收割箱三段加上两层确认框之后，
+            // 编 release 时类型替换会在 DictionarySettingsView.body 里死循环。
+            AnyView(
+              wordsSection.frame(
                 width: (geometry.size.width - Tokens.V1.Space.xl * 2 - Tokens.V1.Space.lg) * 3 / 5)
-            harvestSection
-              .frame(maxWidth: .infinity)
+            )
+            AnyView(harvestSection.frame(maxWidth: .infinity))
           }
           .frame(
             height: max(
@@ -166,7 +202,7 @@ public struct DictionarySettingsView: View {
       deletionWords == nil
         ? "settings.dictionary.deletion.closed" : "settings.dictionary.deletion.pending"
     )
-    .onChange(of: model.harvestItems.count) { _, _ in onHarvestCountChange?() }
+    .onChange(of: model.actionableHarvestCount) { _, count in onHarvestCountChange?(count) }
     .onChange(of: model.visibleWords) { _, words in
       selectedWords.formIntersection(words)
     }
@@ -183,7 +219,7 @@ public struct DictionarySettingsView: View {
     } message: { words in
       Text("将删除这 \(words.count) 个词条及其称呼。此操作无法撤销。")
     }
-    .onChange(of: model.harvestItems.map(\.text)) { _, words in
+    .onChange(of: selectableHarvestItems.map(\.id)) { _, words in
       selectedHarvestWords.formIntersection(words)
     }
     .confirmationDialog(
@@ -191,7 +227,9 @@ public struct DictionarySettingsView: View {
       isPresented: Binding(get: { bulkAction != nil }, set: { if !$0 { bulkAction = nil } }),
       titleVisibility: .visible, presenting: bulkAction
     ) { action in
-      Button(action.accepting ? "采纳所选 \(action.words.count) 个" : "全部忽略 \(action.words.count)") {
+      Button(
+        action.accepting ? "采纳所选 \(action.candidateCount) 个" : "全部忽略 \(action.candidateCount) 个"
+      ) {
         if action.accepting {
           model.harvestAcceptAll(action.words)
         } else {
@@ -203,8 +241,8 @@ public struct DictionarySettingsView: View {
     } message: { action in
       Text(
         action.accepting
-          ? "将这 \(action.words.count) 个候选作为新主体加入词典。"
-          : "将这 \(action.words.count) 个候选加入忽略表，之后不再出现在收纳箱。词典和会议内容保持不变。")
+          ? "将这 \(action.candidateCount) 个候选作为新主体加入词典。"
+          : "将这 \(action.candidateCount) 个候选加入忽略表，可在「已忽略」里恢复。词典和会议内容保持不变。")
     }
   }
 
@@ -422,31 +460,72 @@ public struct DictionarySettingsView: View {
       HStack(spacing: Tokens.V1.Space.xs) {
         Text("收割箱").font(Tokens.V1.Text.heading.font).foregroundStyle(Tokens.V1.Color.ink)
           .runtimeAccessibilityIdentifier("settings.group.收割箱.heading")
-        Text("\(model.harvestItems.count) 个候选")
+        Text("\(model.actionableHarvestCount) 个候选")
           .font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
+          .runtimeAccessibilityIdentifier(
+            "settings.dictionary.harvest.count.\(model.actionableHarvestCount)")
         Spacer(minLength: .zero)
         Button("全部忽略") {
-          bulkAction = BulkAction(accepting: false, words: model.harvestItems.map(\.text))
+          bulkAction = BulkAction(
+            accepting: false,
+            words: ignorableHarvestItems.flatMap(\.forms),
+            candidateCount: ignorableHarvestItems.count
+          )
         }
         .buttonStyle(.v1Outline)
-        .disabled(model.harvestItems.isEmpty)
+        .disabled(ignorableHarvestItems.isEmpty)
         .runtimeAccessibilityIdentifier("settings.dictionary.harvest.ignore-all")
       }
       .padding(.horizontal, Tokens.V1.Space.md)
       .frame(height: Tokens.V1.Size.barHeight)
       regionDivider
-      if model.harvestItems.isEmpty {
+      if model.harvest.isEmpty {
         Text("暂无待收割生词")
           .font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
           .padding(Tokens.V1.Space.md)
           .runtimeAccessibilityIdentifier("settings.dictionary.harvest.empty")
       } else {
-        harvestTools
-        regionDivider
+        if !selectableHarvestItems.isEmpty {
+          harvestTools
+          regionDivider
+        }
         ScrollView {
           LazyVStack(alignment: .leading, spacing: .zero) {
-            ForEach(model.harvestItems) { item in harvestRow(item) }
+            if model.harvest.actionable.isEmpty {
+              Text("暂无值得处理的候选")
+                .font(Tokens.V1.Text.meta.font)
+                .foregroundStyle(Tokens.V1.Color.ink3)
+                .frame(maxWidth: .infinity, minHeight: Tokens.V1.Size.control, alignment: .leading)
+                .padding(.horizontal, Tokens.V1.Space.sm)
+                .runtimeAccessibilityIdentifier("settings.dictionary.harvest.actionable-empty")
+            } else {
+              harvestTierTitle("值得处理")
+                .runtimeAccessibilityIdentifier("settings.dictionary.harvest.tier.actionable")
+              ForEach(model.harvest.actionable) { item in harvestRow(item) }
+            }
+            // 折叠标题和每一行都是 LazyVStack 的直接子项。包进 VStack 后，
+            // 展开时 ForEach 会一次建出全部行，几百条已忽略会卡住界面。
+            if !model.harvest.singleMeeting.isEmpty {
+              harvestFoldButton(
+                .single, title: "只出现过一场", count: model.harvest.singleMeeting.count)
+              if expandedHarvestFolds.contains(.single) {
+                ForEach(model.harvest.singleMeeting) { item in
+                  harvestRow(item)
+                    .padding(.top, Tokens.V1.Space.xs)
+                }
+              }
+            }
+            if !model.harvest.ignored.isEmpty {
+              harvestFoldButton(
+                .ignored, title: "已忽略", count: model.harvest.ignored.count)
+              if expandedHarvestFolds.contains(.ignored) {
+                ForEach(model.harvest.ignored) { item in
+                  ignoredHarvestRow(item)
+                    .padding(.top, Tokens.V1.Space.xs)
+                }
+              }
+            }
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -461,18 +540,25 @@ public struct DictionarySettingsView: View {
   private var harvestTools: some View {
     HStack(spacing: Tokens.V1.Space.xs) {
       harvestCheckbox(
-        "全选", isSelected: selectedCandidates.count == model.harvestItems.count,
-        isMixed: !selectedCandidates.isEmpty && selectedCandidates.count < model.harvestItems.count
+        "全选",
+        isSelected: !selectableHarvestItems.isEmpty
+          && selectedCandidates.count == selectableHarvestItems.count,
+        isMixed: !selectedCandidates.isEmpty
+          && selectedCandidates.count < selectableHarvestItems.count
       ) {
         selectedHarvestWords =
-          selectedCandidates.count == model.harvestItems.count
-          ? [] : Set(model.harvestItems.map(\.text))
+          selectedCandidates.count == selectableHarvestItems.count
+          ? [] : Set(selectableHarvestItems.map(\.id))
       }
       .runtimeAccessibilityIdentifier("settings.dictionary.harvest.select-all")
       Spacer(minLength: .zero)
       if !selectedCandidates.isEmpty {
         Button {
-          bulkAction = BulkAction(accepting: true, words: selectedCandidates)
+          bulkAction = BulkAction(
+            accepting: true,
+            words: selectedCandidates.map(adoptedForm),
+            candidateCount: selectedCandidates.count
+          )
         } label: {
           Text("采纳所选 \(selectedCandidates.count) 个")
             .runtimeAccessibilityIdentifier(
@@ -487,82 +573,72 @@ public struct DictionarySettingsView: View {
     .padding(.vertical, Tokens.V1.Space.sm)
   }
 
+  private func harvestTierTitle(_ title: String) -> some View {
+    Text(title)
+      .font(Tokens.V1.Text.body.font)
+      .foregroundStyle(Tokens.V1.Color.ink)
+      .frame(maxWidth: .infinity, minHeight: Tokens.V1.Size.control, alignment: .leading)
+      .padding(.horizontal, Tokens.V1.Space.sm)
+  }
+
+  /// 折叠段与会议右栏「待办候选」同一写法：chevron、正文字、次级计数。
+  /// 只返回标题按钮。行由调用方直接放进 LazyVStack，不能再包一层 VStack。
+  private func harvestFoldButton(_ fold: HarvestFold, title: String, count: Int) -> some View {
+    let expanded = expandedHarvestFolds.contains(fold)
+    return Button {
+      if expanded {
+        expandedHarvestFolds.remove(fold)
+      } else {
+        expandedHarvestFolds.insert(fold)
+      }
+    } label: {
+      HStack(spacing: Tokens.V1.Space.xs) {
+        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+          .font(Tokens.V1.Text.micro.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+        Text(title)
+          .font(Tokens.V1.Text.body.font)
+          .foregroundStyle(Tokens.V1.Color.ink)
+        Text("\(count)")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+      }
+      .frame(maxWidth: .infinity, minHeight: Tokens.V1.Size.control, alignment: .leading)
+      .padding(.horizontal, Tokens.V1.Space.sm)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .runtimeAccessibilityIdentifier(
+      "settings.dictionary.harvest.fold.\(fold.identifier).\(count)")
+  }
+
   private func harvestRow(_ item: HarvestBoxItem) -> some View {
-    HStack(spacing: Tokens.V1.Space.xs) {
+    let adopted = adoptedForm(item)
+    return HStack(alignment: .top, spacing: Tokens.V1.Space.xs) {
       harvestCheckbox(
-        "选择「\(item.text)」", isSelected: selectedHarvestWords.contains(item.text),
+        "选择「\(adopted)」", isSelected: selectedHarvestWords.contains(item.id),
         showsTitle: false
       ) {
-        if !selectedHarvestWords.insert(item.text).inserted {
-          selectedHarvestWords.remove(item.text)
+        if !selectedHarvestWords.insert(item.id).inserted {
+          selectedHarvestWords.remove(item.id)
         }
       }
       .runtimeAccessibilityIdentifier("settings.dictionary.harvest.select.\(item.text)")
       VStack(alignment: .leading, spacing: Tokens.V1.Space.s2xs) {
-        Text(item.text)
-          .font(Tokens.V1.Text.body.font)
-          .foregroundStyle(Tokens.V1.Color.ink)
-          .lineLimit(1)
-          .truncationMode(.middle)
-          .help(item.text)
-        Text("共 \(item.totalCount) 次 · \(item.meetingCount) 场")
-          .font(Tokens.V1.Text.meta.font)
-          .foregroundStyle(Tokens.V1.Color.ink3)
+        harvestAdoptedLine(item, adopted: adopted)
+        harvestRecentLine(item)
+        if item.transcriptForms != [adopted] {
+          Text("转写里写作：\(item.transcriptForms.joined(separator: "、"))")
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink3)
+            .fixedSize(horizontal: false, vertical: true)
+            .runtimeAccessibilityIdentifier(
+              "settings.dictionary.harvest.transcript.\(item.text).\(item.transcriptForms.joined(separator: "、"))"
+            )
+        }
       }
       Spacer(minLength: .zero)
-      HStack(spacing: Tokens.V1.Space.s2xs) {
-        Menu {
-          ForEach(model.mergeTargets, id: \.self) { canonical in
-            Button("并入「\(canonical)」当称呼") {
-              model.harvestMerge(item.text, into: canonical)
-            }
-          }
-        } label: {
-          Text("并入词条")
-            .font(Tokens.V1.Text.micro.font)
-        }
-        .menuStyle(.button)
-        .menuIndicator(.hidden)
-        .buttonStyle(
-          V1ButtonStyle.v1Outline.height(Tokens.V1.Size.controlSm).labelFont(
-            Tokens.V1.Text.meta.font)
-        )
-        .fixedSize()
-        .layoutPriority(1)
-        .disabled(model.mergeTargets.isEmpty)
-        .help(
-          model.mergeTargets.isEmpty
-            ? "词典还没有可并入的主体条目"
-            : "把「\(item.text)」追加为某个现有主体的称呼"
-        )
-        .accessibilityLabel("把「\(item.text)」并入现有条目当称呼")
-        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.merge")
-        Button("新主体") {
-          model.harvestAddNewSubject(item.text)
-        }
-        .buttonStyle(
-          V1ButtonStyle.v1Outline.height(Tokens.V1.Size.controlSm).labelFont(
-            Tokens.V1.Text.meta.font)
-        )
-        .font(Tokens.V1.Text.strong.font)
-        .fixedSize()
-        .help("把「\(item.text)」作为新主体加进词典")
-        .accessibilityLabel("把「\(item.text)」立为新主体")
-        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.new")
-        Button("忽略") {
-          model.harvestIgnore(item.text)
-        }
-        .buttonStyle(
-          V1ButtonStyle.v1Outline.height(Tokens.V1.Size.controlSm).labelFont(
-            Tokens.V1.Text.meta.font)
-        )
-        .font(Tokens.V1.Text.meta.font)
-        .foregroundStyle(Tokens.V1.Color.ink3)
-        .fixedSize()
-        .help("从收割箱移除「\(item.text)」，之后不再出现")
-        .accessibilityLabel("忽略「\(item.text)」")
-        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.ignore")
-      }
+      harvestActions(item, adopted: adopted)
     }
     .padding(.horizontal, Tokens.V1.Space.sm)
     .padding(.vertical, Tokens.V1.Space.sm)
@@ -572,6 +648,204 @@ public struct DictionarySettingsView: View {
       Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
     }
     .runtimeAccessibilityIdentifier("settings.dictionary.harvest.row.\(item.text)")
+  }
+
+  @ViewBuilder
+  private func harvestAdoptedLine(_ item: HarvestBoxItem, adopted: String) -> some View {
+    let options = harvestFormOptions(item)
+    if options.count > 1 {
+      Picker("采用写法", selection: adoptedBinding(item)) {
+        ForEach(options, id: \.self) { form in
+          Text(form).tag(form)
+        }
+      }
+      .labelsHidden()
+      .pickerStyle(.menu)
+      .fixedSize()
+      .accessibilityLabel("「\(item.text)」的采用写法")
+      .accessibilityValue(adopted)
+      .runtimeAccessibilityIdentifier("settings.dictionary.harvest.form.\(item.text)")
+    } else {
+      Text(adopted)
+        .font(Tokens.V1.Text.body.font)
+        .foregroundStyle(Tokens.V1.Color.ink)
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .help(adopted)
+    }
+  }
+
+  /// 计数单独一行。最近会议另起一行：标题占余下宽度并尾部截断，时间码不折行。
+  private func harvestRecentLine(_ item: HarvestBoxItem) -> some View {
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.s2xs) {
+      Text("共 \(item.totalCount) 次 · \(item.meetingCount) 场")
+        .font(Tokens.V1.Text.meta.font)
+        .foregroundStyle(Tokens.V1.Color.ink3)
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.counts.\(item.text)")
+      HStack(alignment: .firstTextBaseline, spacing: Tokens.V1.Space.s2xs) {
+        Text("最近：")
+          .font(Tokens.V1.Text.meta.font)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
+        Button {
+          openRecent(item)
+        } label: {
+          Text(item.recent.title)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .font(Tokens.V1.Text.meta.font)
+        .foregroundStyle(Tokens.V1.Color.accent)
+        .lineLimit(1)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .layoutPriority(-1)
+        .help(item.recent.title)
+        .accessibilityLabel("打开「\(item.recent.title)」的完整转写")
+        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.recent.\(item.text)")
+        if let timecode = item.recent.anchor?.timecode {
+          Button {
+            openRecent(item)
+          } label: {
+            Text(timecode)
+              .lineLimit(1)
+              .fixedSize(horizontal: true, vertical: false)
+          }
+          .buttonStyle(.plain)
+          .font(Tokens.V1.Text.timecode.font)
+          .foregroundStyle(Tokens.V1.Color.accent)
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: true)
+          .layoutPriority(1)
+          .accessibilityLabel("回跳转写 \(timecode)")
+          .runtimeAccessibilityIdentifier(
+            "settings.dictionary.harvest.recent-time.\(item.text)")
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func harvestActions(_ item: HarvestBoxItem, adopted: String) -> some View {
+    HStack(spacing: Tokens.V1.Space.s2xs) {
+      Menu {
+        ForEach(model.mergeTargets, id: \.self) { canonical in
+          Button("并入「\(canonical)」当称呼") {
+            model.harvestMerge(adopted, into: canonical)
+          }
+        }
+      } label: {
+        Text("并入词条")
+          .font(Tokens.V1.Text.micro.font)
+      }
+      .menuStyle(.button)
+      .menuIndicator(.hidden)
+      .buttonStyle(
+        V1ButtonStyle.v1Outline.height(Tokens.V1.Size.controlSm).labelFont(
+          Tokens.V1.Text.meta.font)
+      )
+      .fixedSize()
+      .layoutPriority(1)
+      .disabled(model.mergeTargets.isEmpty)
+      .help(
+        model.mergeTargets.isEmpty
+          ? "词典还没有可并入的主体条目"
+          : "把「\(adopted)」追加为某个现有主体的称呼"
+      )
+      .accessibilityLabel("把「\(adopted)」并入现有条目当称呼")
+      .runtimeAccessibilityIdentifier("settings.dictionary.harvest.merge.\(item.text)")
+      Button("新主体") {
+        model.harvestAddNewSubject(adopted)
+      }
+      .buttonStyle(
+        V1ButtonStyle.v1Outline.height(Tokens.V1.Size.controlSm).labelFont(
+          Tokens.V1.Text.meta.font)
+      )
+      .font(Tokens.V1.Text.strong.font)
+      .fixedSize()
+      .help("把「\(adopted)」作为新主体加进词典")
+      .accessibilityLabel("把「\(adopted)」立为新主体")
+      .runtimeAccessibilityIdentifier("settings.dictionary.harvest.new.\(item.text)")
+      Button("忽略") {
+        model.harvestIgnore(item.forms)
+      }
+      .buttonStyle(
+        V1ButtonStyle.v1Outline.height(Tokens.V1.Size.controlSm).labelFont(
+          Tokens.V1.Text.meta.font)
+      )
+      .font(Tokens.V1.Text.meta.font)
+      .foregroundStyle(Tokens.V1.Color.ink3)
+      .fixedSize()
+      .help("从收割箱移除「\(adopted)」的全部写法，可在已忽略里恢复")
+      .accessibilityLabel("忽略「\(adopted)」")
+      .runtimeAccessibilityIdentifier("settings.dictionary.harvest.ignore.\(item.text)")
+    }
+  }
+
+  private func ignoredHarvestRow(_ item: HarvestBoxItem) -> some View {
+    HStack(alignment: .top, spacing: Tokens.V1.Space.xs) {
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s2xs) {
+        Text(item.text)
+          .font(Tokens.V1.Text.body.font)
+          .foregroundStyle(Tokens.V1.Color.ink)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .help(item.text)
+        harvestRecentLine(item)
+        if item.transcriptForms != [item.text] {
+          Text("转写里写作：\(item.transcriptForms.joined(separator: "、"))")
+            .font(Tokens.V1.Text.meta.font)
+            .foregroundStyle(Tokens.V1.Color.ink3)
+            .fixedSize(horizontal: false, vertical: true)
+            .runtimeAccessibilityIdentifier(
+              "settings.dictionary.harvest.transcript.\(item.text).\(item.transcriptForms.joined(separator: "、"))"
+            )
+        }
+      }
+      Spacer(minLength: .zero)
+      Button("恢复") { model.harvestRestore(item.forms) }
+        .buttonStyle(.v1Quiet)
+        .fixedSize()
+        .accessibilityLabel("恢复「\(item.text)」")
+        .runtimeAccessibilityIdentifier("settings.dictionary.harvest.restore.\(item.text)")
+    }
+    .padding(.horizontal, Tokens.V1.Space.sm)
+    .padding(.vertical, Tokens.V1.Space.sm)
+    .frame(minHeight: Tokens.V1.Size.controlLg + Tokens.V1.Space.md)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
+    }
+    .runtimeAccessibilityIdentifier("settings.dictionary.harvest.row.\(item.text)")
+  }
+
+  private func adoptedForm(_ item: HarvestBoxItem) -> String {
+    adoptedForms[item.id] ?? item.text
+  }
+
+  private func adoptedBinding(_ item: HarvestBoxItem) -> Binding<String> {
+    Binding(
+      get: { adoptedForm(item) },
+      set: { adoptedForms[item.id] = $0 }
+    )
+  }
+
+  private func harvestFormOptions(_ item: HarvestBoxItem) -> [String] {
+    var options = [item.text]
+    for form in item.transcriptForms where !options.contains(form) { options.append(form) }
+    return options
+  }
+
+  private func openRecent(_ item: HarvestBoxItem) {
+    onOpenRecent?(item.recent.directory, item.recent.anchor?.seconds)
   }
 
   private func harvestCheckbox(
@@ -795,8 +1069,10 @@ final class DictionaryPaneModel: ObservableObject {
   @Published private(set) var armedDeletionWord: String?
   /// 刚保存成功的词:对应卡片闪一下青色作回执,时长与字段级「已保存」共用一个常量。
   @Published private(set) var recentlySaved: String?
-  /// 收割箱(08-17 #4):全库 minutes.json 候选 − 名册词面 − 忽略表,聚合后的行。
-  @Published private(set) var harvestItems: [HarvestBoxItem] = []
+  /// 收割箱三段。组头和角标只数 `actionable`。
+  @Published private(set) var harvest = HarvestBoxSections.empty
+
+  var actionableHarvestCount: Int { harvest.actionable.count }
 
   /// internal:壳里的设置页要把同一个 store 交给词典分区,不另开一个。
   let store: DictionaryStore
@@ -850,24 +1126,38 @@ final class DictionaryPaneModel: ObservableObject {
         }
         let roster = DictionaryEntry.parseAll(loadedWords).flatMap(\.allSpokenForms)
         let ignored = (try? ignoreStore.load()) ?? []
-        let candidates = meetingStore.listMeetings().compactMap { record -> [HarvestCandidate]? in
+        let sources = meetingStore.listMeetings().flatMap { record -> [HarvestSourceCandidate] in
           guard let data = try? Data(contentsOf: record.paths.minutesStructured),
             let document = try? StructuredArtifactCodec.decode(
-              MeetingMinutesDocument.self, from: data)
-          else { return nil }
-          return document.unknownProperNouns
+              MeetingMinutesDocument.self, from: data),
+            let candidates = document.unknownProperNouns
+          else { return [] }
+          let meeting = HarvestMeetingRef(
+            directory: record.paths.directory,
+            title: record.metadata.title,
+            startedAt: record.metadata.startedAt
+          )
+          return candidates.map { candidate in
+            HarvestSourceCandidate(
+              text: candidate.text,
+              variants: candidate.variants ?? [],
+              count: candidate.count,
+              anchor: candidate.anchor,
+              meeting: meeting
+            )
+          }
         }
         return (
           loadedWords, readFailure,
           HarvestAggregator.aggregate(
-            candidatesByMeeting: candidates, rosterForms: roster, ignored: ignored)
+            sources: sources, rosterForms: roster, ignored: ignored)
         )
       }.value
       // A superseded read must never replace a newer edit/reload.
       guard !Task.isCancelled, let self else { return }
       words = snapshot.0
       readErrorMessage = snapshot.1
-      harvestItems = snapshot.2
+      harvest = snapshot.2
       isLoading = false
       if writeErrorMessage == nil, let saved, words.contains(saved) { flash(saved) }
     }
@@ -1057,10 +1347,23 @@ final class DictionaryPaneModel: ObservableObject {
   }
 
   /// 忽略:进忽略表,不碰词典,也不回写任何会议的 minutes.json。
-  func harvestIgnore(_ word: String) {
+  func harvestIgnore(_ forms: [String]) {
     guard !isLoading else { return }
     do {
-      try harvestIgnoreStore.ignore(word)
+      try harvestIgnoreStore.ignoreAll(forms)
+      writeErrorMessage = nil
+    } catch {
+      writeErrorMessage = "写入收割忽略表失败：\(error.localizedDescription)"
+    }
+    reloadHarvest()
+  }
+
+  /// 从忽略表删掉这个候选的全部写法。不改词典，也不改任何 minutes.json。
+  func harvestRestore(_ forms: [String]) {
+    guard !isLoading else { return }
+    do {
+      try harvestIgnoreStore.removeAll(forms)
+      writeErrorMessage = nil
     } catch {
       writeErrorMessage = "写入收割忽略表失败：\(error.localizedDescription)"
     }

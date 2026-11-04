@@ -8,7 +8,7 @@ extension MeetingPaths {
   }
 }
 
-/// 核对分类,对齐台账两条曲线(research/acceptance/ledger.md):
+/// 核对分类,对齐台账两条曲线(docs/research/acceptance/ledger.md):
 /// `keyInfo` = 决定/待办(关键信息单),`number` = 其余入队条目(数字单)。
 public enum CheckCategory: String, Codable, Equatable, Sendable {
   case number

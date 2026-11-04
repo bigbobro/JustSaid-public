@@ -37,6 +37,12 @@ public final class AppCoordinator: ObservableObject {
   private var modeBeforeDictionary: WorkspaceMode = .home
   @Published public var openedMeetingDirectory: URL?
   @Published public private(set) var libraryFocus: URL?
+  /// 词典「最近」带进会议库的转写定位。有秒数就定位；只要 `libraryOpensTranscript`
+  /// 为真而秒数是 nil，就打开完整转写并停在顶部。普通进库清掉，避免下一次还被拉去转写。
+  @Published public private(set) var libraryTranscriptSeconds: TimeInterval?
+  @Published public private(set) var libraryOpensTranscript = false
+  /// 离屏验证关掉前台激活。产品路径仍调用 `activateMainWindow()`，只是不把窗口拉到前面。
+  public var suppressesMainWindowActivation = false
   @Published public private(set) var libraryRefreshGeneration = 0
   /// 上一次扫盘得到的会议列表。会议库与首页的 model 每次重建时先拿它把列表画出来,
   /// 同时照常在后台重新扫盘,扫完就换成新的(owner 2026-09-21:「每次点会议库都有一个
@@ -172,7 +178,8 @@ public final class AppCoordinator: ObservableObject {
   ) {
     self.meetingStore = meetingStore
     self.todoStore = todoStore
-    deletedMeetings = deletedMeetingLedger
+    deletedMeetings =
+      deletedMeetingLedger
       ?? TodoDeletedMeetingLedger(fileURL: TodoDeletedMeetingLedger.defaultFileURL())
     todoPage = TodoPageModel(store: todoStore, preferences: nameAlertDefaults)
     nameAlertPreferences = NameAlertPreferencesStore(defaults: nameAlertDefaults)
@@ -605,11 +612,26 @@ public final class AppCoordinator: ObservableObject {
     return ExclusionUI.openRange(in: metadata.excludedRanges ?? []) != nil
   }
 
-  /// 打开主窗内的会议库;`focus` 传入某场会议目录时直接选中它(刚结束的那一场)。
-  /// 孤儿状态只在本进程第一次进入相关入口时修正，后续 ⌘L 纯导航。
-  public func openLibrary(focus: URL? = nil) {
-    selectLibrary(focus: focus)
+  /// 打开主窗内的会议库。`focus` 选中一场会议。
+  /// `opensTranscript` 时再打开完整转写：有秒数就定位，没有就停在顶部。
+  /// 进库会加重挂代次，会议库视图重建，这两个字段交给新建的 model。
+  /// 「最近」只在词典页，点的时候会议库不在树上，没有一条已经挂着再收请求的路径。
+  public func openLibrary(
+    focus: URL? = nil,
+    transcriptSeconds: TimeInterval? = nil,
+    opensTranscript: Bool = false
+  ) {
+    let directory = focus?.standardizedFileURL
+    let opens = directory != nil && (opensTranscript || transcriptSeconds != nil)
+    libraryOpensTranscript = opens
+    libraryTranscriptSeconds = opens ? transcriptSeconds : nil
+    selectLibrary(focus: directory)
     activateMainWindow()
+  }
+
+  /// 收割箱「最近」。进入会议库并打开那场的完整转写，轨停在会议库，不进待办。
+  public func openRecentHarvestMeeting(directory: URL, seconds: TimeInterval?) {
+    openLibrary(focus: directory, transcriptSeconds: seconds, opensTranscript: true)
   }
 
   private func selectLibrary(focus: URL? = nil) {
@@ -646,7 +668,9 @@ public final class AppCoordinator: ObservableObject {
   public func openTodoSource(directory: URL, seconds: TimeInterval?) {
     HangSentinel.shared.note("todos:open-source")
     todoSourceSession = TodoSourceSession(
-      directory: directory.standardizedFileURL, seconds: seconds)
+      directory: directory.standardizedFileURL,
+      seconds: seconds
+    )
     workspaceMode = .todos
     activateMainWindow()
   }
@@ -751,6 +775,7 @@ public final class AppCoordinator: ObservableObject {
   /// 唤起主工作台窗口。优先使用工作台自己登记的窗口(批4 后设置只剩主窗 sheet,
   /// 无独立设置窗可误前置);主窗真被关掉时再走 SwiftUI 的重开动作。
   public func activateMainWindow() {
+    guard !suppressesMainWindowActivation else { return }
     let application = NSApplication.shared
     application.activate(ignoringOtherApps: true)
     let registeredWindow =

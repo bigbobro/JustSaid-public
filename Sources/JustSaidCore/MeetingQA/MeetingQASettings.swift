@@ -3,7 +3,7 @@ import Foundation
 /// 会中问答(10-09 实验性,owner 按主观体验决定去留)。
 ///
 /// 整块撤回时删除 `Sources/JustSaidCore/MeetingQA/`、`Sources/JustSaidUI/MeetingQA/`,
-/// 以及 `.trellis/tasks/10-09-in-meeting-qa/implement.md`「撤回清单」列出的入口。
+/// 以及 `docs/archive/trellis-tasks/10-09-in-meeting-qa/implement.md`「撤回清单」列出的入口。
 /// 开关键缺失 = 关:关着时界面上没有任何入口,也不发任何请求。
 public enum MeetingQASettings {
   public static let defaultsKey = "justsaid.meetingQA.enabled"

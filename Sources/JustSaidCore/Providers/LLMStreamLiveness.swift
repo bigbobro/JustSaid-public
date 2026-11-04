@@ -5,7 +5,7 @@ import Synchronization
 ///
 /// 适配器只负责开流与解析事件,并在解析时报告两件事:第一个带负载的事件(首帧)与
 /// 成功解码的当前非空增量(进展)。期限、终态与取消语义全部在这里,不得在适配器里各写一份。
-/// 契约见 `.trellis/spec/core/live-summary-recovery.md` 的检出预算一节。
+/// 契约见 `docs/specs/core/live-summary-recovery.md` 的检出预算一节。
 enum LLMStreamLiveness {
   struct Hooks: Sendable {
     let onFirstFrame: @Sendable () -> Void

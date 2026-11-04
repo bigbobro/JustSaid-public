@@ -2,7 +2,7 @@ import JustSaidCore
 import SwiftUI
 
 /// 「排除时间段」UI 入口的共享逻辑(08-14 单)。数据契约在 Core
-/// (`.trellis/spec/core/exclusion-ranges-contract.md`),这里只做覆盖判定、
+/// (`docs/specs/core/exclusion-ranges-contract.md`),这里只做覆盖判定、
 /// 话题时间标签解析与会中常驻细带——读写一律走 `MeetingStore` 四个 API,
 /// 本文件不碰 meeting.json,更不碰 transcript.md。
 enum ExclusionUI {

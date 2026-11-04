@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+# An agent shell may export GIT_CONFIG_COUNT without the matching GIT_CONFIG_KEY_<n>,
+# which makes every git call in the helper fail ("missing config key"). Drop the set.
+unset GIT_CONFIG_COUNT $(compgen -v GIT_CONFIG_KEY_ || true) $(compgen -v GIT_CONFIG_VALUE_ || true)
+
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 project_directory="$(cd "$script_directory/.." && pwd -P)"
 helper="$script_directory/verify-public-tree.py"

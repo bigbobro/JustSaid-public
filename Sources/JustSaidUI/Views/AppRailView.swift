@@ -2,7 +2,26 @@ import AppKit
 import JustSaidCore
 import SwiftUI
 
-struct AppRailView<SessionControls: View>: View {
+/// 图标轨词典角标。只表示「值得处理」的条数，0 时不画。
+public struct DictionaryHarvestBadge: View {
+  public let count: Int
+
+  public init(count: Int) { self.count = count }
+
+  public var body: some View {
+    if count > 0 {
+      Text(count.formatted())
+        .font(Tokens.V1.Text.micro.font)
+        .foregroundStyle(Tokens.V1.Color.accentInk)
+        .padding(.horizontal, Tokens.V1.Space.s2xs)
+        .background(Tokens.V1.Color.accent, in: Capsule())
+        .allowsHitTesting(false)
+        .runtimeAccessibilityIdentifier("app.rail.dictionary.badge.\(count)")
+    }
+  }
+}
+
+public struct AppRailView<SessionControls: View>: View {
   @ObservedObject var coordinator: AppCoordinator
   @ObservedObject var session: RecordingSession
   let harvestCount: Int
@@ -10,11 +29,27 @@ struct AppRailView<SessionControls: View>: View {
   let onSettings: () -> Void
   @ViewBuilder let sessionControls: () -> SessionControls
 
+  public init(
+    coordinator: AppCoordinator,
+    session: RecordingSession,
+    harvestCount: Int,
+    onDictionary: @escaping () -> Void,
+    onSettings: @escaping () -> Void,
+    @ViewBuilder sessionControls: @escaping () -> SessionControls
+  ) {
+    self.coordinator = coordinator
+    self.session = session
+    self.harvestCount = harvestCount
+    self.onDictionary = onDictionary
+    self.onSettings = onSettings
+    self.sessionControls = sessionControls
+  }
+
   private var hasSession: Bool {
     session.phase == .recording || session.phase == .stopping
   }
 
-  var body: some View {
+  public var body: some View {
     VStack(spacing: Tokens.V1.Space.s2xs) {
       brand
       navigation("首页", symbol: "house", selected: coordinator.workspaceMode == .home) {
@@ -38,22 +73,21 @@ struct AppRailView<SessionControls: View>: View {
         sessionControls()
       }
       Spacer(minLength: Tokens.V1.Space.sm)
-      navigation("词典", symbol: "book", selected: coordinator.workspaceMode == .dictionary, action: onDictionary)
-        .overlay(alignment: .topTrailing) {
-          if harvestCount > 0 {
-            Text(harvestCount.formatted())
-              .font(Tokens.V1.Text.micro.font)
-              .foregroundStyle(Tokens.V1.Color.accentInk)
-              .padding(.horizontal, Tokens.V1.Space.s2xs)
-              .background(Tokens.V1.Color.accent, in: Capsule())
-              .allowsHitTesting(false)
-          }
-        }
-        .accessibilityLabel("词典，收割箱 \(harvestCount) 个候选")
-        .runtimeAccessibilityIdentifier("app.rail.dictionary")
-      navigation("设置", symbol: "gearshape", selected: coordinator.workspaceMode == .settings, action: onSettings)
-        .runtimeAccessibilityIdentifier("app.rail.settings")
-        .runtimeAccessibilityIdentifier("cockpit.rail.settings")
+      navigation(
+        "词典", symbol: "book", selected: coordinator.workspaceMode == .dictionary,
+        action: onDictionary
+      )
+      .overlay(alignment: .topTrailing) {
+        DictionaryHarvestBadge(count: harvestCount)
+      }
+      .accessibilityLabel("词典，收割箱 \(harvestCount) 个候选")
+      .runtimeAccessibilityIdentifier("app.rail.dictionary")
+      navigation(
+        "设置", symbol: "gearshape", selected: coordinator.workspaceMode == .settings,
+        action: onSettings
+      )
+      .runtimeAccessibilityIdentifier("app.rail.settings")
+      .runtimeAccessibilityIdentifier("cockpit.rail.settings")
     }
     // 顶端让出一条顶栏的高度(52)给系统红绿灯:窗口没有独立标题栏,内容顶到 y=0,
     // 红绿灯就落在轨的这条顶带上,宽度由 Tokens.V1.Size.railWidth 留足余量。那个角落归红绿灯;
@@ -93,6 +127,8 @@ struct AppRailView<SessionControls: View>: View {
     .help(title)
     .accessibilityLabel(title)
     .accessibilityAddTraits(selected ? .isSelected : [])
+    .runtimeAccessibilityIdentifier(
+      selected ? "app.rail.selected.\(title)" : "app.rail.unselected.\(title)")
   }
 }
 

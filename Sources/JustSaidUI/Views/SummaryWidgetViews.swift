@@ -839,7 +839,7 @@ public enum FlowLayouter {
     //    DFS 先经移动端摸到分析平台，Web→分析就成了「回边」），6 节点被拉成 6 层、
     //    依赖方向视觉颠倒。环里至少有一条声明序下降的边（下标绕环不可能单调递增），
     //    删它确定、终止、保叙述序。
-    //    **规则的正式契约在 `.trellis/spec/ui/design-system.md`「flow 剪圈规则」**；
+    //    **规则的正式契约在 `docs/specs/ui/design-system.md`「flow 剪圈规则」**；
     //    判别性夹具是 `Verification/UIScreenshots/FlowFixtures.swift` 的 F5b。
     while let cycleEdge = findCycleRemovalCandidate(nodes: nodes, edges: edges, removed: removed) {
       removed.insert(cycleEdge)

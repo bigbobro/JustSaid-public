@@ -49,8 +49,9 @@ public final class HarvestIgnoreStore: @unchecked Sendable {
 
   /// One locked, atomic write for a confirmed batch; preserve all existing ignored words.
   public func ignoreAll(_ candidates: [String]) throws {
-    let additions = Set(candidates.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty })
+    let additions = Set(
+      candidates.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty })
     guard !additions.isEmpty else { return }
     try synchronized {
       var words: Set<String> = []
@@ -67,6 +68,30 @@ public final class HarvestIgnoreStore: @unchecked Sendable {
       let encoded = try StructuredArtifactCodec.encode(words.sorted())
       try encoded.write(to: fileURL, options: .atomic)
     }
+  }
+
+  /// 删掉一批词面。和追加一样持锁、原子写入。按去空白、大小写折叠匹配，
+  /// 所以恢复一个候选时，它的每一种写法都不会留在表里。表里没有这些词面也算成功。
+  public func removeAll(_ candidates: [String]) throws {
+    let removals = Set(candidates.map(normalizedFace).filter { !$0.isEmpty })
+    guard !removals.isEmpty else { return }
+    try synchronized {
+      guard fileManager.fileExists(atPath: fileURL.path) else { return }
+      let data = try Data(contentsOf: fileURL)
+      let words = try StructuredArtifactCodec.decode([String].self, from: data)
+      let remaining = words.filter { !removals.contains(normalizedFace($0)) }
+      guard remaining.count != words.count else { return }
+      try fileManager.createDirectory(
+        at: fileURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+      )
+      let encoded = try StructuredArtifactCodec.encode(remaining.sorted())
+      try encoded.write(to: fileURL, options: .atomic)
+    }
+  }
+
+  private func normalizedFace(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
   }
 
   private func synchronized<T>(_ work: () throws -> T) rethrows -> T {

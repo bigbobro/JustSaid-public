@@ -54,7 +54,7 @@ canonical repository；公开仓库只接受导出脚本生成、扫描通过并
   summary、PDF、音频及其评估结果；
 - `PRIVATE_RESEARCH`：个人研发日志、失败实验、profiling、diagnostics、内部 beta
   操作记录及未整理的研究材料；
-- `.trellis/workspace/**`、私人 journal、内部路线讨论和本机调试记录；
+- `docs/archive/trellis-journal/**`、私人 journal、内部路线讨论和本机调试记录；
 - 需要真实账户、钥匙串、云端或分发凭据的手工验收工具。
 
 保留这些资料是数据保护要求，不代表它们适合公开。
@@ -63,7 +63,7 @@ canonical repository；公开仓库只接受导出脚本生成、扫描通过并
 
 即使被 Git 跟踪，也明确不复制到 public candidate 的路径或内容：
 
-- `research/acceptance/**`、`example/**`、raw recordings、会议导出物和诊断归档；
+- `docs/research/**`、`example/**`、raw recordings、会议导出物和诊断归档；
 - private Trellis workspace/journal、内部 beta/distribution 操作资料；
 - credential tooling、access-bearing URL、密钥/证书/配置文件；
 - `.github/task-artifacts/**`、`.github/task1-trigger` 以及 `uihierarchy-*` 临时 workflow；
@@ -83,8 +83,8 @@ canonical repository；公开仓库只接受导出脚本生成、扫描通过并
 | `Support/` | `PUBLIC_COPY` | 只复制审查过的文本、JSON 和必要 plist |
 | `.github/workflows/` | `PUBLIC_COPY` | 只复制低权限 public workflow |
 | `README.md` / `README.en.md` / `CHANGELOG.md` | `PUBLIC_REWRITE` | 由公开模板生成 |
-| `research/` / `example/` | `PRIVATE_ONLY` / `PUBLIC_EXCLUDE` | 不复制真实场景资料 |
-| `.trellis/` | `PRIVATE_ONLY` / `PUBLIC_EXCLUDE` | 不复制 workspace、journal 或任务上下文 |
+| `example/` | `PRIVATE_ONLY` / `PUBLIC_EXCLUDE` | 不复制真实场景资料 |
+| `docs/specs/`、`docs/features/`、`docs/product/`、`docs/releases/`、`docs/archive/` | `PRIVATE_ONLY` / `PUBLIC_EXCLUDE` | 不复制工程规范、功能 PRD、产品文档、发版记录、归档任务、journal 或调研资料；`docs/` 下只有 `docs/publication/` 参与导出 |
 | `Distribution/` | `PUBLIC_EXCLUDE` | 当前内部分发资料不进入候选树 |
 
 ## 导出与验收规则

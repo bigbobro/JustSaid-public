@@ -4,7 +4,7 @@ import Foundation
 /// 同时检查进程自己的 bundle ID 与归并后的主程序 bundle ID。
 /// 用户点过的「不再提醒」另存，由检测器的 `userExcludedAppKeys` 传入。
 ///
-/// 来源：`.trellis/tasks/09-27-meeting-detection-prompt/research/prototype-research.md` §3，
+/// 来源：`docs/archive/trellis-tasks/archive/2026-10/09-27-meeting-detection-prompt/research/prototype-research.md` §3，
 /// 「本机」= 2026-09-30 在开发机进程列表或 ControlCenter 日志实测。
 public enum MeetingDetectionExclusions {
   public static let builtInBundleIDs: Set<String> = [

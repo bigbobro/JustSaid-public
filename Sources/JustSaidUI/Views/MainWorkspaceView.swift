@@ -98,10 +98,13 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
     self.appCoordinator = appCoordinator
     self.modelAssetManager = modelAssetManager
     self.secretDigest = secretDigest
-    _dictionaryPane = StateObject(wrappedValue: DictionaryPaneModel(
-      store: dictionaryStore, meetingStore: appCoordinator.meetingStore,
-      harvestIgnoreStore: HarvestIgnoreStore(fileURL: dictionaryStore.fileURL
-        .deletingLastPathComponent().appendingPathComponent("dictionary-harvest-ignored.json"))))
+    _dictionaryPane = StateObject(
+      wrappedValue: DictionaryPaneModel(
+        store: dictionaryStore, meetingStore: appCoordinator.meetingStore,
+        harvestIgnoreStore: HarvestIgnoreStore(
+          fileURL: dictionaryStore.fileURL
+            .deletingLastPathComponent().appendingPathComponent("dictionary-harvest-ignored.json")))
+    )
     _transcriptPresentation = State(
       initialValue: LiveTranscriptPresentationState(
         isExpanded: UserDefaults.standard.bool(forKey: "justsaid.transcriptExpanded")
@@ -268,7 +271,7 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       AppRailView(
         coordinator: appCoordinator,
         session: recordingSession,
-        harvestCount: dictionaryPane.harvestItems.count,
+        harvestCount: dictionaryPane.actionableHarvestCount,
         onDictionary: {
           HangSentinel.shared.note("workspace:dictionary")
           appCoordinator.showDictionary()
@@ -290,17 +293,19 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
           Group {
             switch appCoordinator.workspaceMode {
             case .home:
-              HomeView(coordinator: appCoordinator, session: recordingSession,
+              HomeView(
+                coordinator: appCoordinator, session: recordingSession,
                 title: $meetingTitleDraft, client: $meetingClientDraft,
                 project: $meetingProjectDraft, language: languageSelection,
                 modelManager: modelAssetManager, preparationVisible: isPreparationVisible,
                 capabilityID: visiblePreparationCapabilityID,
-                discarding: isDiscardingMeeting, onStart: startMeeting) {
-                  // 首页与驾驶舱/会议库共用同一个仲裁入口:以前首页自己又挂了一份
-                  // `recordingFailureBanner` + 路由横幅,同一条会中 issue 会画两遍
-                  // (2026-10-20 owner 截图:速记引擎异常上下各一条)。
-                  systemBanners
-                }
+                discarding: isDiscardingMeeting, onStart: startMeeting
+              ) {
+                // 首页与驾驶舱/会议库共用同一个仲裁入口:以前首页自己又挂了一份
+                // `recordingFailureBanner` + 路由横幅,同一条会中 issue 会画两遍
+                // (2026-10-20 owner 截图:速记引擎异常上下各一条)。
+                systemBanners
+              }
             case .cockpit:
               Color.clear.allowsHitTesting(false)
             case .library:
@@ -311,7 +316,10 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
               DictionaryPageView(
                 store: dictionaryPane.store, meetingStore: appCoordinator.meetingStore,
                 harvestIgnoreStore: dictionaryPane.harvestIgnoreStore,
-                onHarvestCountChange: { dictionaryPane.reload() },
+                onHarvestCountChange: { _ in dictionaryPane.reload() },
+                onOpenRecent: { directory, seconds in
+                  appCoordinator.openRecentHarvestMeeting(directory: directory, seconds: seconds)
+                },
                 onDone: { appCoordinator.leaveDictionary() })
             case .todos:
               TodoDestinationView(
@@ -340,7 +348,8 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
         appCoordinator.registerMainWindow(window)
         // 单一最小宽(2026-08-19 契约):转写抽屉走 overlay 不参与 flex,
         // 展开不再抬最小宽——旧的 920/1220 两档跳变随左栏转写一起撤销。
-        appCoordinator.enforceMainWindowMinSize(width: Tokens.Layout.cockpitMinWidth + Tokens.V1.Size.railWidth)
+        appCoordinator.enforceMainWindowMinSize(
+          width: Tokens.Layout.cockpitMinWidth + Tokens.V1.Size.railWidth)
       }
     )
     .onChange(of: transcriptPresentation.isExpanded) { _, expanded in
@@ -444,7 +453,8 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
       appCoordinator.registerRequestMarkHandler { notesController.beginMark() }
       appCoordinator.registerRequestToggleChatHandler { toggleChatExclusion() }
       if (recordingSession.phase == .recording || recordingSession.phase == .stopping)
-        && !appCoordinator.hasPendingLibraryCommand {
+        && !appCoordinator.hasPendingLibraryCommand
+      {
         // 只选驾驶舱内容;窗口唤起属于外部入口,挂载时唤起会把关闭后仍被持有的旧主窗前置。
         appCoordinator.selectCockpit()
       }
@@ -630,11 +640,16 @@ public struct MainWorkspaceView<Feed: SummaryFeed>: View {
         onChromeActionsReady: { importRecording, reload in
           libraryImportAction = importRecording
           libraryReloadAction = reload
-          appCoordinator.registerLibraryCommandHandlers(importRecording: importRecording, rescan: reload)
+          appCoordinator.registerLibraryCommandHandlers(
+            importRecording: importRecording, rescan: reload)
         },
         // 上次扫盘的列表先画出来,后台照常重扫(见 AppCoordinator.libraryItemsCache)。
         initialMeetings: appCoordinator.libraryItemsCache,
         onSnapshot: { [appCoordinator] items in appCoordinator.libraryItemsCache = items },
+        transcriptJumpSeconds: appCoordinator.libraryOpensTranscript
+          ? appCoordinator.libraryTranscriptSeconds : nil,
+        opensSourceTranscript: appCoordinator.libraryOpensTranscript
+          && appCoordinator.libraryTranscriptSeconds == nil,
         deletedMeetingLedger: appCoordinator.deletedMeetings,
         todoPage: appCoordinator.todoPage,
         onShowTodos: { appCoordinator.showTodos() }

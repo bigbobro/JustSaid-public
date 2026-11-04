@@ -174,7 +174,7 @@ public struct VerifyWorkbenchView: View {
       .buttonStyle(.textAction)
       .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
       .foregroundStyle(Tokens.Color.acDeep)
-      .help("输出与 research/acceptance/ledger.md 表头同构的一行；完整单等脚本列留空不冒填")
+      .help("输出与 docs/research/acceptance/ledger.md 表头同构的一行；完整单等脚本列留空不冒填")
       .runtimeAccessibilityIdentifier("library.minutes.check.copy-ledger")
     }
     .padding(.horizontal, Tokens.Spacing.lg)

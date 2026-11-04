@@ -84,6 +84,7 @@ public struct MeetingLibraryView: View {
     initialMeetings: [MeetingLibraryItem] = [],
     onSnapshot: (([MeetingLibraryItem]) -> Void)? = nil,
     transcriptJumpSeconds: TimeInterval? = nil,
+    opensSourceTranscript: Bool = false,
     returnsToTodos: Bool = false,
     onReturnToTodos: (() -> Void)? = nil,
     deletedMeetingLedger: TodoDeletedMeetingLedger? = nil,
@@ -129,6 +130,7 @@ public struct MeetingLibraryView: View {
           dictionaryStore: dictionaryStore,
           initialMeetings: initialMeetings,
           transcriptJumpSeconds: transcriptJumpSeconds,
+          opensSourceTranscript: opensSourceTranscript,
           deletedMeetingLedger: deletedMeetingLedger
         )
         model.onSnapshotApplied = { items in
@@ -185,7 +187,8 @@ public struct MeetingLibraryView: View {
       }
       .animation(
         reduceMotion ? nil : .easeOut(duration: Tokens.V1.Motion.base),
-        value: showsMeetingPage)
+        value: showsMeetingPage
+      )
       .frame(width: geometry.size.width, height: geometry.size.height)
     }
     .background(Tokens.V1.Color.paper)

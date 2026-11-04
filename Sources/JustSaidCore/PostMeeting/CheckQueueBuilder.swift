@@ -232,11 +232,11 @@ public struct CheckLedgerContext: Sendable {
   }
 }
 
-/// 「复制台账行」:输出与 research/acceptance/ledger.md 表头**同构**的一行 markdown。
+/// 「复制台账行」:输出与 docs/research/acceptance/ledger.md 表头**同构**的一行 markdown。
 /// 完整单/三单全绿/修复列不冒填(脚本与人的地盘);空洞数列同属脚本地盘,
 /// 只按 design 约定放「存疑 N」备注,由人核对后替换为脚本 hole_count。
 public enum CheckLedgerRow {
-  /// 与 research/acceptance/ledger.md 台账表头逐字同构;列序即输出列序。
+  /// 与 docs/research/acceptance/ledger.md 台账表头逐字同构;列序即输出列序。
   public static let headerColumns: [String] = [
     "#", "日期", "会议(目录/标题)", "时长", "语言", "捏造数", "漏关键数", "空洞数",
     "数字单", "关键信息单", "完整单", "三单全绿", "场间上线的修复",

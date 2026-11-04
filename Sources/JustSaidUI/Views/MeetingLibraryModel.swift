@@ -652,8 +652,10 @@ public final class MeetingLibraryModel: ObservableObject {
   private var awaitsImportNavigation = false
   private var importSelectionAnchor: String?
   private var pendingFocus: URL?
-  /// 待办来源回跳。必须在 `select` 清掉跳转请求之后再消费。
+  /// 待办来源或词典「最近」的转写定位。必须在 `select` 清掉跳转请求之后再消费。
   private var pendingTranscriptJump: (directoryPath: String, seconds: TimeInterval)?
+  /// 来源没有锚点时打开完整转写，不滚动。有秒数的回跳优先走上面那条。
+  private var pendingTranscriptAtTop: String?
   var deletedMeetingLedger: TodoDeletedMeetingLedger?
   /// 会话恢复的页签,只在第一次选中时顶掉「默认落签」,用完即清。
   private var pendingRestoredTab: MeetingDetailTab?
@@ -692,6 +694,7 @@ public final class MeetingLibraryModel: ObservableObject {
     exportService: MeetingLibraryExportService = .live,
     initialMeetings: [MeetingLibraryItem] = [],
     transcriptJumpSeconds: TimeInterval? = nil,
+    opensSourceTranscript: Bool = false,
     deletedMeetingLedger: TodoDeletedMeetingLedger? = nil
   ) {
     // 上一次扫盘的结果先画出来,首次 reload() 扫完再换(见 AppCoordinator.libraryItemsCache)。
@@ -728,6 +731,8 @@ public final class MeetingLibraryModel: ObservableObject {
         directoryPath: focus.standardizedFileURL.path,
         seconds: transcriptJumpSeconds
       )
+    } else if opensSourceTranscript, let focus {
+      pendingTranscriptAtTop = focus.standardizedFileURL.path
     }
     self.deletedMeetingLedger = deletedMeetingLedger
     self.recordingSession = recordingSession
@@ -1103,7 +1108,6 @@ public final class MeetingLibraryModel: ObservableObject {
     }
   }
 
-
   /// 一次全库扫描同时算出各 lane 计数与当前滤镜命中集合;缓存到下一个失效点。
   private func queueSnapshot() -> (
     counts: [LibraryQueueFilter: Int], filtered: [MeetingLibraryItem]
@@ -1153,7 +1157,8 @@ public final class MeetingLibraryModel: ObservableObject {
       }
     }
     var projected = sections.map {
-      MeetingClientSection(id: "\(grouping.rawValue):\($0.client)", client: $0.client, items: $0.items)
+      MeetingClientSection(
+        id: "\(grouping.rawValue):\($0.client)", client: $0.client, items: $0.items)
     }
     if !untagged.isEmpty {
       projected.append(MeetingClientSection(id: "untagged", client: nil, items: untagged))
@@ -1191,6 +1196,9 @@ public final class MeetingLibraryModel: ObservableObject {
       pendingTranscriptJump = nil
       sourceJumpFailure = nil
     }
+    if pendingTranscriptAtTop != id {
+      pendingTranscriptAtTop = nil
+    }
     snapshotID = nil
     minutesRevisionID = nil
     minutesVariant = .chinese
@@ -1222,6 +1230,9 @@ public final class MeetingLibraryModel: ObservableObject {
       land(on: restored)
     } else {
       land(on: preferredLandingTab(for: item))
+    }
+    if let id, pendingTranscriptAtTop == id {
+      tab = .transcript
     }
     if item.hasEnglishMinutes, !item.hasChineseMinutes {
       minutesVariant = .english
@@ -1336,7 +1347,8 @@ public final class MeetingLibraryModel: ObservableObject {
       else { continue }
       counts[line.originalSpeaker, default: 0] += 1
       let length = line.text.trimmingCharacters(in: .whitespacesAndNewlines).count
-      let best = longest[line.originalSpeaker]?.text
+      let best =
+        longest[line.originalSpeaker]?.text
         .trimmingCharacters(in: .whitespacesAndNewlines).count ?? 0
       if length > best { longest[line.originalSpeaker] = line }
     }
@@ -1577,6 +1589,13 @@ public final class MeetingLibraryModel: ObservableObject {
   }
 
   private func applyPendingSourceJump() {
+    if let path = pendingTranscriptAtTop, selectedID == path, let selectedItem {
+      tab = .transcript
+      let ready =
+        artifactCache[selectedItem.id] != nil || failedArtifactLoads.contains(selectedItem.id)
+      if ready { pendingTranscriptAtTop = nil }
+      return
+    }
     guard let jump = pendingTranscriptJump, selectedID == jump.directoryPath,
       let selectedItem
     else { return }

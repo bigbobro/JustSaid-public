@@ -1023,15 +1023,33 @@ private final class InteractiveTranscriptTextView: NSTextView {
   }
 
   func scrollToCenter(_ range: RenderedSpeechRange, animated: Bool) {
+    scrollToCenter(range, animated: animated, attempts: 8)
+  }
+
+  /// 转写视图刚出现时高度还是一屏，目标行要么没有几何，要么落在当前文档高度外面。
+  /// 这时能滚到的最大位置是 0，回跳就停在顶部。等布局把文档撑开再滚。
+  /// 窗口不在屏幕上时不走动画：离屏窗口的 animator 有时不跑，位置会停在动画起点。
+  private func scrollToCenter(_ range: RenderedSpeechRange, animated: Bool, attempts: Int) {
     guard let scrollView = enclosingScrollView else { return }
-    actions.beginProgrammaticScroll()
-    scrollRangeToVisible(range.bodyRange)
     layoutSubtreeIfNeeded()
-    guard let localRect = localRect(for: range.bodyRange) else { return }
+    guard let localRect = localRect(for: range.bodyRange) else {
+      retryScrollToCenter(range, animated: animated, attempts: attempts)
+      return
+    }
     let clipView = scrollView.contentView
     let maximumY = max(0, bounds.height - clipView.bounds.height)
-    let targetY = min(maximumY, max(0, localRect.midY - clipView.bounds.height / 2))
-    if animated {
+    let desiredY = localRect.midY - clipView.bounds.height / 2
+    // 行还在当前文档高度之外，说明布局没长开；末行居中会超过最大滚距，那是正常夹紧，不是没布局。
+    let lineOutsideDocument = localRect.maxY > bounds.height + 1
+    if lineOutsideDocument, attempts > 0 {
+      retryScrollToCenter(range, animated: animated, attempts: attempts)
+      return
+    }
+    actions.beginProgrammaticScroll()
+    scrollRangeToVisible(range.bodyRange)
+    let targetY = min(maximumY, max(0, desiredY))
+    let onScreen = window?.screen?.frame.intersects(window?.frame ?? .zero) == true
+    if animated && onScreen {
       NSAnimationContext.runAnimationGroup { context in
         context.duration = Tokens.Motion.scroll
         context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -1040,6 +1058,13 @@ private final class InteractiveTranscriptTextView: NSTextView {
     } else {
       clipView.scroll(to: NSPoint(x: 0, y: targetY))
       scrollView.reflectScrolledClipView(clipView)
+    }
+  }
+
+  private func retryScrollToCenter(_ range: RenderedSpeechRange, animated: Bool, attempts: Int) {
+    guard attempts > 0 else { return }
+    DispatchQueue.main.async { [weak self] in
+      self?.scrollToCenter(range, animated: animated, attempts: attempts - 1)
     }
   }
 
@@ -1238,9 +1263,10 @@ private final class InteractiveTranscriptTextView: NSTextView {
   /// 不分区会把「这段说错人了」误操作成「全体改名」(Fable 评审 2026-09-20)。
   private func popUpSpeakerMenu(for line: TranscriptSpeechLine, at event: NSEvent) {
     let speaker = line.speaker
-    let total = documentSnapshot?.rows.reduce(into: 0) { count, row in
-      if case .speech(let other) = row, other.speaker == speaker { count += 1 }
-    } ?? 0
+    let total =
+      documentSnapshot?.rows.reduce(into: 0) { count, row in
+        if case .speech(let other) = row, other.speaker == speaker { count += 1 }
+      } ?? 0
     menuActions.removeAll(keepingCapacity: true)
     let menu = NSMenu()
     addInformation("「\(speaker)」· 全部 \(total) 段", to: menu)
@@ -1358,7 +1384,8 @@ private final class InteractiveTranscriptTextView: NSTextView {
         )
         NSColor(Tokens.V1.Color.paper3).setFill()
         NSBezierPath(roundedRect: pill, xRadius: pill.height / 2, yRadius: pill.height / 2).fill()
-        label.draw(at: NSPoint(x: pill.minX + padX, y: timestampRect.minY), withAttributes: attributes)
+        label.draw(
+          at: NSPoint(x: pill.minX + padX, y: timestampRect.minY), withAttributes: attributes)
         badgeRects[range.line.index] = pill.insetBy(dx: -2, dy: -2)
       }
     }
