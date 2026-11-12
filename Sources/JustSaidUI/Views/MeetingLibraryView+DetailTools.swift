@@ -103,26 +103,18 @@ extension MeetingLibraryView {
       Button {
         showTranscriptSearch()
       } label: {
-        HStack(spacing: Tokens.Spacing.xxs) {
-          Image(systemName: "magnifyingglass")
-            .accessibilityHidden(true)
-          Text("搜索")
-        }
+        Label("搜索", systemImage: "magnifyingglass")
       }
-      .buttonStyle(.toolbarPill)
+      .buttonStyle(.v1Quiet)
       .keyboardShortcut("f", modifiers: .command)
       .help("搜索完整转写 ⌘F")
       .runtimeAccessibilityIdentifier("transcript.search.trigger")
       Button {
         isShowingChapterDirectory = true
       } label: {
-        HStack(spacing: Tokens.Spacing.xxs) {
-          Image(systemName: "list.bullet")
-            .accessibilityHidden(true)
-          Text("章节目录")
-        }
+        Label("章节目录", systemImage: "list.bullet")
       }
-      .buttonStyle(.toolbarPill)
+      .buttonStyle(.v1Quiet)
       .popover(isPresented: $isShowingChapterDirectory, arrowEdge: .bottom) {
         ChapterDirectoryView(
           topics: model.selectedHistoryTopics,

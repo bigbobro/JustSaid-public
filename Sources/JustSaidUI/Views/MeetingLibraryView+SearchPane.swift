@@ -193,7 +193,7 @@ extension MeetingLibraryView {
             .runtimeAccessibilityIdentifier("library.search.only-meeting")
           Text("\(item.compactStartedLabel) · \(hits.count) 条")
             .font(.system(size: Tokens.V1.Text.meta.size))
-            .foregroundStyle(Tokens.V1.Color.ink4)
+            .foregroundStyle(Tokens.V1.Color.ink3)
             .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, Tokens.V1.Space.md)
@@ -238,7 +238,7 @@ extension MeetingLibraryView {
         HStack(spacing: Tokens.V1.Space.xs) {
           Text(hit.timestamp)
             .font(.system(size: Tokens.V1.Text.micro.size, design: .monospaced))
-            .foregroundStyle(Tokens.V1.Color.ink4)
+            .foregroundStyle(Tokens.V1.Color.ink3)
           Text(hit.speaker)
             .font(.system(size: Tokens.V1.Text.meta.size, weight: .semibold))
             .foregroundStyle(Tokens.V1.Color.ink3)

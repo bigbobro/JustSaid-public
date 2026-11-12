@@ -63,7 +63,7 @@ extension MeetingLibraryView {
         // 只有一版也说一句。原来这一行整条不画,你分不清是「只有一版」还是「这功能没有」。
         Text("只有一版留痕")
           .font(Tokens.V1.Text.meta.font)
-          .foregroundStyle(Tokens.V1.Color.ink4)
+          .foregroundStyle(Tokens.V1.Color.ink3)
       }
     }
     .padding(.horizontal, Tokens.V1.Space.lg)

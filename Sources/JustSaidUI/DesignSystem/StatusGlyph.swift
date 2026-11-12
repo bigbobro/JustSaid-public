@@ -28,17 +28,20 @@ public struct StatusGlyph: View {
 
   public let state: State
   public let label: String
+  /// 不传时是会议库那一列的定宽;行尾单独一枚时(会中话题块)传更窄的槽,贴右内缘。
+  public let width: CGFloat?
 
-  public init(_ state: State, label: String) {
+  public init(_ state: State, label: String, width: CGFloat? = nil) {
     self.state = state
     self.label = label
+    self.width = width
   }
 
   public var body: some View {
     Image(systemName: state.systemImage)
       .font(Tokens.V1.Text.label.font)
       .foregroundStyle(state.color)
-      .frame(width: Tokens.V1.Size.statusGlyphWidth)
+      .frame(width: width ?? Tokens.V1.Size.statusGlyphWidth)
       .help(label)
       .accessibilityLabel(label)
       .runtimeAccessibilityIdentifier("v1.status-glyph.\(state.rawValue)")

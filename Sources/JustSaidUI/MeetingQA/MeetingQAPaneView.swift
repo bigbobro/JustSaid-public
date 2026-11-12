@@ -104,7 +104,8 @@ struct MeetingQASidebar<Records: View>: View {
           .runtimeAccessibilityIdentifier("dashboard.meeting-qa.reset")
       }
     }
-    .padding(.horizontal, Tokens.V1.Space.sm)
+    // 4 + 安静按钮自带的 12 = 16,按文字对齐栏头(「替你记」「补充记录」);别改回 16。
+    .padding(.horizontal, Tokens.V1.Space.s2xs)
     .overlay(alignment: .bottom) {
       Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
     }
@@ -191,7 +192,8 @@ struct MeetingQAPaneView: View {
         }
       }
     }
-    .padding(Tokens.V1.Space.sm)
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .padding(.vertical, Tokens.V1.Space.sm)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
   }
 
@@ -208,7 +210,8 @@ struct MeetingQAPaneView: View {
             }
           }
         }
-        .padding(Tokens.V1.Space.sm)
+        .padding(.horizontal, Tokens.V1.Space.md)
+        .padding(.vertical, Tokens.V1.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
       }
       // 新的一问在最下面;内容不满一屏时贴底。
@@ -386,7 +389,8 @@ struct MeetingQAPaneView: View {
     .help(controller.isAnswering ? "这一问答完后才能接着问" : "回车提问")
     .accessibilityLabel("问这场会，或同项目之前的会")
     .runtimeAccessibilityIdentifier("dashboard.meeting-qa.input")
-    .padding(Tokens.V1.Space.sm)
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .padding(.vertical, Tokens.V1.Space.sm)
     .overlay(alignment: .top) {
       Rectangle().fill(Tokens.V1.Color.rule).frame(height: Tokens.V1.Size.controlRuleWidth)
     }

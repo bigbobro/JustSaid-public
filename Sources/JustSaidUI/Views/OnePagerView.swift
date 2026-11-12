@@ -371,14 +371,16 @@ struct OnePagerView<Trailing: View>: View {
       identifier: "one-page.open-work",
       count: document.openQuestions.count
     ) {
+      // 没有内容的那一类整列不画，不留一块写着「无」的空栏（README「整块没内容不画」）。
+      let kinds = [MeetingOpenItemKind.toVerify, .disagreement].filter { kind in
+        document.openQuestions.contains { $0.kind == kind }
+      }
       ViewThatFits(in: .horizontal) {
         HStack(alignment: .top, spacing: Tokens.Spacing.xsm) {
-          openWorkColumn(kind: .toVerify)
-          openWorkColumn(kind: .disagreement)
+          ForEach(kinds, id: \.self) { openWorkColumn(kind: $0) }
         }
         VStack(alignment: .leading, spacing: Tokens.Spacing.smd) {
-          openWorkColumn(kind: .toVerify)
-          openWorkColumn(kind: .disagreement)
+          ForEach(kinds, id: \.self) { openWorkColumn(kind: $0) }
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -395,30 +397,24 @@ struct OnePagerView<Trailing: View>: View {
         .foregroundStyle(
           kind == .toVerify ? Tokens.Color.warn : Tokens.V1.Color.disagreement
         )
-      if items.isEmpty {
-        Text("无")
-          .font(.system(size: textScale.size(Tokens.FontSize.secondary)))
-          .foregroundStyle(Tokens.Color.ink4)
-      } else {
-        ForEach(items) { item in
-          VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-            Text(item.content.text)
-              .font(.system(size: textScale.size(Tokens.FontSize.bodyMinimum)))
-              .foregroundStyle(Tokens.Color.ink2)
-              .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: Tokens.Spacing.xs) {
-              EvidenceText(mark: item.content.evidence)
-              Spacer(minLength: Tokens.V1.Space.xs)
-              TranscriptAnchorButton(
-                anchor: item.content.anchor,
-                onJump: onJumpToTranscript
-              )
-                .frame(width: Tokens.V1.Size.meetingAnchorWidth, alignment: .trailing)
-            }
+      ForEach(items) { item in
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+          Text(item.content.text)
+            .font(.system(size: textScale.size(Tokens.FontSize.bodyMinimum)))
+            .foregroundStyle(Tokens.Color.ink2)
+            .fixedSize(horizontal: false, vertical: true)
+          HStack(spacing: Tokens.Spacing.xs) {
+            EvidenceText(mark: item.content.evidence)
+            Spacer(minLength: Tokens.V1.Space.xs)
+            TranscriptAnchorButton(
+              anchor: item.content.anchor,
+              onJump: onJumpToTranscript
+            )
+            .frame(width: Tokens.V1.Size.meetingAnchorWidth, alignment: .trailing)
           }
-          .padding(.vertical, Tokens.Spacing.xxs)
-          .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.vertical, Tokens.Spacing.xxs)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)

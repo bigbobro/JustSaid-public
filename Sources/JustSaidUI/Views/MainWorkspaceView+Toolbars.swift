@@ -14,11 +14,15 @@ extension MainWorkspaceView {
   ///
   /// 计时仍随红点在轨上,所以这里的会名不带计时器。
   /// 闲聊 ⌥⌘X / 暂停 ⌥⌘P 的全局热键不受位置变动影响。
+  ///
+  /// 2026-11-11 设计走查:这条栏原来 42 高、按钮是旧 `toolbarPill` 家族,其余各页都是
+  /// `WorkspaceTopBar` 的 52 高与 V1 按钮,⌘L 在会中与会议库之间切换时底线跳 10 点、
+  /// 「结束会议」是墨青而「开始记录」是近黑。几何与按钮层级改成与 `WorkspaceTopBar` 同一套。
   var cockpitToolbar: some View {
-    HStack(spacing: Tokens.Spacing.xsm) {
+    HStack(spacing: Tokens.V1.Space.xs) {
       meetingIdentity
 
-      Spacer()
+      Spacer(minLength: Tokens.V1.Space.sm)
 
       chatToolbarButton
       microphonePauseToolbarButton
@@ -26,15 +30,9 @@ extension MainWorkspaceView {
       ContentScaleControl(selection: textScaleSelection)
       primaryActionButton
     }
-    .padding(.horizontal, Tokens.Spacing.md)
-    .frame(height: Tokens.Layout.toolbarHeight)
-    .background(
-      LinearGradient(
-        colors: [Tokens.Color.toolbarTop, Tokens.Color.toolbarBottom],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-    )
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .frame(height: Tokens.V1.Size.barHeight)
+    .background(Tokens.V1.Color.paper)
     .runtimeAccessibilityIdentifier("cockpit.toolbar")
   }
 
@@ -51,15 +49,18 @@ extension MainWorkspaceView {
       .help("切换本场速记的识别语言，从下一句起生效；已经出来的转写不变")
       .runtimeAccessibilityIdentifier("toolbar.live-language")
     } else if recordingSession.phase == .recording || recordingSession.phase == .stopping {
-      // R2':录制中只读标签同样只显示「Auto/中/英」,不带「语言」前缀。
-      Text(shortLabel(for: languageForThisMeeting))
-        .font(.system(size: Tokens.FontSize.uiEmphasis))
-        .foregroundStyle(Tokens.Color.ink2)
-        .padding(.horizontal, Tokens.Spacing.sm)
-        .padding(.vertical, Tokens.Spacing.xxs)
-        .overlay(
-          RoundedRectangle(cornerRadius: Tokens.Radius.control).stroke(
-            Tokens.Color.line, lineWidth: 1))
+      // 只读:本场语种改不了时它只是一个当前值,不画描边框。带框的「中」和旁边的按钮
+      // 长得一样却点不动(2026-11-11 设计走查)。写成「语言 中」,前缀用次一级的灰。
+      HStack(spacing: Tokens.V1.Space.s2xs) {
+        Text("语言").foregroundStyle(Tokens.V1.Color.ink3)
+        Text(shortLabel(for: languageForThisMeeting)).foregroundStyle(Tokens.V1.Color.ink2)
+      }
+      .font(Tokens.V1.Text.label.font)
+      .fixedSize()
+      .padding(.horizontal, Tokens.V1.Space.xs)
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel("本场说话语言：\(shortLabel(for: languageForThisMeeting))")
+      .help("本场说话语言，这个速记引擎开录后不能切换")
     } else {
       // R2':隐藏 Picker 标签(原来「说话语言」在工具栏被截成「说…」),只留三个 segment。
       V1SegmentedPicker(
@@ -284,21 +285,23 @@ extension MainWorkspaceView {
     case .recording:
       // 「废弃」放在「结束会议」左侧、用低调样式：它是不可逆动作，
       // 不该和正常收尾长得一样醒目，但录到一半发现没用时必须一步能到（T15）。
+      // 安静按钮(无底无框)：原来的浮起胶囊和主按钮只隔 8 点、同高同圆角，读成一对并列选项。
       Button("废弃") {
         isConfirmingDiscard = true
       }
-      .buttonStyle(.toolbarPill)
+      .buttonStyle(.v1Quiet)
       .help("废弃这场会议：停止录音，不做精转、不生成纪要，并删除本场录音与补充记录")
       .accessibilityLabel("废弃并结束当前会议")
 
+      // 主按钮用 `color-primary`(README「按钮」：会中「结束会议」)，与会议库「开始记录」同款。
       Button("结束会议") {
         requestEndMeeting()
       }
-      .buttonStyle(.toolbarPillAccent)
+      .buttonStyle(.v1Primary)
 
     case .starting, .stopping:
       Button(recordingSession.phase == .starting ? "正在启动…" : "正在保存…") {}
-        .buttonStyle(.toolbarPillAccent)
+        .buttonStyle(.v1Primary)
         .disabled(true)
 
     case .idle, .completed, .failed:

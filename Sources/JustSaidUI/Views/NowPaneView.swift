@@ -25,7 +25,13 @@ struct NowPaneView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      header
+      // 「看这段原文」在标题行右端，不再单占舞台底部一行：舞台高度固定，那一行 30 来点
+      // 正好是多放一条要点的高度（2026-11-11 设计走查，截图「驾驶舱-细条」）。
+      HStack(spacing: Tokens.Spacing.xsm) {
+        header
+        actions
+      }
+      .frame(minHeight: Tokens.V1.Size.controlSm)
       if let context = state.context {
         contextContent(context)
       } else if state.lines.isEmpty {
@@ -41,7 +47,6 @@ struct NowPaneView: View {
           .padding(.top, Tokens.Spacing.xsm)
         }
       }
-      actions
     }
     .padding(.horizontal, Tokens.Spacing.xxl)
     .padding(.vertical, Tokens.Spacing.smd)
@@ -71,13 +76,20 @@ struct NowPaneView: View {
         }
         // 2026-07-31 用户拍板:当前区不放转写原文(原文自有转写栏,这里要的是轻加工)。
         // recentLines 仍在数据里,只用作「看这段原文」的回跳锚点,不再逐行渲染。
-        ForEach(state.lines) { line in
+        ForEach(calloutFirstLines) { line in
           NowLineRow(line: line, fontSize: textScale.size(Tokens.FontSize.bodyMinimum))
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.top, Tokens.Spacing.xsm)
     }
+  }
+
+  /// 点名行排在最前，其余保持原顺序。舞台高度固定，内容多一行就要滚；点名行原来按时间
+  /// 排在最后，正好是被裁掉的那一行（2026-11-11 设计走查，截图「驾驶舱-细条」：
+  /// 「刚点到你的名字」只露出上半截）。回神时第一眼要接住的就是这一行。
+  private var calloutFirstLines: [SummaryNowLine] {
+    state.lines.filter(\.isCallout) + state.lines.filter { !$0.isCallout }
   }
 
   private var header: some View {
@@ -161,11 +173,10 @@ struct NowPaneView: View {
             .accessibilityHidden(true)
         }
       }
-      .buttonStyle(.toolbarPill)
+      .buttonStyle(V1ButtonStyle.v1Quiet.height(Tokens.V1.Size.controlSm))
       .disabled(state.sourceAnchorSeconds == nil)
       .accessibilityLabel("展开转写区并查看最新原文")
     }
-    .padding(.top, Tokens.Spacing.xs)
   }
 }
 
@@ -173,11 +184,7 @@ private struct NowLineRow: View {
   let line: SummaryNowLine
   let fontSize: CGFloat
 
-  /// 点名高亮的载体是 `.callout` 片段（V10 语义），行级判定就读它——
-  /// 不在 UI 层另发明一个「这行重要吗」的第二事实源。
-  private var isCallout: Bool {
-    line.text.runs.contains { $0.style == .callout }
-  }
+  private var isCallout: Bool { line.isCallout }
 
   var body: some View {
     HStack(alignment: isCallout ? .center : .top, spacing: Tokens.Spacing.xsm) {
@@ -291,5 +298,13 @@ private struct NowPaneBackground: View {
         endRadius: max(radius, 1)
       )
     }
+  }
+}
+
+extension SummaryNowLine {
+  /// 点名高亮的载体是 `.callout` 片段（V10 语义），行级判定就读它——
+  /// 不在 UI 层另发明一个「这行重要吗」的第二事实源。
+  fileprivate var isCallout: Bool {
+    text.runs.contains { $0.style == .callout }
   }
 }

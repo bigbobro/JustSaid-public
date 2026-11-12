@@ -155,7 +155,7 @@ public struct DictionarySettingsView: View {
 
   public var body: some View {
     GeometryReader { geometry in
-      SettingsPage(fullWidth: true, title: "词典与收割箱", subtitle: "维护常用专名，处理纪要里发现的新词。") {
+      SettingsPage(fullWidth: true) {
         VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
           if let errorMessage = model.errorMessage {
             DegradedBanner(text: errorMessage)
@@ -333,13 +333,13 @@ public struct DictionarySettingsView: View {
       } else {
         HStack(spacing: Tokens.V1.Space.xs) {
           V1TextField(
-            placeholder: "搜索，或直接输入新词；一个人有多种叫法写成「张三=三儿，老张」",
+            placeholder: "搜索，或直接输入新词",
             text: searchQuery, identifier: "settings.dictionary.search"
           )
           .onSubmit { model.addFromSearch() }
           .help(
             "回车把没有匹配的词直接加进词典。\n"
-              + "同一个人有多种叫法的，写成「本名=称呼1，称呼2」——例如 张三=三儿，老张。\n"
+              + "同一个人有多种叫法的，写成「本名=称呼1，称呼2」，例如 张三=三儿，老张。\n"
               + "这些叫法都会发给识别引擎，纪要一律用本名署名。"
           )
           .accessibilityLabel("搜索词条，没有匹配时回车直接添加；可用「本名=称呼」登记别名")

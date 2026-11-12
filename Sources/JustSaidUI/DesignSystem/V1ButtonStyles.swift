@@ -92,8 +92,12 @@ public struct V1ButtonStyle: ButtonStyle {
           // 系统「键盘导航」关着(本机默认)时按钮根本进不了焦点链,isFocused 报的是
           // 外面那个可聚焦容器:在会议页正文里点一下,右栏底两颗按钮就同时换成墨青边
           // (owner 2026-09-21 截图「好丑」)。只有键盘导航开着时这个值才是按钮自己的。
+          // 2026-11-11:安静、图标、警示文字三档原来在键盘焦点下什么都不画,开着键盘导航
+          // 用 Tab 走到它们时看不出焦点在哪(README「可访问性」登记过的缺口)。上面说的
+          // 「一屏按钮同时长边」已经被 isFullKeyboardAccessEnabled 这道闸挡住,所以这三档
+          // 也在自己的边界上画同一条 2 点焦点线;键盘导航关着时仍然什么都不画。
           let focused = isEnabled && isFocused && NSApplication.shared.isFullKeyboardAccessEnabled
-          if kind == .outline || (focused && isSolid) {
+          if kind == .outline || focused {
             RoundedRectangle(cornerRadius: cornerRadius)
               .strokeBorder(
                 focused ? Tokens.V1.Color.focus : Tokens.V1.Color.controlRule,

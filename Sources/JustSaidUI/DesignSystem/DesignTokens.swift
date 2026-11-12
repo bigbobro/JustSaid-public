@@ -260,47 +260,17 @@ enum Tokens {
     static let presenceHighlight: Double = 6
   }
 
-  /// 驾驶舱整理区话题卡层级(2026-08-09 重塑 P3,用户拍板 08-驾驶舱卡片层级原型-v1):
-  /// 最新话题 focus(墨青左缘 + acLine 描边 + sh2 微浮起),旧话题 calm(pane 底 +
-  /// line2 描边 + 标题/正文降档)——会上余光扫屏,第一眼必须落在当前话题。
-  /// standard = 既有 chrome,会议库留痕页沿用,视觉零变化。
+  /// 驾驶舱整理区话题块层级(2026-08-09 P3 定:会上余光扫屏,第一眼必须落在当前话题)。
+  /// 2026-11-11 起画法按设计系统 v1「板块隔离」:进行中的话题块是浅井(浅色 paper-2、深色 paper-3),
+  /// 旧话题 calm 只把标题降一档,不再用墨青左缘、描边与投影。
+  /// standard = 会议库留痕页的盒子,视觉不变。
   enum CardTier {
     case standard
     case focus
     case calm
 
-    var background: SwiftUI.Color {
-      self == .calm ? Tokens.Color.pane : Tokens.Color.card
-    }
-
-    /// isInProgress/isHighlighted 的强调描边优先级仍高于层级,调用方先判它。
-    var stroke: SwiftUI.Color {
-      switch self {
-      case .standard: return Tokens.Color.line
-      case .focus: return Tokens.Color.acLine
-      case .calm: return Tokens.Color.line2
-      }
-    }
-
     var titleColor: SwiftUI.Color {
       self == .calm ? Tokens.Color.ink2 : Tokens.Color.ink
-    }
-
-    var bodyColor: SwiftUI.Color {
-      self == .calm ? Tokens.Color.ink3 : Tokens.Color.ink2
-    }
-
-    /// focus 的整高墨青左缘;其余层级无左缘。
-    var leadingEdge: SwiftUI.Color? {
-      self == .focus ? Tokens.Color.ac : nil
-    }
-
-    var shadow: (color: SwiftUI.Color, radius: CGFloat, y: CGFloat)? {
-      switch self {
-      case .standard: return Tokens.Shadow.sh1
-      case .focus: return Tokens.Shadow.sh2
-      case .calm: return nil
-      }
     }
   }
 

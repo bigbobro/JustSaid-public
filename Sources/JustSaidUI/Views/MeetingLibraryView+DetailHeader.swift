@@ -344,7 +344,7 @@ extension MeetingLibraryView {
       case .green: return ("完备", Tokens.V1.Color.ok)
       case .acknowledged: return ("已确认", Tokens.V1.Color.ok)
       case .red: return ("有缺口", Tokens.V1.Color.warn)
-      case .undetermined, nil: return ("未查", Tokens.V1.Color.ink4)
+      case .undetermined, nil: return ("未查", Tokens.V1.Color.ink3)
       }
     }()
     HStack(spacing: Tokens.V1.Space.s3xs) {
@@ -368,7 +368,7 @@ extension MeetingLibraryView {
     case .completed: return Tokens.V1.Color.ok
     case .inProgress: return Tokens.V1.Color.accent
     case .failed: return Tokens.V1.Color.warn
-    case .notStarted: return Tokens.V1.Color.ink4
+    case .notStarted: return Tokens.V1.Color.ink3
     }
   }
 

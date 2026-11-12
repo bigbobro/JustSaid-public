@@ -24,7 +24,7 @@ public struct SourcePopoverView: View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xsm) {
       Text("来源 · \(reference.sourceLabel) \(reference.rangeLabel)")
         .font(.system(size: Tokens.FontSize.caption, design: .monospaced))
-        .foregroundStyle(Tokens.Color.ink4)
+        .foregroundStyle(Tokens.Color.ink3)
 
       VStack(alignment: .leading, spacing: Tokens.Spacing.xsm) {
         ForEach(reference.lines) { line in
@@ -86,7 +86,7 @@ private struct QuotedLineRow: View {
         }
         Text(ElapsedTime.shortLabel(line.timestamp))
           .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-          .foregroundStyle(Tokens.Color.ink4)
+          .foregroundStyle(Tokens.Color.ink3)
       }
       Text(line.text)
         .font(.system(size: textScale.size(Tokens.FontSize.bodyMinimum)))

@@ -8,44 +8,50 @@ struct ActionItemsPaneView: View {
   @Environment(\.textScale) private var textScale
 
   var body: some View {
+    // 2026-11-11 设计走查(截图「驾驶舱-细条」):原来是一张带描边的白卡,行首一颗墨青点,
+    // 归属写在正文下面。按 `live.html` 平铺:栏头一行,行与行之间一条细线,
+    // 每行是「谁 · 事 · 时间」,时间贴右。
     VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: Tokens.Spacing.xs) {
-        Text("替你记 · 承诺与待办")
-          .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-          .foregroundStyle(Tokens.Color.ink3)
+      HStack(spacing: Tokens.V1.Space.sm) {
+        Text("替你记")
+          .font(Tokens.V1.Text.strong.font)
+          .foregroundStyle(Tokens.V1.Color.ink)
         if !items.isEmpty {
-          SectionCountBadge(value: items.count)
+          Text("\(items.count)")
+            .font(Tokens.V1.Text.meta.font.monospacedDigit())
+            .foregroundStyle(Tokens.V1.Color.ink3)
         }
         Spacer()
       }
-      .padding(.horizontal, Tokens.Spacing.md)
-      .padding(.vertical, Tokens.Spacing.xsm)
+      .frame(height: Tokens.V1.Size.controlLg)
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel("替你记，承诺与待办 \(items.count) 条")
 
-      Divider()
+      rowRule
 
       if items.isEmpty {
         Text("听到明确承诺或待办后，会记在这里。")
           .font(.system(size: textScale.size(Tokens.FontSize.uiEmphasis)))
-          .foregroundStyle(Tokens.Color.ink4)
-          .padding(Tokens.Spacing.md)
+          .foregroundStyle(Tokens.V1.Color.ink3)
+          .padding(.top, Tokens.V1.Space.xs)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       } else {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(sortedItems) { item in
               actionRow(item)
-              Divider()
+              rowRule
             }
           }
         }
       }
     }
-    .background(Tokens.Color.card)
-    .overlay(
-      RoundedRectangle(cornerRadius: Tokens.Radius.card)
-        .stroke(Tokens.Color.line, lineWidth: 1)
-    )
-    .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.card))
+  }
+
+  private var rowRule: some View {
+    Rectangle()
+      .fill(Tokens.V1.Color.rule)
+      .frame(height: Tokens.V1.Size.controlRuleWidth)
   }
 
   private var sortedItems: [SummaryActionItem] {
@@ -53,60 +59,41 @@ struct ActionItemsPaneView: View {
   }
 
   private func actionRow(_ item: SummaryActionItem) -> some View {
-    HStack(alignment: .top, spacing: Tokens.Spacing.xsm) {
-      // 记号不是 checkbox(2026-08-21 走查 N-8,用户拍板)。原先是 14×14 描边方框,
-      // 画得像待办勾选框却没有 Button 包裹——视觉承诺了一个不存在的交互
-      // (08-15 F-C8 提出,一直没闭)。换成本 app 列表项通用的实心圆点
-      // (NowLineRow / 话题卡要点同一套词汇),不新造标注:
-      // 归属由「我 · 承诺」那行的文字与色彩承担,待核由 [待核] 徽章承担,
-      // 这颗点只负责「这是一条」。**不做可勾选交互**——那是新语义 + 新数据。
-      Circle()
-        .fill(Tokens.Color.acLine)
-        .frame(width: 5, height: 5)
-        .padding(.top, Tokens.Spacing.xs)
-        .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: Tokens.Spacing.hairline) {
+    // 行首是「谁」,不再另画一颗点:归属由这两三个字与它的颜色承担(「我」用石青)。
+    // 仍然**不做可勾选交互**(2026-08-21 走查 N-8):完成用的方框只出现在待办页。
+    HStack(alignment: .firstTextBaseline, spacing: Tokens.V1.Space.xs) {
+      Text(ownerLabel(item))
+        .font(
+          .system(
+            size: Tokens.FontSize.badge, weight: item.ownership == .me ? .semibold : .regular)
+        )
+        .foregroundStyle(item.ownership == .me ? Tokens.V1.Color.me : Tokens.V1.Color.ink3)
+        .lineLimit(1)
+        .fixedSize()
+      VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
         Text(item.text)
-          .font(.system(size: textScale.size(Tokens.FontSize.uiEmphasis), weight: .medium))
-          .foregroundStyle(Tokens.Color.ink)
+          .font(.system(size: textScale.size(Tokens.FontSize.uiEmphasis)))
+          .foregroundStyle(Tokens.V1.Color.ink)
           .fixedSize(horizontal: false, vertical: true)
-        HStack(spacing: Tokens.Spacing.xxs) {
-          Text(ownerLabel(item))
-            .font(.system(size: Tokens.FontSize.badge, weight: item.ownership == .me ? .semibold : .regular))
-            .foregroundStyle(item.ownership == .me ? Tokens.Color.me : Tokens.Color.ink3)
-          if item.evidence == .toVerify {
-            SummaryMarkerBadge(kind: .toVerify)
-          }
+        if item.evidence == .toVerify {
+          SummaryMarkerBadge(kind: .toVerify)
         }
         if let deadline = item.deadline {
           Text("时限：\(deadline)")
             .font(.system(size: textScale.size(Tokens.FontSize.badge)))
-            .foregroundStyle(Tokens.Color.ink3)
+            .foregroundStyle(Tokens.V1.Color.ink3)
             .runtimeAccessibilityIdentifier("dashboard.action-deadline")
         }
-        if let recorded = item.recordedAt {
-          HStack(spacing: Tokens.Spacing.xxs) {
-            // 时间只出现一次：能点的锚点芯片替代时间文字，拿不到才退回文字。
-            if canJump(recorded) {
-              Text("记录")
-              TranscriptAnchorButton(anchor: recorded, onJump: onJumpToTranscript)
-            } else {
-              Text("记录 \(recorded.timecode)")
-            }
-          }
-          .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-          .foregroundStyle(Tokens.Color.ink4)
-        }
         ForEach(item.updates) { update in
-          HStack(spacing: Tokens.Spacing.xxs) {
+          HStack(spacing: Tokens.V1.Space.s2xs) {
             if let anchor = update.anchor, !canJump(anchor) {
               Text("更新 \(anchor.timecode)")
                 .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-                .foregroundStyle(Tokens.Color.ink4)
+                .foregroundStyle(Tokens.V1.Color.ink3)
             } else if update.anchor != nil {
               Text("更新")
                 .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-                .foregroundStyle(Tokens.Color.ink4)
+                .foregroundStyle(Tokens.V1.Color.ink3)
             }
             Text(updateLead(update))
               .font(.system(size: textScale.size(Tokens.FontSize.badge)))
@@ -115,9 +102,19 @@ struct ActionItemsPaneView: View {
           }
         }
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      // 记下这条的时刻贴右:能点的锚点替代时间文字,拿不到才退回文字。
+      if let recorded = item.recordedAt {
+        if canJump(recorded) {
+          TranscriptAnchorButton(anchor: recorded, onJump: onJumpToTranscript)
+        } else {
+          Text(recorded.timecode)
+            .font(Tokens.V1.Text.timecode.font)
+            .foregroundStyle(Tokens.V1.Color.ink3)
+        }
+      }
     }
-    .padding(.horizontal, Tokens.Spacing.md)
-    .padding(.vertical, Tokens.Spacing.xsm)
+    .padding(.vertical, Tokens.V1.Space.xs)
   }
 
   private func canJump(_ anchor: TranscriptAnchor?) -> Bool {

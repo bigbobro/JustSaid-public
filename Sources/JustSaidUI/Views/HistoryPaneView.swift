@@ -35,8 +35,7 @@ struct HistoryPaneView: View {
         ZStack(alignment: .bottom) {
           ScrollView {
             timeline
-              .padding(.horizontal, Tokens.Spacing.lg)
-              .padding(.top, Tokens.Spacing.hairline)
+              .padding(.horizontal, Tokens.V1.Space.lg)
           }
           .onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentOffset.y + geometry.containerSize.height
@@ -74,7 +73,7 @@ struct HistoryPaneView: View {
         }
       }
     }
-    .background(Tokens.Color.card)
+    .background(Tokens.V1.Color.paper)
   }
 
   private func handleScrollRequest(_ topicID: UUID, proxy: ScrollViewProxy) {
@@ -104,32 +103,22 @@ struct HistoryPaneView: View {
   /// 整理区头部。**图例不常驻**（2026-08-19 R8）：五枚徽章是「第一次见时的说明」，
   /// 常驻一整行就成了每次开会都要跳过的噪声——收进「图例」悬停卡，需要时才浮出。
   private var topBar: some View {
-    HStack(spacing: Tokens.Spacing.xsm) {
-      Text("整理区 · 活文档")
-        .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink3)
+    HStack(spacing: Tokens.V1.Space.sm) {
+      Text("整理区")
+        .font(Tokens.V1.Text.strong.font)
+        .foregroundStyle(Tokens.V1.Color.ink)
       EngineStatusChip(status: engineStatus)
       Spacer()
-      Text("改过必留痕")
-        .font(.system(size: Tokens.FontSize.caption))
-        .foregroundStyle(Tokens.Color.ink4)
       legend
     }
-    .padding(.horizontal, Tokens.Spacing.lg)
-    .padding(.top, Tokens.Spacing.sm)
-    .padding(.bottom, Tokens.Spacing.xs)
+    .padding(.horizontal, Tokens.V1.Space.lg)
+    .frame(height: Tokens.V1.Size.controlLg)
   }
 
   private var legend: some View {
     Text("图例")
-      .font(.system(size: Tokens.FontSize.caption))
-      .foregroundStyle(isLegendHovering ? Tokens.Color.ink2 : Tokens.Color.ink4)
-      .padding(.horizontal, Tokens.Spacing.xs)
-      .padding(.vertical, Tokens.Spacing.hairline)
-      .overlay(
-        RoundedRectangle(cornerRadius: Tokens.Radius.chip)
-          .stroke(Tokens.Color.line, lineWidth: 1)
-      )
+      .font(Tokens.V1.Text.meta.font)
+      .foregroundStyle(isLegendHovering ? Tokens.V1.Color.ink2 : Tokens.V1.Color.ink3)
       .contentShape(Rectangle())
       .onHover { isLegendHovering = $0 }
       .overlay(alignment: .topTrailing) {
@@ -143,7 +132,7 @@ struct HistoryPaneView: View {
   }
 
   private var timeline: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.hairline) {
+    VStack(alignment: .leading, spacing: 0) {
       ForEach(Array(topics.enumerated()), id: \.element.id) { index, topic in
         SummaryTopicCardView(
           topic: topic,
@@ -156,14 +145,17 @@ struct HistoryPaneView: View {
           onSaveSourceAsNote: onSaveSourceAsNote,
           onJumpToTranscript: onJumpToTranscript,
           onExcludeBulletAnchor: onExcludeBulletAnchor,
-          onExcludeTopicRange: onExcludeTopicRange
+          onExcludeTopicRange: onExcludeTopicRange,
+          // 细线只画在两块普通话题之间:浅井自己有边界,它的上下都不再压一条线。
+          showsTopRule: index > 0 && !topic.isInProgress && !topics[index - 1].isInProgress
         )
         .id(topic.id)
         .transition(reduceMotion ? .identity : .topicCardEntrance)
       }
 
       if case .generatingNewTopic = engineStatus {
-        GeneratingTopicNode()
+        // 它占的是下一块的位置:前一块不是浅井时,同样以一条细线隔开。
+        GeneratingTopicNode(showsTopRule: topics.last.map { !$0.isInProgress } ?? false)
       }
 
       Color.clear.frame(height: 1).id(bottomSentinelID)
@@ -205,33 +197,22 @@ private struct EngineStatusChip: View {
   let status: SummaryEngineStatus
 
   var body: some View {
+    // 跟在「整理区」后面的一句元信息,不画胶囊:它是这一栏的状态,不是一颗能点的东西。
     Group {
       if let text = status.organizerStatusText {
         Text(text)
-          .foregroundStyle(status.isDegraded ? Tokens.Color.warn : Tokens.Color.ink3)
-          .padding(.horizontal, Tokens.Spacing.xsm)
-          .padding(.vertical, Tokens.Spacing.hairline)
-          .overlay(
-            Capsule().stroke(
-              status.isDegraded ? Tokens.Color.amberLine : Tokens.Color.line,
-              lineWidth: 1
-            )
-          )
+          .foregroundStyle(status.isDegraded ? Tokens.V1.Color.warn : Tokens.V1.Color.ink3)
           .runtimeAccessibilityIdentifier(status.engineChipIdentifier)
       } else {
-        HStack(spacing: Tokens.Spacing.xxs) {
+        HStack(spacing: Tokens.V1.Space.s2xs) {
           BreathingDots()
           Text("AI 分析中")
         }
-        .foregroundStyle(Tokens.Color.ac)
-        .padding(.horizontal, Tokens.Spacing.xs)
-        .padding(.vertical, Tokens.Spacing.hairline)
-        .background(Capsule().fill(Tokens.Color.acSoft))
-        .overlay(Capsule().stroke(Tokens.Color.acLine, lineWidth: 1))
+        .foregroundStyle(Tokens.V1.Color.accent)
         .runtimeAccessibilityIdentifier("dashboard.engine-chip.analyzing")
       }
     }
-    .font(.system(size: Tokens.FontSize.caption, weight: .semibold))
+    .font(Tokens.V1.Text.meta.font)
     .accessibilityElement(children: .combine)
   }
 }
@@ -277,116 +258,174 @@ struct SummaryTopicCardView: View {
   /// (细边 + paper-2 + 大圆角、标题在块内)不是一套,同一个会议页里两种盒子
   /// (owner 2026-09-20:要跟前面这些页天然融合一体)。默认 false,驾驶舱零变化。
   var chromeless: Bool = false
+  /// 平铺画法下块顶那条 1 点细线。第一块、进行中的浅井、紧跟浅井的那一块不画,由调用方算好传入。
+  var showsTopRule: Bool = false
+
+  /// 会中整理区(focus / calm)按设计系统「板块隔离」平铺:话题块之间一条细线,
+  /// 进行中的那一块是浅井。会议页留痕(standard)仍是原来的盒子。
+  private var isFlat: Bool { tier != .standard }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
-      HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.xsm) {
-        RoundedRectangle(cornerRadius: 2)
-          .fill(topic.isInProgress ? Tokens.Color.ac : accent)
-          .frame(width: 5, height: 14)
-        Text(topic.title)
-          .font(.system(size: fontSize, weight: .bold))
-          .foregroundStyle(tier.titleColor)
-        Text(topic.timeRangeLabel)
-          .font(.system(size: Tokens.FontSize.caption, design: .monospaced))
-          .foregroundStyle(Tokens.Color.ink4)
-        if topic.hasVisualization {
-          ChapterVisualizationTag()
-        }
-        ForEach(topic.annotations.filter { $0.kind != .inProgress }) { annotation in
-          HStack(spacing: Tokens.Spacing.hairline) {
-            SummaryMarkerBadge(kind: annotation.kind, label: annotation.label)
-            TranscriptAnchorButton(
-              anchor: annotation.anchor,
-              onJump: onJumpToTranscript
-            )
-          }
-        }
-        Spacer(minLength: 0)
-        if topic.isInProgress {
-          SummaryMarkerBadge(kind: .inProgress)
-        } else {
-          Text("已沉淀")
-            .font(.system(size: Tokens.FontSize.badge, weight: .semibold))
-            .foregroundStyle(Tokens.Color.ink4)
-        }
-      }
-      // 留痕页不传 onExcludeTopicRange,原来仍然挂着 .contextMenu,右键弹出一个**空菜单**。
-      // 空菜单比没有菜单更糟:它让人以为这里本该有东西、是坏了。没有回调就整条不挂。
-      .modifier(
-        TopicExcludeContextMenu(
-          timeRangeLabel: topic.timeRangeLabel,
-          onExcludeTopicRange: onExcludeTopicRange
-        ))
-
-      VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-        ForEach(topic.bullets) { bullet in
-          BulletRow(
-            bullet: bullet,
-            fontSize: fontSize,
-            textColor: tier.bodyColor,
-            isSourceOpen: openSourceBulletID == bullet.id,
-            onToggleSource: {
-              openSourceBulletID = openSourceBulletID == bullet.id ? nil : bullet.id
-            },
-            onSaveSourceAsNote: onSaveSourceAsNote,
-            onJumpToTranscript: onJumpToTranscript,
-            onExcludeBulletAnchor: onExcludeBulletAnchor
-          )
-        }
-
-        ForEach(Array(topic.visualizations.enumerated()), id: \.offset) { _, visualization in
-          visualization.makeView(onJumpToTranscript: onJumpToTranscript)
-        }
-
-        ForEach(topic.revisions) { revision in
-          RevisionTraceView(
-            revision: revision,
-            onJumpToTranscript: onJumpToTranscript
-          )
-        }
-
-        ForEach(topic.disagreements) { disagreement in
-          DisagreementTraceView(
-            disagreement: disagreement,
-            onJumpToTranscript: onJumpToTranscript
-          )
-        }
-      }
-      .padding(.horizontal, chromeless ? .zero : Tokens.Spacing.smd)
-      .padding(.vertical, chromeless ? .zero : Tokens.Spacing.sm)
-      .background(
-        chromeless ? Color.clear : tier.background,
-        in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
-      .overlay(alignment: .leading) {
-        // focus 的整高墨青左缘(P3):只在层级里出现,不影响内容内边距。
-        if let leadingEdge = tier.leadingEdge {
-          UnevenRoundedRectangle(
-            cornerRadii: .init(
-              topLeading: Tokens.Radius.card,
-              bottomLeading: Tokens.Radius.card
-            )
-          )
-          .fill(leadingEdge)
-          .frame(width: 3)
-        }
-      }
-      .overlay {
-        if !chromeless {
-          RoundedRectangle(cornerRadius: Tokens.Radius.card)
-            .stroke(
-              // 录制中/章节定位强调的优先级高于层级描边。
-              topic.isInProgress || isHighlighted ? Tokens.Color.ac : tier.stroke,
-              lineWidth: topic.isInProgress || isHighlighted ? 1.5 : 1
-            )
-        }
-      }
-      .tokenShadow(chromeless ? (color: .clear, radius: 0, y: 0) : (tier.shadow ?? (color: .clear, radius: 0, y: 0)))
+    Group {
+      if isFlat { flatBlock } else { boxedCard }
     }
-    .padding(.bottom, chromeless ? .zero : Tokens.Spacing.xsm)
     .accessibilityElement(children: .contain)
     .accessibilityLabel("话题：\(topic.title)，\(topic.timeRangeLabel)")
     .runtimeAccessibilityIdentifier(tier.accessibilityID)
+  }
+
+  /// 2026-11-11 设计走查(截图「驾驶舱-细条」):原来每个话题是标题在外、要点在一只带描边
+  /// 与投影的盒子里,最新一张再加 3 点墨青左缘与 1.5 点墨青描边。README 写的是话题块之间
+  /// 只用细线、进行中的那一块用浅井、不用左侧竖条也不用粗边表示状态;`live.html` 同此。
+  private var flatBlock: some View {
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
+      titleRow
+      content
+    }
+    .padding(.top, Tokens.V1.Space.xs)
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .padding(.bottom, Tokens.V1.Space.sm)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    // 浅井用 surface2(浅色 paper-2、深色 paper-3):深色下 paper-2 与纸面只差 7 级,井几乎看不见。
+    .background(
+      topic.isInProgress ? Tokens.Color.surface2 : Color.clear,
+      in: RoundedRectangle(cornerRadius: Tokens.V1.Radius.md)
+    )
+    .overlay {
+      // 章节目录跳过来时闪一下的定位框,1.2 秒后由调用方收回。
+      if isHighlighted {
+        RoundedRectangle(cornerRadius: Tokens.V1.Radius.md)
+          .strokeBorder(Tokens.V1.Color.focus, lineWidth: Tokens.V1.Size.focusWidth)
+      }
+    }
+    .overlay(alignment: .top) {
+      if showsTopRule {
+        Rectangle()
+          .fill(Tokens.V1.Color.rule)
+          .frame(height: Tokens.V1.Size.controlRuleWidth)
+      }
+    }
+  }
+
+  private var boxedCard: some View {
+    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+      titleRow
+      content
+        .padding(.horizontal, chromeless ? .zero : Tokens.Spacing.smd)
+        .padding(.vertical, chromeless ? .zero : Tokens.Spacing.sm)
+        .background(
+          chromeless ? Color.clear : Tokens.Color.card,
+          in: RoundedRectangle(cornerRadius: Tokens.Radius.card)
+        )
+        .overlay {
+          if !chromeless {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card)
+              .stroke(
+                // 录制中/章节定位强调的优先级高于默认描边。
+                topic.isInProgress || isHighlighted ? Tokens.Color.ac : Tokens.Color.line,
+                lineWidth: topic.isInProgress || isHighlighted ? 1.5 : 1
+              )
+          }
+        }
+        .tokenShadow(chromeless ? (color: .clear, radius: 0, y: 0) : Tokens.Shadow.sh1)
+    }
+    .padding(.bottom, chromeless ? .zero : Tokens.Spacing.xsm)
+  }
+
+  private var titleRow: some View {
+    HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.xsm) {
+      if !isFlat {
+        RoundedRectangle(cornerRadius: 2)
+          .fill(topic.isInProgress ? Tokens.Color.ac : accent)
+          .frame(width: 5, height: 14)
+      }
+      Text(topic.title)
+        .font(.system(size: fontSize, weight: isFlat ? .semibold : .bold))
+        .foregroundStyle(titleColor)
+      Text(topic.timeRangeLabel)
+        .font(.system(size: Tokens.FontSize.caption, design: .monospaced))
+        .foregroundStyle(Tokens.Color.ink3)
+      if topic.hasVisualization {
+        ChapterVisualizationTag()
+      }
+      ForEach(topic.annotations.filter { $0.kind != .inProgress }) { annotation in
+        HStack(spacing: Tokens.Spacing.hairline) {
+          SummaryMarkerBadge(kind: annotation.kind, label: annotation.label)
+          TranscriptAnchorButton(
+            anchor: annotation.anchor,
+            onJump: onJumpToTranscript
+          )
+        }
+      }
+      Spacer(minLength: 0)
+      if isFlat {
+        // 状态用设计系统的状态字形(勾 / 环),名字在悬停提示与无障碍标签里。
+        StatusGlyph(
+          topic.isInProgress ? .running : .done,
+          label: topic.isInProgress ? "进行中" : "已沉淀",
+          width: Tokens.V1.Size.controlSm)
+      } else if topic.isInProgress {
+        SummaryMarkerBadge(kind: .inProgress)
+      } else {
+        Text("已沉淀")
+          .font(.system(size: Tokens.FontSize.badge, weight: .semibold))
+          .foregroundStyle(Tokens.Color.ink3)
+      }
+    }
+    // 留痕页不传 onExcludeTopicRange,原来仍然挂着 .contextMenu,右键弹出一个**空菜单**。
+    // 空菜单比没有菜单更糟:它让人以为这里本该有东西、是坏了。没有回调就整条不挂。
+    .modifier(
+      TopicExcludeContextMenu(
+        timeRangeLabel: topic.timeRangeLabel,
+        onExcludeTopicRange: onExcludeTopicRange
+      ))
+  }
+
+  /// 平铺画法:进行中的那一块标题与要点都用正文色;其余要点 ink-2,旧块标题也降到 ink-2
+  /// (`live.html` 的 is-calm)。要点不再降到 ink-3:活文档是拿来读的。
+  private var titleColor: Color {
+    isFlat && topic.isInProgress ? Tokens.V1.Color.ink : tier.titleColor
+  }
+
+  private var bodyColor: Color {
+    isFlat && topic.isInProgress ? Tokens.V1.Color.ink : Tokens.V1.Color.ink2
+  }
+
+  private var content: some View {
+    VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+      ForEach(topic.bullets) { bullet in
+        BulletRow(
+          bullet: bullet,
+          fontSize: fontSize,
+          textColor: bodyColor,
+          isSourceOpen: openSourceBulletID == bullet.id,
+          onToggleSource: {
+            openSourceBulletID = openSourceBulletID == bullet.id ? nil : bullet.id
+          },
+          onSaveSourceAsNote: onSaveSourceAsNote,
+          onJumpToTranscript: onJumpToTranscript,
+          onExcludeBulletAnchor: onExcludeBulletAnchor
+        )
+      }
+
+      ForEach(Array(topic.visualizations.enumerated()), id: \.offset) { _, visualization in
+        visualization.makeView(onJumpToTranscript: onJumpToTranscript)
+      }
+
+      ForEach(topic.revisions) { revision in
+        RevisionTraceView(
+          revision: revision,
+          onJumpToTranscript: onJumpToTranscript
+        )
+      }
+
+      ForEach(topic.disagreements) { disagreement in
+        DisagreementTraceView(
+          disagreement: disagreement,
+          onJumpToTranscript: onJumpToTranscript
+        )
+      }
+    }
   }
 }
 
@@ -691,21 +730,32 @@ struct DisagreementTraceView: View {
 }
 
 private struct GeneratingTopicNode: View {
+  var showsTopRule = false
+
   var body: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+    // 与话题块同一套内边距(上 8、左右 16、下 12),骨架三行落在纸面上。
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
       HStack(spacing: Tokens.Spacing.xsm) {
         Circle()
           .strokeBorder(Tokens.Color.ink4, lineWidth: 2.5)
-          .background(Circle().fill(Tokens.Color.card))
           .frame(width: 11, height: 11)
         Text("正在归纳新话题…")
           .font(.system(size: Tokens.FontSize.body, weight: .medium))
-          .italic()
           .foregroundStyle(Tokens.Color.ink3)
       }
       SkeletonCard()
     }
-    .padding(.leading, Tokens.Spacing.xxl)
+    .padding(.top, Tokens.V1.Space.xs)
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .padding(.bottom, Tokens.V1.Space.sm)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .overlay(alignment: .top) {
+      if showsTopRule {
+        Rectangle()
+          .fill(Tokens.V1.Color.rule)
+          .frame(height: Tokens.V1.Size.controlRuleWidth)
+      }
+    }
     .accessibilityLabel("正在归纳新话题")
   }
 }

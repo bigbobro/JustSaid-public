@@ -39,7 +39,7 @@ struct SummaryWidgetContainer<Content: View>: View {
           .font(Tokens.V1.Text.micro.font)
           .lineLimit(1)
           .fixedSize()
-          .foregroundStyle(Tokens.Color.ink4)
+          .foregroundStyle(Tokens.Color.ink3)
           .padding(.horizontal, Tokens.Spacing.xxs)
           .background(Tokens.Color.card)
           .overlay(RoundedRectangle(cornerRadius: 3).stroke(Tokens.Color.line, lineWidth: 1))
@@ -418,7 +418,7 @@ private struct TimelineSpineSegment: View {
         spine
         Text(label)
           .font(.system(size: textScale.size(Tokens.FontSize.glyphSmall)))
-          .foregroundStyle(Tokens.Color.ink4)
+          .foregroundStyle(Tokens.Color.ink3)
           .frame(maxWidth: 96)
           .fixedSize(horizontal: false, vertical: true)
           .help(label)
@@ -468,7 +468,7 @@ private struct TimelineColumn: View {
       if let interval = item.interval {
         Text(interval)
           .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-          .foregroundStyle(Tokens.Color.ink4)
+          .foregroundStyle(Tokens.Color.ink3)
           // 定位信息也必须完整可见；列宽不足时在列内换行，不用尾部省略号隐藏原文。
           .fixedSize(horizontal: false, vertical: true)
           .help(interval)
@@ -478,7 +478,7 @@ private struct TimelineColumn: View {
       }
       Text(item.timeLabel)
         .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-        .foregroundStyle(Tokens.Color.ink4)
+        .foregroundStyle(Tokens.Color.ink3)
         .fixedSize(horizontal: false, vertical: true)
         .help(item.timeLabel)
       Text(item.title)
@@ -724,7 +724,7 @@ struct ChainWidgetView: View {
               VStack(spacing: Tokens.Spacing.hairline) {
                 Text(item.relationToNext ?? "")
                   .font(.system(size: textScale.size(Tokens.FontSize.glyphSmall)))
-                  .foregroundStyle(Tokens.Color.ink4)
+                  .foregroundStyle(Tokens.Color.ink3)
                   .frame(maxWidth: 96)
                   .fixedSize(horizontal: false, vertical: true)
                   .help(item.relationToNext ?? "")
@@ -1409,7 +1409,7 @@ struct FlowWidgetView: View {
     for route in ordered {
       let text = Text(route.label)
         .font(.system(size: textScale.size(FlowMetrics.labelFontSize)))
-        .foregroundStyle(Tokens.Color.ink4)
+        .foregroundStyle(Tokens.Color.ink3)
       let resolved = context.resolve(text)
       let size = resolved.measure(in: CGSize(width: bounds.width, height: bounds.height))
       let candidates = route.track.candidates(size: size)

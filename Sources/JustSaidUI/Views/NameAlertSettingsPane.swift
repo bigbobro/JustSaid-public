@@ -24,7 +24,7 @@ struct NameAlertSettingsPane: View {
   }
 
   var body: some View {
-    SettingsPage(title: "点名提醒", subtitle: "设置你希望被怎样叫到、怎样提醒。") {
+    SettingsPage {
       VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
         remindGroup
         styleGroup

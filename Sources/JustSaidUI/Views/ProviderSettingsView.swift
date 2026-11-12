@@ -233,7 +233,7 @@ public struct ProviderSettingsView: View {
 
   private var providerPane: some View {
     ScrollViewReader { proxy in
-      SettingsPage(title: "模型与服务", subtitle: "先配置渠道，再为每个阶段选择模型。") {
+      SettingsPage {
         VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
           recoveryContextNotice(for: nil)
           ChannelManagementCard(

@@ -26,18 +26,21 @@ struct TodoSidebarView: View {
             }
             .runtimeAccessibilityIdentifier("todos.scope.\(scope.rawValue)")
           }
-          HStack {
-            Text("客户").font(Tokens.V1.Text.micro.font).foregroundStyle(Tokens.V1.Color.ink3)
-            Spacer()
-            if model.selectedClient != nil {
-              Button("全部") { model.chooseClient(nil) }
-                .buttonStyle(.v1Quiet.height(Tokens.V1.Size.controlSm))
-                .runtimeAccessibilityIdentifier("todos.client.clear")
+          // 一个客户都没有时组名也不画：只剩一个标题等于一块空栏（README「第二面板」）。
+          if !model.clients.isEmpty {
+            HStack {
+              Text("客户").font(Tokens.V1.Text.micro.font).foregroundStyle(Tokens.V1.Color.ink3)
+              Spacer()
+              if model.selectedClient != nil {
+                Button("全部") { model.chooseClient(nil) }
+                  .buttonStyle(.v1Quiet.height(Tokens.V1.Size.controlSm))
+                  .runtimeAccessibilityIdentifier("todos.client.clear")
+              }
             }
+            .padding(.horizontal, Tokens.V1.Space.sm)
+            .padding(.top, Tokens.V1.Space.md)
+            .padding(.bottom, Tokens.V1.Space.s2xs)
           }
-          .padding(.horizontal, Tokens.V1.Space.sm)
-          .padding(.top, Tokens.V1.Space.md)
-          .padding(.bottom, Tokens.V1.Space.s2xs)
           ForEach(model.clients, id: \.self) { client in
             VStack(alignment: .leading, spacing: 0) {
               HStack(spacing: 0) {

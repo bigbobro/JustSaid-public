@@ -18,7 +18,8 @@ extension MeetingLibraryView {
           .runtimeAccessibilityIdentifier("library.queue.lane.\(lane.rawValue)")
         }
         // 客户与项目是两个维度(owner 2026-09-20),分成两组,不再挤在一个标题下。
-        filterSectionTitle("客户")
+        // 空库时两组没有任何行，组名也不画：只剩一个标题等于一块空栏。
+        if !model.meetings.isEmpty { filterSectionTitle("客户") }
         ForEach(Array(Set(model.meetings.map { $0.client ?? "未标注" })).sorted(), id: \.self) { client in
           filterCheckRow(
             client,
@@ -33,7 +34,7 @@ extension MeetingLibraryView {
           )
           .help(client)
         }
-        filterSectionTitle("项目")
+        if !model.meetings.isEmpty { filterSectionTitle("项目") }
         ForEach(Array(Set(model.meetings.map { $0.project ?? "未标注" })).sorted(), id: \.self) { project in
           filterCheckRow(
             project,

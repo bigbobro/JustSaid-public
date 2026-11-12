@@ -179,7 +179,7 @@ struct HomeView<Notices: View>: View {
         .keyboardShortcut("f", modifiers: [.command, .shift])
         .help("搜索全部会议的原话  ⇧⌘F")
         .accessibilityLabel("搜索全部会议的原话")
-        entryTitles("查找会议", subtitle: "搜索已有会议，或导入录音进行转写")
+        entryTitle("查找会议")
       }
       searchField
       orDivider
@@ -236,7 +236,7 @@ struct HomeView<Notices: View>: View {
         entryBadge(
           systemImage: "video", size: Tokens.V1.Size.homeEntryBadge,
           iconSize: Tokens.V1.Size.railIcon, ink: Tokens.V1.Color.accent)
-        entryTitles("开始一场会议", subtitle: "轻松设置，马上开始记录重要对话")
+        entryTitle("开始一场会议")
       }
       // 每行一个 HStack,只共用行首的标签列(定宽)。不用一张四列 Grid:Grid 会把第 2、4 列
       // 均分,于是设备名(长)和语言分段(短)拿到一样宽,在 1060 宽的窗里设备名被截成
@@ -453,15 +453,12 @@ struct HomeView<Notices: View>: View {
 
   // MARK: - 入口卡的零件
 
-  /// 卡标题(H1,type-hero 20)加一行副题。两张卡同一个级别:它们是这一页并列的两个入口。
-  private func entryTitles(_ title: String, subtitle: String) -> some View {
-    VStack(alignment: .leading, spacing: Tokens.V1.Space.s3xs) {
-      Text(title).font(Tokens.V1.Text.hero.font)
-      Text(subtitle)
-        .font(Tokens.V1.Text.meta.font)
-        .foregroundStyle(Tokens.V1.Color.ink3)
-        .lineLimit(1)
-    }
+  /// 卡标题(H1,type-hero 20),与徽章垂直居中。两张卡同一个级别:它们是这一页并列的两个入口。
+  /// 闲时不带副题(owner 2026-11-11):「轻松设置，马上开始记录重要对话」「搜索已有会议，
+  /// 或导入录音进行转写」只是把卡里看得见的东西再说一遍。录制中那一行写的是这场会的事实
+  /// (几点开始、客户、项目),见 `recordingHeadline`,照旧保留。
+  private func entryTitle(_ title: String) -> some View {
+    Text(title).font(Tokens.V1.Text.hero.font).lineLimit(1)
   }
 
   /// 标题前的方块徽章:毛玻璃底,透出卡面的背景图(参考稿)。左卡字形墨青,右卡字形蓝,
@@ -531,7 +528,8 @@ struct HomeView<Notices: View>: View {
     identifier: String, onSelect: @escaping (String) -> Void
   ) -> some View {
     V1ComboBox(
-      label: label, value: text.wrappedValue, suggestions: suggestions, identifier: identifier
+      label: label, value: text.wrappedValue, suggestions: suggestions, size: .home,
+      identifier: identifier
     ) {
       onSelect($0)
       tagDirectory.remember(client: client, project: project)

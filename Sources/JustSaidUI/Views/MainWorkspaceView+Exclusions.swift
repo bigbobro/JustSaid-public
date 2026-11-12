@@ -70,7 +70,7 @@ extension MainWorkspaceView {
       )
       exclusionError = nil
     } catch {
-      exclusionError = "排除标记没能存进 meeting.json:\(error.localizedDescription)"
+      exclusionError = "排除标记没能保存：\(error.localizedDescription)"
     }
     reloadExclusionState()
   }
@@ -89,7 +89,7 @@ extension MainWorkspaceView {
       )
       exclusionError = nil
     } catch {
-      exclusionError = "闲聊封口没能存进 meeting.json:\(error.localizedDescription)"
+      exclusionError = "闲聊封口没能保存：\(error.localizedDescription)"
     }
     reloadExclusionState()
   }
@@ -100,7 +100,7 @@ extension MainWorkspaceView {
       _ = try appCoordinator.meetingStore.removeExcludedRange(id: id, at: paths)
       exclusionError = nil
     } catch {
-      exclusionError = "撤销排除没能存进 meeting.json:\(error.localizedDescription)"
+      exclusionError = "撤销排除没能保存：\(error.localizedDescription)"
     }
     reloadExclusionState()
   }
@@ -121,7 +121,7 @@ extension MainWorkspaceView {
       )
       exclusionError = nil
     } catch {
-      exclusionError = "这段排除没能存进 meeting.json:\(error.localizedDescription)"
+      exclusionError = "这段排除没能保存：\(error.localizedDescription)"
     }
     reloadExclusionState()
   }
@@ -138,7 +138,7 @@ extension MainWorkspaceView {
       )
       exclusionError = nil
     } catch {
-      exclusionError = "这个话题的排除没能存进 meeting.json:\(error.localizedDescription)"
+      exclusionError = "这个话题的排除没能保存：\(error.localizedDescription)"
     }
     reloadExclusionState()
   }

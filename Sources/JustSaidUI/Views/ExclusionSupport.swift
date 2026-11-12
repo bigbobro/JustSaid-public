@@ -74,7 +74,7 @@ struct ExcludedMarker: View {
   var body: some View {
     Text("不进纪要")
       .font(.system(size: Tokens.FontSize.micro, weight: .semibold))
-      .foregroundStyle(Tokens.Color.ink4)
+      .foregroundStyle(Tokens.Color.ink3)
       .padding(.horizontal, Tokens.Spacing.xxs)
       .padding(.vertical, Tokens.Spacing.hairline)
       .overlay(Capsule().stroke(Tokens.Color.line, lineWidth: 1))

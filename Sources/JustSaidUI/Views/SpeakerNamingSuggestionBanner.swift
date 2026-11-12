@@ -193,12 +193,12 @@ struct SpeakerNamingSuggestionBanner: View {
             .foregroundStyle(Tokens.V1.Color.ink)
           Text(evidence.howLabel)
             .font(Tokens.V1.Text.meta.font)
-            .foregroundStyle(Tokens.V1.Color.ink4)
+            .foregroundStyle(Tokens.V1.Color.ink3)
           Spacer(minLength: .zero)
           if let timecode = suggestion.anchor?.timecode {
             Text(timecode)
               .font(Tokens.V1.Text.timecode.font)
-              .foregroundStyle(Tokens.V1.Color.ink4)
+              .foregroundStyle(Tokens.V1.Color.ink3)
           }
         }
         Text("「\(evidence.quote)」")
@@ -211,14 +211,14 @@ struct SpeakerNamingSuggestionBanner: View {
         if let spokenBy = evidence.spokenBy, spokenBy != suggestion.label {
           Text("这句是「\(spokenBy)」说的")
             .font(Tokens.V1.Text.meta.font)
-            .foregroundStyle(Tokens.V1.Color.ink4)
+            .foregroundStyle(Tokens.V1.Color.ink3)
         }
         // 拿转写核对这条归属的结论。只报告,不替它改数据——归属是推理那一层的事。
         if let note = evidence.verdictNote {
           Text(note)
             .font(Tokens.V1.Text.meta.font)
             .foregroundStyle(
-              evidence.verdictIsBad ? Tokens.V1.Color.warn : Tokens.V1.Color.ink4)
+              evidence.verdictIsBad ? Tokens.V1.Color.warn : Tokens.V1.Color.ink3)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -262,7 +262,7 @@ struct SpeakerNamingSuggestionBanner: View {
         if let timecode {
           Text(timecode)
             .font(Tokens.V1.Text.timecode.font)
-            .foregroundStyle(Tokens.V1.Color.ink4)
+            .foregroundStyle(Tokens.V1.Color.ink3)
         }
         Text("「\(suggestion.evidenceQuote)」")
           .font(Tokens.V1.Text.meta.font)
@@ -283,8 +283,8 @@ struct SpeakerNamingSuggestionBanner: View {
     .disabled(seconds == nil)
     .help(
       seconds == nil
-        ? "「\(suggestion.evidenceQuote)」——这条证据没有可回跳的时间戳"
-        : "「\(suggestion.evidenceQuote)」——点击回跳到原话"
+        ? "「\(suggestion.evidenceQuote)」，这条证据没有可回跳的时间戳"
+        : "「\(suggestion.evidenceQuote)」，点击回跳到原话"
     )
     .accessibilityLabel("证据：\(suggestion.evidenceQuote)")
   }

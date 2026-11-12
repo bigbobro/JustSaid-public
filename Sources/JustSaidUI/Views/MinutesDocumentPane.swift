@@ -127,7 +127,7 @@ public struct MinutesDocumentPane: View {
         .toggleStyle(.checkbox)
         .font(.system(size: Tokens.FontSize.secondary))
         .foregroundStyle(Tokens.Color.ink3)
-        .help("切到模型返回的逐字节原文——与排版视图是同一份内容，也与盘上的半成品文件一致")
+        .help("切到模型返回的逐字节原文：与排版视图是同一份内容，也与盘上的半成品文件一致")
         .runtimeAccessibilityIdentifier("library.live-minutes-raw-toggle")
     }
     .padding(.horizontal, Tokens.Spacing.lg)

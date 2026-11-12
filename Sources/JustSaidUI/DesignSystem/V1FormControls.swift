@@ -2,8 +2,16 @@ import SwiftUI
 
 /// Shared form geometry mirrors .field / .popup; call sites choose a size, never restyle the frame.
 enum V1FormSize {
-  case regular, compact
-  var height: CGFloat { self == .compact ? Tokens.V1.Size.controlSm : Tokens.V1.Size.control }
+  /// `home` 只给首页入口卡：那张表单的行高是 `home-field-h`（32），组合框混进 28 高会和
+  /// 上下两行的输入框差出 4 点。字号与内距同 regular。
+  case regular, compact, home
+  var height: CGFloat {
+    switch self {
+    case .regular: return Tokens.V1.Size.control
+    case .compact: return Tokens.V1.Size.controlSm
+    case .home: return Tokens.V1.Size.homeField
+    }
+  }
   var inset: CGFloat { self == .compact ? Tokens.V1.Space.xs : Tokens.V1.Space.sm }
   var font: Font { self == .compact ? Tokens.V1.Text.meta.font : Tokens.V1.Text.body.font }
 }

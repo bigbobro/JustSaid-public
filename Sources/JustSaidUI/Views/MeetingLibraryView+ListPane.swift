@@ -290,7 +290,7 @@ extension MeetingLibraryView {
         .truncationMode(.tail)
       Text("\(section.items.count) 场")
         .font(.system(size: Tokens.V1.Text.micro.size))
-        .foregroundStyle(Tokens.V1.Color.ink4)
+        .foregroundStyle(Tokens.V1.Color.ink3)
         .fixedSize(horizontal: true, vertical: false)
       Spacer(minLength: .zero)
     }

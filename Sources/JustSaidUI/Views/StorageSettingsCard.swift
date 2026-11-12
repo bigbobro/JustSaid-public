@@ -184,7 +184,7 @@ struct StorageSettingsCard: View {
       !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     return hasPending
-      ? "有密钥框还没点「保存」——写进 Keychain 之前，当前生效的仍是上一把凭证。"
+      ? "有密钥框还没点「保存」，保存之前生效的仍是上一把凭证。"
       : nil
   }
 

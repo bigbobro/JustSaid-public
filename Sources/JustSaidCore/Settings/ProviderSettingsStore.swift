@@ -103,11 +103,11 @@ public enum ProviderChannelError: LocalizedError, Sendable {
       return "渠道「\(channelName)」不支持\(role.displayName)"
     case .modelNotDeclared(let channelName, let model, let slots):
       guard !slots.isEmpty else {
-        return "渠道「\(channelName)」的模型列表不包含「\(model)」——清空渠道模型列表可自由填写"
+        return "渠道「\(channelName)」的模型列表不包含「\(model)」，清空渠道模型列表可自由填写"
       }
       let usingRoles = slots.map(\.displayName).joined(separator: "、")
       return "渠道「\(channelName)」的模型列表不包含「\(model)」,\(usingRoles)正在使用它"
-        + "——请先在角色卡换成列表内模型,或保留/补上「\(model)」,或清空列表转为自由填写"
+        + "，请先在角色卡换成列表内模型,或保留/补上「\(model)」,或清空列表转为自由填写"
     case .channelInUse(let channelName, let slots):
       let roleNames = slots.map(\.displayName).joined(separator: "、")
       return "渠道「\(channelName)」仍被\(roleNames)使用,请先重新分配这些角色"

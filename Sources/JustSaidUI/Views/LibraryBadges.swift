@@ -83,7 +83,7 @@ struct CompletenessDetailCard: View {
         if let otherTrack = otherTrackLine(for: gap, report: report) {
           Text(otherTrack)
             .font(.system(size: Tokens.FontSize.secondary))
-            .foregroundStyle(Tokens.Color.ink4)
+            .foregroundStyle(Tokens.Color.ink3)
             .fixedSize(horizontal: false, vertical: true)
             .runtimeAccessibilityIdentifier(
               "library.completeness.gap.\(gap.gapKey).other-track")

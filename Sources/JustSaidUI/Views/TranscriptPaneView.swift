@@ -211,7 +211,7 @@ private struct TranscriptRow: View {
         }
         Text(ElapsedTime.shortLabel(segment.t0))
           .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-          .foregroundStyle(Tokens.Color.ink4)
+          .foregroundStyle(Tokens.Color.ink3)
           .runtimeAccessibilityIdentifier("transcript.live.chrome.timestamp")
         if excludedRangeID != nil {
           ExcludedMarker()
@@ -220,8 +220,8 @@ private struct TranscriptRow: View {
       }
       Text(segment.text)
         .font(.system(size: fontSize))
-        .foregroundStyle(segment.isFinal ? Tokens.Color.inkBody : Tokens.Color.ink4)
-        .italic(!segment.isFinal)
+        // 未定稿的那一句只降一档灰，不用斜体：中文没有斜体，系统是把字硬推斜的（README「字体」）。
+        .foregroundStyle(segment.isFinal ? Tokens.Color.inkBody : Tokens.Color.ink3)
         .textSelection(.enabled)
         .runtimeAccessibilityIdentifier("transcript.live.body")
     }
@@ -272,7 +272,7 @@ private struct TranscriptToggleButton: View {
           if let preview {
             Text(ElapsedTime.shortLabel(preview.t0))
               .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-              .foregroundStyle(Tokens.Color.ink4)
+              .foregroundStyle(Tokens.Color.ink3)
               .fixedSize()
             Text(preview.source == .me ? "我" : "对方")
               .font(.system(size: Tokens.FontSize.caption, weight: .bold))
@@ -285,7 +285,7 @@ private struct TranscriptToggleButton: View {
           } else {
             Text("会议开始后，最新一行原文会出现在这里")
               .font(.system(size: Tokens.FontSize.uiEmphasis))
-              .foregroundStyle(Tokens.Color.ink4)
+              .foregroundStyle(Tokens.Color.ink3)
               .lineLimit(1)
           }
         }

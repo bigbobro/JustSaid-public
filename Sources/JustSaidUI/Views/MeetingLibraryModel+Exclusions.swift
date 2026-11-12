@@ -257,7 +257,7 @@ extension MeetingLibraryModel {
       // 刻意不让筛选跟着改后的人跑:典型动作是「只看张三 → 挑出不是他的那几段改掉」,
       // 每改一段就把视图甩到另一个人身上,等于每次都把人从复核队列里踢出去。
     } catch {
-      speakerNameError = "这一段的更正没能存进 meeting.json:\(error.localizedDescription)"
+      speakerNameError = "这一段的更正没能保存：\(error.localizedDescription)"
     }
   }
 
@@ -312,7 +312,7 @@ extension MeetingLibraryModel {
       speakerReviewDrafts.removeValue(forKey: label)
       speakerNameError = nil
     } catch {
-      speakerNameError = "这个名字没能存进 meeting.json:\(error.localizedDescription)"
+      speakerNameError = "这个名字没能保存：\(error.localizedDescription)"
     }
   }
 
@@ -350,7 +350,7 @@ extension MeetingLibraryModel {
       appendDetailExcludedRange(range, for: item)
       exclusionError = nil
     } catch {
-      exclusionError = "这段排除没能存进 meeting.json:\(error.localizedDescription)"
+      exclusionError = "这段排除没能保存：\(error.localizedDescription)"
     }
   }
 
@@ -406,7 +406,7 @@ extension MeetingLibraryModel {
         cancelTranscriptBatch()
         clearSpeakerReview()
       }
-      exclusionError = "这段排除没能存进 meeting.json:\(error.localizedDescription)"
+      exclusionError = "这段排除没能保存：\(error.localizedDescription)"
     }
   }
 
@@ -427,7 +427,7 @@ extension MeetingLibraryModel {
       updateTranscriptMetadata(metadata, for: item)
       exclusionError = nil
     } catch {
-      exclusionError = "撤销排除没能存进 meeting.json:\(error.localizedDescription)"
+      exclusionError = "撤销排除没能保存：\(error.localizedDescription)"
     }
   }
 
@@ -446,7 +446,7 @@ extension MeetingLibraryModel {
       updateTranscriptMetadata(metadata, for: item)
       exclusionError = nil
     } catch {
-      exclusionError = "发言人排除状态没能存进 meeting.json:\(error.localizedDescription)"
+      exclusionError = "发言人排除状态没能保存：\(error.localizedDescription)"
     }
   }
 

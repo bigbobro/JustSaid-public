@@ -298,7 +298,7 @@ public struct ChannelEditorView: View {
       if let channel = persistedChannel {
         let references = settingsStore.channelReferences(id: channel.id)
         if !references.isEmpty {
-          Text("当前被引用：\(references.map(\.displayName).joined(separator: "、"))——取消勾选这些角色会在保存时报错")
+          Text("当前被引用：\(references.map(\.displayName).joined(separator: "、"))，取消勾选这些角色会在保存时报错")
             .font(.system(size: Tokens.FontSize.secondary))
             .foregroundStyle(Tokens.Color.ink3)
             .fixedSize(horizontal: false, vertical: true)
@@ -398,7 +398,7 @@ public struct ChannelEditorView: View {
         .font(.system(size: Tokens.FontSize.ui))
         .foregroundStyle(Tokens.Color.ink3)
     } else if persistedChannel == nil {
-      Text("密钥在渠道创建后配置——先点下方「创建渠道」。")
+      Text("密钥在渠道创建后配置，先点下方「创建渠道」。")
         .font(.system(size: Tokens.FontSize.ui))
         .foregroundStyle(Tokens.Color.ink3)
     } else {
@@ -552,7 +552,7 @@ public struct ChannelEditorView: View {
           modelsHint =
             fresh.isEmpty
             ? "拉到 \(models.count) 个模型，都已在列表里"
-            : "拉到 \(models.count) 个模型，新增 \(fresh.count) 个——点「保存渠道」后生效"
+            : "拉到 \(models.count) 个模型，新增 \(fresh.count) 个，点「保存渠道」后生效"
         } else {
           modelsHint = "该服务商未提供模型列表，请手动添加(注意大小写)"
         }

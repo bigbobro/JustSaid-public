@@ -295,22 +295,16 @@ struct ShimmerLine: View {
   }
 }
 
-/// 「正在归纳新话题…」骨架卡片，用于历史区末端表示慢通道正在生成下一个话题块。
+/// 「正在归纳新话题…」下面的三行骨架，用于整理区末端表示慢通道正在生成下一个话题块。
+/// 2026-11-11 起整理区话题块平铺（设计系统「板块隔离」），骨架随之不再自带卡底、描边与投影，
+/// 只留三行微光，直接落在纸面上。
 struct SkeletonCard: View {
   var body: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+    VStack(alignment: .leading, spacing: Tokens.V1.Space.xs) {
       ShimmerLine(widthFraction: 0.86)
       ShimmerLine(widthFraction: 0.68)
       ShimmerLine(widthFraction: 0.44)
     }
-    .padding(.horizontal, Tokens.Spacing.smd)
-    .padding(.vertical, Tokens.Spacing.sm)
-    .background(Tokens.Color.card, in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
-    .overlay(
-      RoundedRectangle(cornerRadius: Tokens.Radius.card)
-        .stroke(Tokens.Color.line, lineWidth: 1)
-    )
-    .tokenShadow(Tokens.Shadow.sh1)
   }
 }
 
@@ -381,7 +375,7 @@ struct KeycapView: View {
   var body: some View {
     Text(label)
       .font(.system(size: Tokens.FontSize.badge, design: .monospaced))
-      .foregroundStyle(Tokens.Color.ink4)
+      .foregroundStyle(Tokens.Color.ink3)
       .padding(.horizontal, Tokens.Spacing.xxs)
       .padding(.vertical, Tokens.Spacing.hairline)
       .background(
@@ -856,7 +850,7 @@ struct SourceTagLabel: View {
         .font(.system(size: Tokens.FontSize.glyphMicro, weight: .bold))
     }
     .font(.system(size: Tokens.FontSize.badge, weight: isActive ? .semibold : .regular))
-    .foregroundStyle(isActive ? Tokens.Color.ac : Tokens.Color.ink4)
+    .foregroundStyle(isActive ? Tokens.Color.ac : Tokens.Color.ink3)
     .padding(.horizontal, Tokens.Spacing.xxs)
     .padding(.vertical, Tokens.Spacing.hairline)
     .background(
@@ -964,7 +958,7 @@ struct SectionCountBadge: View {
   var body: some View {
     Text(label)
       .font(.system(size: Tokens.FontSize.badge, weight: .bold))
-      .foregroundStyle(quiet ? Tokens.Color.ink4 : Tokens.Color.acDeep)
+      .foregroundStyle(quiet ? Tokens.Color.ink3 : Tokens.Color.acDeep)
       .padding(.horizontal, Tokens.Spacing.xxs)
       .padding(.vertical, Tokens.Spacing.hairline)
       .background(
@@ -1050,7 +1044,7 @@ public struct OutlineActionButton: View {
         Text(title)
       }
       .font(.system(size: Tokens.FontSize.secondary))
-      .foregroundStyle(isHovering ? Tokens.Color.ink2 : Tokens.Color.ink4)
+      .foregroundStyle(isHovering ? Tokens.Color.ink2 : Tokens.Color.ink3)
       .padding(.horizontal, Tokens.Spacing.xxs)
       .overlay(
         RoundedRectangle(cornerRadius: Tokens.Radius.chip)

@@ -103,7 +103,7 @@ public struct ChapterDirectoryView: View {
         if topic.bullets.count > lines.count {
           Text("还有 \(topic.bullets.count - lines.count) 条")
             .font(Tokens.V1.Text.meta.font)
-            .foregroundStyle(Tokens.V1.Color.ink4)
+            .foregroundStyle(Tokens.V1.Color.ink3)
         }
       }
       .padding(.leading, Tokens.Spacing.xl + Tokens.V1.Space.md)
@@ -133,7 +133,7 @@ public struct ChapterDirectoryView: View {
       Spacer()
       Text(rangeLabel)
         .font(.system(size: Tokens.FontSize.caption, design: .monospaced))
-        .foregroundStyle(Tokens.Color.ink4)
+        .foregroundStyle(Tokens.Color.ink3)
     }
     .padding(.horizontal, Tokens.Spacing.xl)
     .padding(.vertical, Tokens.Spacing.xs)

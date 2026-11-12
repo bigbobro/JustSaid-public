@@ -304,7 +304,7 @@ public struct VerifyWorkbenchView: View {
           if let note = item.note, !note.isEmpty {
             Text(note)
               .font(.system(size: Tokens.FontSize.caption))
-              .foregroundStyle(Tokens.Color.ink4)
+              .foregroundStyle(Tokens.Color.ink3)
           }
         }
       }
@@ -374,11 +374,11 @@ public struct VerifyWorkbenchView: View {
         if lines.isEmpty {
           Text("锚点附近没有转写行")
             .font(.system(size: Tokens.FontSize.secondary))
-            .foregroundStyle(Tokens.Color.ink4)
+            .foregroundStyle(Tokens.Color.ink3)
         } else {
           ForEach(lines, id: \.overrideKey) { line in
             (Text("[\(line.timestamp)] \(line.speaker)：")
-              .foregroundStyle(Tokens.Color.ink4)
+              .foregroundStyle(Tokens.Color.ink3)
               + Text(line.text).foregroundStyle(Tokens.Color.ink3))
               .font(.system(size: textScale.size(Tokens.FontSize.secondary)))
               .fixedSize(horizontal: false, vertical: true)
@@ -388,7 +388,7 @@ public struct VerifyWorkbenchView: View {
         // 无锚点照样可判;不发明时间(既有纪律)。
         Text("无锚点")
           .font(.system(size: Tokens.FontSize.secondary))
-          .foregroundStyle(Tokens.Color.ink4)
+          .foregroundStyle(Tokens.Color.ink3)
           .runtimeAccessibilityIdentifier("library.minutes.check.no-anchor")
       }
     }

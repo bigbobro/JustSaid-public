@@ -48,7 +48,6 @@ PUBLIC_FILES = (
     "Scripts/verify-concurrency-policy.py",
     ".github/workflows/pr-validation.yml",
     ".github/workflows/public-policy.yml",
-    ".github/workflows/public-runner-smoke.yml",
     "Support/LocalModelAssets.json",
     "Support/ThirdPartyNotices.txt",
     "Support/ThirdPartyLicenses/FunASR-MODEL-LICENSE.txt",

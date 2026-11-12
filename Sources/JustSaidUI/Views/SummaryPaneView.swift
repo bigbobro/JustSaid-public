@@ -64,7 +64,8 @@ struct SummaryPaneView<Feed: SummaryFeed>: View {
   /// 右栏(定宽 332):替你记 + 补充记录两块吃满舞台以下的高度。
   /// 「当前正在聊」08-19 升格成整宽舞台后从这里撤走,右栏不再三分高度。
   private var recordsSidebar: some View {
-    VStack(spacing: Tokens.Spacing.sm) {
+    // 两组平铺在纸面上,中间一条细线(README「板块隔离」:右栏两组之间用细线),不再各套一张卡。
+    VStack(spacing: 0) {
       ActionItemsPaneView(
         items: feed.actionItems,
         onJumpToTranscript: onJumpToTranscript
@@ -77,9 +78,16 @@ struct SummaryPaneView<Feed: SummaryFeed>: View {
         onJumpToTranscript: onJumpToTranscript
       )
       .frame(minHeight: 180, maxHeight: .infinity)
+      .padding(.top, Tokens.V1.Space.xs)
+      .overlay(alignment: .top) {
+        Rectangle()
+          .fill(Tokens.V1.Color.rule)
+          .frame(height: Tokens.V1.Size.controlRuleWidth)
+      }
       .runtimeAccessibilityIdentifier("dashboard.notes")
     }
-    .padding(Tokens.Spacing.sm)
+    .padding(.horizontal, Tokens.V1.Space.md)
+    .padding(.bottom, Tokens.V1.Space.sm)
   }
 
   @ViewBuilder
@@ -201,6 +209,6 @@ private struct EmptySummaryState: View {
       Spacer()
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Tokens.Color.card)
+    .background(Tokens.V1.Color.paper)
   }
 }

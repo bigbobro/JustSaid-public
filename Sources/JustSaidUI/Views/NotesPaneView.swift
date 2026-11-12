@@ -11,10 +11,8 @@ struct NotesPaneView: View {
   @ObservedObject var controller: NotesController
   var onJumpToTranscript: (TimeInterval) -> Void = { _ in }
   @Environment(\.textScale) private var textScale
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @FocusState private var isInputFocused: Bool
   @State private var draft = ""
-  @State private var isMarkHovering = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -26,95 +24,72 @@ struct NotesPaneView: View {
       list
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Tokens.Color.card)
   }
 
+  /// 栏头:名字、条数,右端「标记重点」。2026-11-11 设计走查(截图「驾驶舱-细条」):
+  /// 「标记重点」原来是输入框右边一颗墨青渐变、带投影、画着键帽的按钮,是右栏里最重的东西;
+  /// 按 `live.html` 改成栏头右端的描边小按钮,快捷键写进悬停提示(README:按钮上不画键帽)。
   private var header: some View {
-    HStack(spacing: Tokens.Spacing.xs) {
-      Text("补充记录")
-        .font(.system(size: Tokens.FontSize.ui, weight: .semibold))
-        .foregroundStyle(Tokens.Color.ink3)
-      if !controller.items.isEmpty {
-        SectionCountBadge(value: controller.items.count)
+    HStack(spacing: Tokens.V1.Space.sm) {
+      HStack(spacing: Tokens.V1.Space.sm) {
+        Text("补充记录")
+          .font(Tokens.V1.Text.strong.font)
+          .foregroundStyle(Tokens.V1.Color.ink)
+        if !controller.items.isEmpty {
+          Text("\(controller.items.count)")
+            .font(Tokens.V1.Text.meta.font.monospacedDigit())
+            .foregroundStyle(Tokens.V1.Color.ink3)
+        }
       }
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel("补充记录 \(controller.items.count) 条")
       Spacer()
-    }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel("补充记录 \(controller.items.count) 条")
-    .padding(.horizontal, Tokens.Spacing.md)
-    .padding(.top, Tokens.Spacing.sm)
-    .padding(.bottom, Tokens.Spacing.xs)
-  }
-
-  private var inputRow: some View {
-    HStack(spacing: Tokens.Spacing.xs) {
-      TextField("补充需要保留的重点", text: $draft, axis: .vertical)
-        .textFieldStyle(.plain)
-        .font(.system(size: textScale.size(Tokens.FontSize.bodyMinimum)))
-        .padding(.horizontal, Tokens.Spacing.sm)
-        .padding(.vertical, Tokens.Spacing.xs)
-        .background(
-          RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-            .fill(Tokens.Color.pane)
-        )
-        .overlay(
-          RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-            .stroke(Tokens.Color.line, lineWidth: 1)
-        )
-        .focused($isInputFocused)
-        .onSubmit(submitDraft)
-
       Button {
         // 与全局热键共用 220ms 门:Carbon 与 SwiftUI keyboardShortcut 偶发双投时只落一记。
         guard MarkTriggerGate.tryBegin() else { return }
         controller.beginMark()
       } label: {
-        // ⌥⌘M 注册就在这颗按钮上（合并重复入口后从当前区搬来），
-        // 键帽提示与实际注册第一次落在同一个控件上。
-        HStack(spacing: Tokens.Spacing.xxs) {
-          Image(systemName: "flag.fill")
-            .accessibilityHidden(true)
-          Text("标记重点")
-          KeycapView(label: "⌥⌘M")
-        }
-        .font(.system(size: Tokens.FontSize.uiEmphasis, weight: .bold))
-        .foregroundStyle(Tokens.Color.acDeep)
-        .padding(.horizontal, Tokens.Spacing.sm)
-        .padding(.vertical, Tokens.Spacing.xs)
-        .background(
-          LinearGradient(
-            colors: [Tokens.Color.acSoft, Tokens.Color.washMark],
-            startPoint: .top,
-            endPoint: .bottom
-          )
-        )
-        .overlay(
-          RoundedRectangle(cornerRadius: Tokens.Radius.widget)
-            .stroke(isMarkHovering ? Tokens.Color.acDeep : Tokens.Color.acLine, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.widget))
-        .tokenShadow(isMarkHovering ? Tokens.Shadow.sh2 : Tokens.Shadow.sh1)
-        .onHover { isMarkHovering = $0 }
-        .animation(reduceMotion ? nil : .easeOut(duration: Tokens.Motion.hover), value: isMarkHovering)
+        Label("标记重点", systemImage: "flag")
       }
-      .buttonStyle(.plain)
+      .buttonStyle(.v1Outline.height(Tokens.V1.Size.controlSm))
+      // ⌥⌘M 注册就在这颗按钮上（合并重复入口后从当前区搬来）。
       .keyboardShortcut("m", modifiers: [.command, .option])
+      .help("把最近约一分钟内容提炼成一条补充记录  ⌥⌘M")
       .runtimeAccessibilityIdentifier("notes.mark")
       .accessibilityLabel("标记重点，快捷键 Option Command M")
       .accessibilityHint("把最近约一分钟内容提炼成一条补充记录")
     }
-    .padding(.horizontal, Tokens.Spacing.smd)
-    .padding(.bottom, Tokens.Spacing.sm)
+    .frame(height: Tokens.V1.Size.controlLg)
+  }
+
+  private var inputRow: some View {
+    TextField(
+      "补充需要保留的重点", text: $draft,
+      prompt: Text("补充需要保留的重点").foregroundColor(Tokens.V1.Color.ink3),
+      axis: .vertical
+    )
+    .textFieldStyle(.plain)
+    .font(.system(size: textScale.size(Tokens.FontSize.bodyMinimum)))
+    .foregroundStyle(Tokens.V1.Color.ink)
+    .padding(.horizontal, Tokens.V1.Space.sm)
+    .padding(.vertical, Tokens.V1.Space.s2xs)
+    .frame(maxWidth: .infinity, minHeight: Tokens.V1.Size.control, alignment: .leading)
+    .focused($isInputFocused)
+    .modifier(V1FormSurface(focused: isInputFocused))
+    .onSubmit(submitDraft)
+    .padding(.bottom, Tokens.V1.Space.xs)
   }
 
   private var list: some View {
     ScrollView {
-      LazyVStack(alignment: .leading, spacing: Tokens.Spacing.smd) {
+      LazyVStack(alignment: .leading, spacing: 0) {
         if controller.items.isEmpty {
           Text("会议中补充的重点会显示在这里")
             .font(.system(size: textScale.size(Tokens.FontSize.bodyMinimum)))
-            .foregroundStyle(Tokens.Color.ink4)
+            .foregroundStyle(Tokens.V1.Color.ink3)
+            .padding(.top, Tokens.V1.Space.s2xs)
         } else {
+          rowRule
           ForEach(controller.items) { item in
             NoteRow(
               item: item,
@@ -122,12 +97,17 @@ struct NotesPaneView: View {
               onJump: { onJumpToTranscript(item.elapsed) },
               onRetry: { controller.retryMark(item.id) }
             )
+            rowRule
           }
         }
       }
-      .padding(.horizontal, Tokens.Spacing.md)
-      .padding(.bottom, Tokens.Spacing.md)
     }
+  }
+
+  private var rowRule: some View {
+    Rectangle()
+      .fill(Tokens.V1.Color.rule)
+      .frame(height: Tokens.V1.Size.controlRuleWidth)
   }
 
   private func submitDraft() {
@@ -146,40 +126,31 @@ private struct NoteRow: View {
   let onRetry: () -> Void
 
   var body: some View {
-    HStack(alignment: .top, spacing: 0) {
-      Rectangle()
-        .fill(Tokens.Color.line2)
-        .frame(width: 2)
-        .padding(.trailing, Tokens.Spacing.xsm)
-
+    // 每行「时间 · 正文 · 来源标签」,行间细线由列表画;原来行首那条 2 点竖线退役。
+    Group {
       switch item.kind {
       case .normal:
-        VStack(alignment: .leading, spacing: Tokens.Spacing.hairline) {
-          HStack(spacing: Tokens.Spacing.xxs) {
-            Button(action: onJump) {
-              TranscriptAnchorChip(
-                label: ElapsedTime.shortLabel(item.elapsed),
-                fontSize: 10.5,
-                weight: .semibold
-              )
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("回跳到补充记录时刻 \(ElapsedTime.shortLabel(item.elapsed))")
-            if let suffixTag = item.suffixTag {
-              Text(suffixTag)
-                .font(.system(size: Tokens.FontSize.micro, weight: .semibold))
-                .foregroundStyle(Tokens.Color.ac)
-                .padding(.horizontal, Tokens.Spacing.xxs)
-                .background(Tokens.Color.acSoft)
-                .overlay(
-                  RoundedRectangle(cornerRadius: 3).stroke(Tokens.Color.acLine, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 3))
-            }
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.V1.Space.xs) {
+          Button(action: onJump) {
+            TranscriptAnchorChip(label: ElapsedTime.shortLabel(item.elapsed))
           }
+          .buttonStyle(.plain)
+          .accessibilityLabel("回跳到补充记录时刻 \(ElapsedTime.shortLabel(item.elapsed))")
           Text(item.text)
             .font(.system(size: fontSize))
-            .foregroundStyle(Tokens.Color.ink2)
+            .foregroundStyle(Tokens.V1.Color.ink)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          if let suffixTag = item.suffixTag {
+            Text(suffixTag)
+              .font(.system(size: Tokens.FontSize.badge))
+              .foregroundStyle(Tokens.V1.Color.ink2)
+              .lineLimit(1)
+              .fixedSize()
+              .padding(.horizontal, Tokens.V1.Space.xs)
+              .padding(.vertical, Tokens.V1.Space.s3xs)
+              .background(Tokens.V1.Color.paper3, in: Capsule())
+          }
         }
         .accessibilityElement(children: .combine)
 
@@ -189,8 +160,7 @@ private struct NoteRow: View {
         HStack(spacing: Tokens.Spacing.xs) {
           Text("已标记，提炼中…")
             .font(.system(size: Tokens.FontSize.body))
-            .italic()
-            .foregroundStyle(Tokens.Color.ink4)
+            .foregroundStyle(Tokens.Color.ink3)
           BreathingDots()
         }
         .accessibilityElement(children: .combine)
@@ -207,5 +177,6 @@ private struct NoteRow: View {
         .accessibilityHint("点击重试提炼")
       }
     }
+    .padding(.vertical, Tokens.V1.Space.xs)
   }
 }

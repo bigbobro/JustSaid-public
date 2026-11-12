@@ -412,25 +412,17 @@ enum SettingsPageGeometry {
   }
 }
 
+/// 没有页题。设置三段的分段控件、词典页的顶栏已经写着你在哪一页，下面再放一行同名页题
+/// 加一句说明，同一个名字在 60 点内出现两到三次（2026-11-11 设计走查；README 原则 1
+/// 「标题下不放副标题，解释性句子不上画面」）。
 struct SettingsPage<Content: View>: View {
   var fullWidth = false
-  var title: String? = nil
-  var subtitle: String? = nil
   @ViewBuilder var content: () -> Content
 
   var body: some View {
     GeometryReader { geometry in
       ScrollView {
         VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
-          if let title {
-            VStack(alignment: .leading, spacing: Tokens.V1.Space.s2xs) {
-              Text(title).font(Tokens.V1.Text.title.font).foregroundStyle(Tokens.V1.Color.ink)
-              if let subtitle {
-                Text(subtitle).font(Tokens.V1.Text.meta.font).foregroundStyle(Tokens.V1.Color.ink3)
-              }
-            }
-            .runtimeAccessibilityIdentifier("settings.page-title")
-          }
           content()
           SettingsBuildFooter()
         }

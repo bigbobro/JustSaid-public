@@ -42,7 +42,7 @@ struct TimeZoneSettingsCard: View {
         .runtimeAccessibilityIdentifier("settings.timezone.mismatch")
         SettingsFormNote(
           "会议时间仍按 \(DisplayTimeZone.displayName(displayTimeZone.pinned)) 显示。"
-            + "改用本机时区，已有会议的时间会跟着挪——时刻没变，只是换了个地方的钟看。")
+            + "改用本机时区，已有会议的时间会跟着挪：时刻没变，只是换了个地方的钟看。")
       } else if let justDetected {
         // 检测过且一致:给一句回执,否则点了按钮像没反应。
         SettingsFormNote("本机就是 \(DisplayTimeZone.displayName(justDetected))，一致。")
@@ -77,7 +77,7 @@ struct TimeZoneDriftPrompt: ViewModifier {
     } message: { drift in
       Text(
         "会议时间现在按 \(DisplayTimeZone.displayName(drift.pinned)) 显示。"
-          + "改用本机时区，已有会议的时间会跟着挪——时刻没变，只是换了个地方的钟看。"
+          + "改用本机时区，已有会议的时间会跟着挪：时刻没变，只是换了个地方的钟看。"
       )
     }
   }

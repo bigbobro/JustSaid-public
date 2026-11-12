@@ -144,7 +144,7 @@ extension MeetingLibraryView {
             }
             Text("其余发言暂时藏起来了，原文没有改动。")
               .font(.system(size: Tokens.FontSize.secondary))
-              .foregroundStyle(Tokens.Color.ink4)
+              .foregroundStyle(Tokens.Color.ink3)
             Spacer(minLength: 0)
           }
         }
@@ -283,7 +283,7 @@ public struct SpeakerHighlightBar: View {
       .runtimeAccessibilityIdentifier("transcript.highlight-bar.clear")
       Text("全文都还在，只是这个人的发言着了色。")
         .font(.system(size: Tokens.FontSize.secondary))
-        .foregroundStyle(Tokens.Color.ink4)
+        .foregroundStyle(Tokens.Color.ink3)
       Spacer(minLength: 0)
     }
     .buttonStyle(.textAction)

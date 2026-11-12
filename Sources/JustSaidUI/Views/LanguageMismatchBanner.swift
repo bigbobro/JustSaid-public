@@ -155,7 +155,7 @@ public struct LowRecognitionBanner: View {
     NoticeShell(
       level: .warn,
       systemImage: "waveform.badge.exclamationmark",
-      text: "速记几乎没有识别到内容——本场语言选的是\(Self.shortName(selected))，"
+      text: "速记几乎没有识别到内容：本场语言选的是\(Self.shortName(selected))，"
         + "可能选错了，或者麦克风没有进声"
     ) {
       Button(switchTitle, action: onSwitch)

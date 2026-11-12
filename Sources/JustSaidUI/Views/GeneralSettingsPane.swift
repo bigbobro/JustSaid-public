@@ -25,7 +25,7 @@ public struct GeneralSettingsPane: View {
   }
 
   public var body: some View {
-    SettingsPage(title: "通用", subtitle: "外观、录音与日常使用偏好。") {
+    SettingsPage {
       VStack(alignment: .leading, spacing: Tokens.V1.Space.lg) {
         AppearanceSettingsCard()
         GlobalHotkeySettingsCard()

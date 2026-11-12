@@ -159,10 +159,10 @@ extension MeetingLibraryModel {
     var verdictNote: String? {
       switch verdict {
       case .consistent:
-        return answeredBy.map { "接话的是「\($0)」——对得上" }
+        return answeredBy.map { "接话的是「\($0)」，对得上" }
       case .inverted:
         let who = answeredBy.map { "「\($0)」" } ?? "接话的那个人"
-        return "这句是「\(suggestion.label)」自己说的——他在叫别人。这个名字八成是 \(who) 的"
+        return "这句是「\(suggestion.label)」自己说的，他在叫别人。这个名字八成是 \(who) 的"
       case .unclear:
         return "接话的不是他，看不出来"
       case .notChecked:
@@ -263,7 +263,7 @@ extension MeetingLibraryModel {
       updateTranscriptMetadata(metadata, for: item)
       speakerNameError = nil
     } catch {
-      speakerNameError = "这次拒绝没能存进 meeting.json:\(error.localizedDescription)"
+      speakerNameError = "这次拒绝没能保存：\(error.localizedDescription)"
     }
   }
 }

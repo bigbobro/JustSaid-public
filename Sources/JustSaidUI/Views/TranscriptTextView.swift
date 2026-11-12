@@ -878,7 +878,7 @@ private final class InteractiveTranscriptTextView: NSTextView {
       ofSize: Tokens.FontSize.badge,
       weight: .regular
     )
-    let timestampColor = NSColor(Tokens.Color.ink4)
+    let timestampColor = NSColor(Tokens.Color.ink3)
     for range in ranges {
       storage.addAttributes(
         [
